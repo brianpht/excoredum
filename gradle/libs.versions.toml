@@ -1,0 +1,49 @@
+[versions]
+aeron = "1.48.0"
+agrona = "2.2.1"
+sbe = "1.35.1"
+hdrhistogram = "2.2.2"
+affinity = "3.23.3"
+junit = "5.11.4"
+jqwik = "1.9.2"
+jmh = "1.37"
+checkstyle = "10.20.1"
+netty = "4.1.136.Final"
+jacoco = "0.8.12"
+errorprone = "2.36.0"
+nullaway = "0.12.1"
+
+# plugin versions
+spotless = "6.25.0"
+jmhPlugin = "0.7.2"
+errorpronePlugin = "4.1.0"
+dependencycheckPlugin = "10.0.4"
+
+[libraries]
+aeron-client = { group = "io.aeron", name = "aeron-client", version.ref = "aeron" }
+aeron-driver = { group = "io.aeron", name = "aeron-driver", version.ref = "aeron" }
+aeron-archive = { group = "io.aeron", name = "aeron-archive", version.ref = "aeron" }
+aeron-cluster = { group = "io.aeron", name = "aeron-cluster", version.ref = "aeron" }
+agrona = { group = "org.agrona", name = "agrona", version.ref = "agrona" }
+sbe-tool = { group = "uk.co.real-logic", name = "sbe-tool", version.ref = "sbe" }
+hdrhistogram = { group = "org.hdrhistogram", name = "HdrHistogram", version.ref = "hdrhistogram" }
+affinity = { group = "net.openhft", name = "affinity", version.ref = "affinity" }
+netty-codec-http = { group = "io.netty", name = "netty-codec-http", version.ref = "netty" }
+
+errorprone-core = { group = "com.google.errorprone", name = "error_prone_core", version.ref = "errorprone" }
+nullaway = { group = "com.uber.nullaway", name = "nullaway", version.ref = "nullaway" }
+
+junit-jupiter = { group = "org.junit.jupiter", name = "junit-jupiter", version.ref = "junit" }
+junit-platform-launcher = { group = "org.junit.platform", name = "junit-platform-launcher", version = "1.11.4" }
+jqwik = { group = "net.jqwik", name = "jqwik", version.ref = "jqwik" }
+jmh-core = { group = "org.openjdk.jmh", name = "jmh-core", version.ref = "jmh" }
+jmh-annprocess = { group = "org.openjdk.jmh", name = "jmh-generator-annprocess", version.ref = "jmh" }
+
+[bundles]
+aeron = ["aeron-client", "aeron-driver", "aeron-archive", "aeron-cluster", "agrona"]
+
+[plugins]
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+jmh = { id = "me.champeau.jmh", version.ref = "jmhPlugin" }
+errorprone = { id = "net.ltgt.errorprone", version.ref = "errorpronePlugin" }
+dependencycheck = { id = "org.owasp.dependencycheck", version.ref = "dependencycheckPlugin" }

@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
+                   package="com.exadbe.protocol"
+                   id="1"
+                   version="1"
+                   semanticVersion="1.0"
+                   byteOrder="littleEndian"
+                   description="excoredum wire and snapshot messages.">
+
+    <types>
+        <composite name="messageHeader" description="Message identifiers and length of message root.">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="templateId" primitiveType="uint16"/>
+            <type name="schemaId" primitiveType="uint16"/>
+            <type name="version" primitiveType="uint16"/>
+        </composite>
+
+        <composite name="groupSizeEncoding" description="Repeating group dimensions.">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="numInGroup" primitiveType="uint16"/>
+        </composite>
+
+        <enum name="OrderCommandType" encodingType="uint8">
+            <validValue name="PLACE_ORDER">0</validValue>
+            <validValue name="CANCEL_ORDER">1</validValue>
+            <validValue name="MOVE_ORDER">2</validValue>
+            <validValue name="REDUCE_ORDER">3</validValue>
+            <validValue name="ORDER_BOOK_REQUEST">4</validValue>
+            <validValue name="ADD_USER">5</validValue>
+            <validValue name="BALANCE_ADJUSTMENT">6</validValue>
+            <validValue name="ADD_SYMBOL">7</validValue>
+        </enum>
+
+        <enum name="OrderAction" encodingType="uint8">
+            <validValue name="ASK">0</validValue>
+            <validValue name="BID">1</validValue>
+        </enum>
+
+        <enum name="OrderType" encodingType="uint8">
+            <validValue name="GTC">0</validValue>
+            <validValue name="IOC">1</validValue>
+            <validValue name="FOK_BUDGET">2</validValue>
+        </enum>
+
+        <enum name="MatcherEventType" encodingType="uint8">
+            <validValue name="TRADE">0</validValue>
+            <validValue name="REDUCE">1</validValue>
+            <validValue name="REJECT">2</validValue>
+        </enum>
+
+        <enum name="CommandResultCode" encodingType="uint16">
+            <validValue name="NEW">0</validValue>
+            <validValue name="VALID_FOR_MATCHING">1</validValue>
+            <validValue name="SUCCESS">100</validValue>
+            <validValue name="MATCHING_UNKNOWN_ORDER_ID">200</validValue>
+            <validValue name="MATCHING_REDUCE_FAILED_WRONG_SIZE">201</validValue>
+            <validValue name="MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT">202</validValue>
+            <validValue name="RISK_NSF">300</validValue>
+            <validValue name="RISK_INVALID_RESERVE_PRICE">301</validValue>
+            <validValue name="INVALID_SYMBOL">400</validValue>
+            <validValue name="DUPLICATE">500</validValue>
+            <validValue name="OVERFLOW">600</validValue>
+            <validValue name="INVALID_AMOUNT">601</validValue>
+            <validValue name="UNSUPPORTED_COMMAND">700</validValue>
+            <validValue name="USER_ALREADY_EXISTS">800</validValue>
+            <validValue name="USER_NOT_FOUND">801</validValue>
+        </enum>
+    </types>
+
+    <!-- ============================ Wire messages ============================ -->
+
+    <sbe:message name="CommandEnvelope" id="1" description="Command submitted by the Edge on behalf of a client.">
+        <field name="clientId"        id="1"  type="uint64"/>
+        <field name="clientSeq"       id="2"  type="uint64"/>
+        <field name="commandIdHi"     id="3"  type="uint64"/>
+        <field name="commandIdLo"     id="4"  type="uint64"/>
+        <field name="commandType"     id="5"  type="OrderCommandType"/>
+        <field name="uid"             id="6"  type="uint64"/>
+        <field name="symbolId"        id="7"  type="int32" presence="optional"/>
+        <field name="orderId"         id="8"  type="int64" presence="optional"/>
+        <field name="price"           id="9"  type="int64" presence="optional"/>
+        <field name="reserveBidPrice" id="10" type="int64" presence="optional"/>
+        <field name="size"            id="11" type="int64" presence="optional"/>
+        <field name="action"          id="12" type="OrderAction" presence="optional"/>
+        <field name="orderType"       id="13" type="OrderType" presence="optional"/>
+        <field name="userCookie"      id="14" type="int32" presence="optional"/>
+        <field name="currency"        id="15" type="int32" presence="optional"/>
+        <field name="balanceAmount"   id="16" type="int64" presence="optional"/>
+        <field name="baseCurrency"    id="17" type="int32" presence="optional"/>
+        <field name="quoteCurrency"   id="18" type="int32" presence="optional"/>
+        <field name="baseScaleK"      id="19" type="int64" presence="optional"/>
+        <field name="quoteScaleK"     id="20" type="int64" presence="optional"/>
+    </sbe:message>
+
+    <sbe:message name="CommandResult" id="2" description="Deterministic result returned for exactly one command.">
+        <field name="commandIdHi" id="1" type="uint64"/>
+        <field name="commandIdLo" id="2" type="uint64"/>
+        <field name="resultCode"  id="3" type="CommandResultCode"/>
+        <field name="uid"         id="4" type="uint64" presence="optional"/>
+        <field name="orderId"     id="5" type="int64" presence="optional"/>
+        <field name="filledSize"  id="6" type="int64" presence="optional"/>
+    </sbe:message>
+
+    <!-- ============================ Egress events ============================ -->
+
+    <sbe:message name="TradeEvent" id="20" description="One fill against a resting maker order.">
+        <field name="commandIdHi"        id="1"  type="uint64"/>
+        <field name="commandIdLo"        id="2"  type="uint64"/>
+        <field name="eventIndex"         id="3"  type="uint16"/>
+        <field name="timestamp"          id="4"  type="int64"/>
+        <field name="symbolId"           id="5"  type="int32"/>
+        <field name="makerOrderId"       id="6"  type="int64"/>
+        <field name="makerUid"           id="7"  type="uint64"/>
+        <field name="takerUid"           id="8"  type="uint64"/>
+        <field name="price"              id="9"  type="int64"/>
+        <field name="size"               id="10" type="int64"/>
+        <field name="makerOrderCompleted" id="11" type="uint8"/>
+    </sbe:message>
+
+    <sbe:message name="ReduceEvent" id="21" description="A resting order was reduced or cancelled.">
+        <field name="commandIdHi" id="1" type="uint64"/>
+        <field name="commandIdLo" id="2" type="uint64"/>
+        <field name="eventIndex"  id="3" type="uint16"/>
+        <field name="timestamp"   id="4" type="int64"/>
+        <field name="symbolId"    id="5" type="int32"/>
+        <field name="orderId"     id="6" type="int64"/>
+        <field name="uid"         id="7" type="uint64"/>
+        <field name="reducedBy"   id="8" type="int64"/>
+    </sbe:message>
+
+    <sbe:message name="RejectEvent" id="22" description="Unmatched size rejected (IOC / FOK / duplicate id).">
+        <field name="commandIdHi"  id="1" type="uint64"/>
+        <field name="commandIdLo"  id="2" type="uint64"/>
+        <field name="eventIndex"   id="3" type="uint16"/>
+        <field name="timestamp"    id="4" type="int64"/>
+        <field name="symbolId"     id="5" type="int32"/>
+        <field name="orderId"      id="6" type="int64"/>
+        <field name="uid"          id="7" type="uint64"/>
+        <field name="rejectedSize" id="8" type="int64"/>
+    </sbe:message>
+
+    <sbe:message name="L2MarketData" id="30" description="L2 order book snapshot for ORDER_BOOK_REQUEST.">
+        <field name="commandIdHi" id="1" type="uint64"/>
+        <field name="commandIdLo" id="2" type="uint64"/>
+        <field name="symbolId"    id="3" type="int32"/>
+        <group name="asks" id="4" dimensionType="groupSizeEncoding">
+            <field name="price"  id="5" type="int64"/>
+            <field name="size"   id="6" type="int64"/>
+            <field name="orders" id="7" type="int32"/>
+        </group>
+        <group name="bids" id="8" dimensionType="groupSizeEncoding">
+            <field name="price"  id="9"  type="int64"/>
+            <field name="size"   id="10" type="int64"/>
+            <field name="orders" id="11" type="int32"/>
+        </group>
+    </sbe:message>
+
+</sbe:messageSchema>
+

@@ -1,0 +1,375 @@
+package com.exadbe.engine;
+
+import com.exadbe.collections.AccountStore;
+import com.exadbe.collections.DedupRing;
+import com.exadbe.collections.DedupTable;
+import com.exadbe.config.CoreConfig;
+import com.exadbe.core.CommandOutcome;
+import com.exadbe.engine.handlers.AddSymbolHandler;
+import com.exadbe.engine.handlers.AddUserHandler;
+import com.exadbe.engine.handlers.BalanceAdjustmentHandler;
+import com.exadbe.engine.orderbook.L2View;
+import com.exadbe.engine.orderbook.OrderBookNaive;
+import com.exadbe.engine.risk.DirectExchangeRisk;
+import com.exadbe.engine.risk.SymbolSpec;
+import com.exadbe.engine.risk.SymbolSpecStore;
+import com.exadbe.protocol.CommandEnvelopeDecoder;
+import com.exadbe.protocol.CommandResultCode;
+import com.exadbe.protocol.OrderAction;
+import com.exadbe.protocol.OrderType;
+import com.exadbe.telemetry.CoreMetrics;
+import org.agrona.collections.Int2ObjectHashMap;
+
+/**
+ * The deterministic state machine: idempotent dispatch of commands over the
+ * account and (from phase 2) order-book state. Intentionally free of any Aeron
+ * dependency so it can be driven directly in unit and replay tests.
+ *
+ * <p>Single-writer: all methods must be invoked from one thread. No clock, no
+ * randomness, no external I/O.
+ */
+public final class MatchingEngine {
+
+    private final AccountStore accounts;
+    private final DedupTable dedup;
+    private final CoreMetrics metrics;
+
+    private final AddUserHandler addUserHandler;
+    private final BalanceAdjustmentHandler balanceAdjustmentHandler;
+    private final AddSymbolHandler addSymbolHandler;
+
+    private final SymbolSpecStore symbols = new SymbolSpecStore();
+    private final DirectExchangeRisk risk;
+    private final Int2ObjectHashMap<OrderBookNaive> books = new Int2ObjectHashMap<>();
+    private final L2View l2;
+
+    public MatchingEngine(final CoreConfig config, final CoreMetrics metrics) {
+        this.accounts = new AccountStore(config.accountCapacity());
+        this.dedup = new DedupTable(config.dedupClientCapacity(), config.dedupWindow());
+        this.metrics = metrics;
+        this.addUserHandler = new AddUserHandler(accounts);
+        this.balanceAdjustmentHandler = new BalanceAdjustmentHandler(accounts);
+        this.addSymbolHandler = new AddSymbolHandler(symbols);
+        this.risk = new DirectExchangeRisk(accounts);
+        this.l2 = new L2View(config.l2MaxLevels());
+    }
+
+    /**
+     * Processes one decoded command and populates {@code out}.
+     *
+     * @param timestamp leader-assigned time; the only permitted time source
+     * @return {@code true} if this was a duplicate (cached result returned,
+     *     command not re-applied), {@code false} if freshly applied.
+     */
+    public boolean process(final CommandEnvelopeDecoder cmd, final long timestamp, final CommandOutcome out) {
+        final long clientId = cmd.clientId();
+        final long clientSeq = cmd.clientSeq();
+
+        final DedupRing ring = dedup.ringFor(clientId);
+        if (ring != null && ring.contains(clientSeq)) {
+            out.set(
+                    ring.commandIdHi(clientSeq),
+                    ring.commandIdLo(clientSeq),
+                    CommandResultCode.get(ring.resultCode(clientSeq)),
+                    ring.uid(clientSeq),
+                    ring.hasUid(clientSeq),
+                    ring.orderId(clientSeq),
+                    ring.hasOrderId(clientSeq),
+                    ring.filledSize(clientSeq),
+                    ring.hasFilledSize(clientSeq));
+            metrics.onDuplicate();
+            return true;
+        }
+
+        final long idHi = cmd.commandIdHi();
+        final long idLo = cmd.commandIdLo();
+        out.reset(idHi, idLo);
+        dispatch(cmd, timestamp, out);
+
+        dedup.store(
+                clientId,
+                clientSeq,
+                idHi,
+                idLo,
+                out.resultCode().value(),
+                out.uid(),
+                out.hasUid(),
+                out.orderId(),
+                out.hasOrderId(),
+                out.filledSize(),
+                out.hasFilledSize());
+        metrics.onCommandProcessed();
+        return false;
+    }
+
+    private void dispatch(final CommandEnvelopeDecoder cmd, final long timestamp, final CommandOutcome out) {
+        switch (cmd.commandType()) {
+            case ADD_USER -> addUserHandler.handle(cmd.uid(), out);
+            case BALANCE_ADJUSTMENT -> balanceAdjustmentHandler.handle(
+                    cmd.uid(), cmd.currency(), cmd.balanceAmount(), out);
+            case ADD_SYMBOL -> addSymbolHandler.handle(
+                    cmd.symbolId(), cmd.baseCurrency(), cmd.quoteCurrency(), cmd.baseScaleK(), cmd.quoteScaleK(), out);
+            case PLACE_ORDER -> handlePlace(cmd, timestamp, out);
+            case CANCEL_ORDER -> handleCancel(cmd, out);
+            case MOVE_ORDER -> handleMove(cmd, out);
+            case REDUCE_ORDER -> handleReduce(cmd, out);
+            case ORDER_BOOK_REQUEST -> handleOrderBookRequest(cmd, out);
+            default -> unsupported(cmd, out);
+        }
+    }
+
+    private void handlePlace(final CommandEnvelopeDecoder cmd, final long timestamp, final CommandOutcome out) {
+        final int symbolId = cmd.symbolId();
+        final long orderId = cmd.orderId();
+        final long uid = cmd.uid();
+        out.uid(uid);
+        out.orderId(orderId);
+
+        final SymbolSpec spec = symbols.get(symbolId);
+        if (spec == null) {
+            out.resultCode(CommandResultCode.INVALID_SYMBOL);
+            return;
+        }
+        if (!accounts.userExists(uid)) {
+            out.resultCode(CommandResultCode.USER_NOT_FOUND);
+            return;
+        }
+
+        final boolean ask = cmd.action() == OrderAction.ASK;
+        final OrderType type = cmd.orderType();
+        final long size = cmd.size();
+        final long price = cmd.price();
+        final long reserveBidPrice = cmd.reserveBidPrice();
+
+        final int holdCurrency;
+        final long holdAmount;
+        if (ask) {
+            holdCurrency = spec.baseCurrency();
+            holdAmount = DirectExchangeRisk.askHold(spec, size);
+        } else if (type == OrderType.FOK_BUDGET) {
+            holdCurrency = spec.quoteCurrency();
+            holdAmount = DirectExchangeRisk.bidBudgetHold(spec, price);
+        } else {
+            if (reserveBidPrice < price) {
+                out.resultCode(CommandResultCode.RISK_INVALID_RESERVE_PRICE);
+                return;
+            }
+            holdCurrency = spec.quoteCurrency();
+            holdAmount = DirectExchangeRisk.bidHold(spec, size, reserveBidPrice);
+        }
+
+        if (!risk.reserve(uid, holdCurrency, holdAmount)) {
+            out.resultCode(CommandResultCode.RISK_NSF);
+            return;
+        }
+
+        final OrderBookNaive book = bookForCreate(symbolId);
+        final long filled;
+        switch (type) {
+            case GTC -> filled = book.placeGtc(orderId, ask, price, size, reserveBidPrice, uid, timestamp, out);
+            case IOC -> filled = book.matchIoc(orderId, ask, price, size, reserveBidPrice, uid, out);
+            case FOK_BUDGET -> filled = book.matchFokBudget(orderId, ask, price, size, reserveBidPrice, uid, out);
+            default -> {
+                risk.release(uid, holdCurrency, holdAmount);
+                out.resultCode(CommandResultCode.UNSUPPORTED_COMMAND);
+                metrics.onUnsupportedCommand();
+                return;
+            }
+        }
+
+        final boolean fokBudget = type == OrderType.FOK_BUDGET;
+        settleFills(spec, out, fokBudget, price);
+        releaseRejects(spec, out, ask, fokBudget, price, reserveBidPrice);
+        out.filledSize(filled);
+        out.resultCode(CommandResultCode.SUCCESS);
+    }
+
+    private void handleCancel(final CommandEnvelopeDecoder cmd, final CommandOutcome out) {
+        final long uid = cmd.uid();
+        final long orderId = cmd.orderId();
+        out.uid(uid);
+        out.orderId(orderId);
+        final int symbolId = cmd.symbolId();
+        final OrderBookNaive book = books.get(symbolId);
+        if (book == null) {
+            out.resultCode(CommandResultCode.MATCHING_UNKNOWN_ORDER_ID);
+            return;
+        }
+        final CommandResultCode code = book.cancel(orderId, uid, out);
+        if (code == CommandResultCode.SUCCESS) {
+            releaseReduces(symbols.get(symbolId), out);
+        }
+        out.resultCode(code);
+    }
+
+    private void handleMove(final CommandEnvelopeDecoder cmd, final CommandOutcome out) {
+        final long uid = cmd.uid();
+        final long orderId = cmd.orderId();
+        out.uid(uid);
+        out.orderId(orderId);
+        final int symbolId = cmd.symbolId();
+        final OrderBookNaive book = books.get(symbolId);
+        if (book == null) {
+            out.resultCode(CommandResultCode.MATCHING_UNKNOWN_ORDER_ID);
+            return;
+        }
+        final CommandResultCode code = book.move(orderId, uid, cmd.price(), out);
+        if (code == CommandResultCode.SUCCESS) {
+            settleFills(symbols.get(symbolId), out, false, 0L);
+        }
+        out.resultCode(code);
+    }
+
+    private void handleReduce(final CommandEnvelopeDecoder cmd, final CommandOutcome out) {
+        final long uid = cmd.uid();
+        final long orderId = cmd.orderId();
+        out.uid(uid);
+        out.orderId(orderId);
+        final int symbolId = cmd.symbolId();
+        final OrderBookNaive book = books.get(symbolId);
+        if (book == null) {
+            out.resultCode(CommandResultCode.MATCHING_UNKNOWN_ORDER_ID);
+            return;
+        }
+        final CommandResultCode code = book.reduce(orderId, uid, cmd.size(), out);
+        if (code == CommandResultCode.SUCCESS) {
+            releaseReduces(symbols.get(symbolId), out);
+        }
+        out.resultCode(code);
+    }
+
+    // Settles maker fills at the actual price and the taker in aggregate, releasing
+    // any over-reserved quote. Used by both PLACE and a marketable MOVE.
+    private void settleFills(
+            final SymbolSpec spec, final CommandOutcome out, final boolean fokBudget, final long budget) {
+        long sizeSum = 0L;
+        long sizePriceSum = 0L;
+        long takerReserve = 0L;
+        long takerUid = 0L;
+        boolean takerBid = false;
+        boolean anyTrade = false;
+        final int n = out.eventCount();
+        for (int i = 0; i < n; i++) {
+            final CommandOutcome.EventRecord e = out.event(i);
+            if (e.kind() != CommandOutcome.EventKind.TRADE) {
+                continue;
+            }
+            risk.settleMaker(spec, e.makerBid(), e.makerUid(), e.makerReserveBidPrice(), e.price(), e.size());
+            sizeSum += e.size();
+            sizePriceSum += e.size() * e.price();
+            takerUid = e.takerUid();
+            takerBid = e.takerBid();
+            takerReserve = e.takerReserveBidPrice();
+            anyTrade = true;
+        }
+        if (!anyTrade) {
+            return;
+        }
+        if (takerBid) {
+            final long heldPriceSum = fokBudget ? budget : takerReserve * sizeSum;
+            risk.settleTakerBuy(spec, takerUid, heldPriceSum, sizePriceSum, sizeSum);
+        } else {
+            risk.settleTakerSell(spec, takerUid, sizePriceSum);
+        }
+    }
+
+    // Releases the taker's hold for any rejected (unmatched) size.
+    private void releaseRejects(
+            final SymbolSpec spec,
+            final CommandOutcome out,
+            final boolean takerAsk,
+            final boolean fokBudget,
+            final long budget,
+            final long reserveBidPrice) {
+        final int n = out.eventCount();
+        for (int i = 0; i < n; i++) {
+            final CommandOutcome.EventRecord e = out.event(i);
+            if (e.kind() != CommandOutcome.EventKind.REJECT) {
+                continue;
+            }
+            if (takerAsk) {
+                risk.release(e.makerUid(), spec.baseCurrency(), e.size() * spec.baseScaleK());
+            } else if (fokBudget) {
+                risk.release(e.makerUid(), spec.quoteCurrency(), DirectExchangeRisk.bidBudgetHold(spec, budget));
+            } else {
+                risk.release(e.makerUid(), spec.quoteCurrency(), e.size() * reserveBidPrice * spec.quoteScaleK());
+            }
+        }
+    }
+
+    // Releases the freed hold for a cancelled or reduced resting order.
+    private void releaseReduces(final SymbolSpec spec, final CommandOutcome out) {
+        if (spec == null) {
+            return;
+        }
+        final int n = out.eventCount();
+        for (int i = 0; i < n; i++) {
+            final CommandOutcome.EventRecord e = out.event(i);
+            if (e.kind() != CommandOutcome.EventKind.REDUCE) {
+                continue;
+            }
+            if (e.makerBid()) {
+                risk.release(
+                        e.makerUid(), spec.quoteCurrency(), e.size() * e.makerReserveBidPrice() * spec.quoteScaleK());
+            } else {
+                risk.release(e.makerUid(), spec.baseCurrency(), e.size() * spec.baseScaleK());
+            }
+        }
+    }
+
+    private void handleOrderBookRequest(final CommandEnvelopeDecoder cmd, final CommandOutcome out) {
+        final OrderBookNaive book = books.get(cmd.symbolId());
+        if (book == null) {
+            l2.reset();
+        } else {
+            book.fillL2(l2);
+        }
+        out.uid(cmd.uid());
+        out.resultCode(CommandResultCode.SUCCESS);
+    }
+
+    private OrderBookNaive bookForCreate(final int symbolId) {
+        OrderBookNaive book = books.get(symbolId);
+        if (book == null) {
+            book = new OrderBookNaive(symbolId);
+            books.put(symbolId, book);
+        }
+        return book;
+    }
+
+    // Reached only by NULL_VAL / unknown command types.
+    private void unsupported(final CommandEnvelopeDecoder cmd, final CommandOutcome out) {
+        out.uid(cmd.uid());
+        out.resultCode(CommandResultCode.UNSUPPORTED_COMMAND);
+        metrics.onUnsupportedCommand();
+    }
+
+    /** The reusable L2 snapshot filled by the most recent order-book request. */
+    public L2View l2() {
+        return l2;
+    }
+
+    public OrderBookNaive book(final int symbolId) {
+        return books.get(symbolId);
+    }
+
+    public int symbolCount() {
+        return symbols.size();
+    }
+
+    public boolean userExists(final long uid) {
+        return accounts.userExists(uid);
+    }
+
+    public long balance(final long uid, final int currency) {
+        return accounts.balance(uid, currency);
+    }
+
+    public int userCount() {
+        return accounts.userCount();
+    }
+
+    public int dedupClientCount() {
+        return dedup.clientCount();
+    }
+}

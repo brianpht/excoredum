@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!DOCTYPE module PUBLIC
+    "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+    "https://checkstyle.org/dtds/configuration_1_3.dtd">
+<!--
+  Base Checkstyle config for all ADBE modules.
+  Formatting is enforced by Spotless (palantir-java-format); Checkstyle here focuses
+  on correctness and hygiene rules that formatting cannot express.
+-->
+<module name="Checker">
+    <property name="charset" value="UTF-8"/>
+    <property name="severity" value="error"/>
+    <property name="fileExtensions" value="java, properties, xml"/>
+
+    <!-- No tab characters in source. -->
+    <module name="FileTabCharacter">
+        <property name="eachLine" value="true"/>
+    </module>
+
+    <!-- No trailing whitespace. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="\s+$"/>
+        <property name="message" value="Trailing whitespace is not allowed."/>
+    </module>
+
+    <!-- Project rule: no em-dashes or emojis in source, comments, or Javadoc. -->
+    <module name="RegexpSingleline">
+        <property name="format" value="[\u2012\u2013\u2014\u2015]"/>
+        <property name="message" value="Em-dash / en-dash is forbidden; use ' - ' (ASCII) instead."/>
+    </module>
+
+    <module name="TreeWalker">
+        <module name="OuterTypeFilename"/>
+        <module name="UnusedImports"/>
+        <module name="RedundantImport"/>
+        <module name="AvoidStarImport"/>
+        <module name="MissingOverride"/>
+        <module name="EmptyStatement"/>
+        <module name="EqualsHashCode"/>
+        <module name="OneStatementPerLine"/>
+        <module name="UpperEll"/>
+        <module name="ArrayTypeStyle"/>
+        <module name="FallThrough"/>
+        <module name="ModifierOrder"/>
+        <module name="DefaultComesLast"/>
+    </module>
+</module>
