@@ -10,6 +10,7 @@ import com.exadbe.engine.handlers.AddUserHandler;
 import com.exadbe.engine.handlers.BalanceAdjustmentHandler;
 import com.exadbe.engine.orderbook.L2View;
 import com.exadbe.engine.orderbook.OrderBookNaive;
+import com.exadbe.engine.orderbook.OrderNodePool;
 import com.exadbe.engine.risk.DirectExchangeRisk;
 import com.exadbe.engine.risk.SymbolSpec;
 import com.exadbe.engine.risk.SymbolSpecStore;
@@ -17,7 +18,9 @@ import com.exadbe.protocol.CommandEnvelopeDecoder;
 import com.exadbe.protocol.CommandResultCode;
 import com.exadbe.protocol.OrderAction;
 import com.exadbe.protocol.OrderType;
+import com.exadbe.snapshot.SnapshotManager;
 import com.exadbe.telemetry.CoreMetrics;
+import java.util.Arrays;
 import org.agrona.collections.Int2ObjectHashMap;
 
 /**
@@ -41,7 +44,11 @@ public final class MatchingEngine {
     private final SymbolSpecStore symbols = new SymbolSpecStore();
     private final DirectExchangeRisk risk;
     private final Int2ObjectHashMap<OrderBookNaive> books = new Int2ObjectHashMap<>();
+    private final OrderNodePool orderPool;
     private final L2View l2;
+
+    private int[] symbolScratch = new int[0];
+    private long lastPoolAllocations;
 
     public MatchingEngine(final CoreConfig config, final CoreMetrics metrics) {
         this.accounts = new AccountStore(config.accountCapacity());
@@ -51,6 +58,7 @@ public final class MatchingEngine {
         this.balanceAdjustmentHandler = new BalanceAdjustmentHandler(accounts);
         this.addSymbolHandler = new AddSymbolHandler(symbols);
         this.risk = new DirectExchangeRisk(accounts);
+        this.orderPool = new OrderNodePool(config.orderPoolCapacity());
         this.l2 = new L2View(config.l2MaxLevels());
     }
 
@@ -85,6 +93,13 @@ public final class MatchingEngine {
         final long idLo = cmd.commandIdLo();
         out.reset(idHi, idLo);
         dispatch(cmd, timestamp, out);
+        if (out.grewEventBuffer()) {
+            metrics.onEventBufferOverflow();
+        }
+        if (orderPool.allocations() != lastPoolAllocations) {
+            lastPoolAllocations = orderPool.allocations();
+            metrics.onOrderPoolExhausted();
+        }
 
         dedup.store(
                 clientId,
@@ -331,7 +346,7 @@ public final class MatchingEngine {
     private OrderBookNaive bookForCreate(final int symbolId) {
         OrderBookNaive book = books.get(symbolId);
         if (book == null) {
-            book = new OrderBookNaive(symbolId);
+            book = new OrderBookNaive(symbolId, orderPool);
             books.put(symbolId, book);
         }
         return book;
@@ -371,5 +386,72 @@ public final class MatchingEngine {
 
     public int dedupClientCount() {
         return dedup.clientCount();
+    }
+
+    /** Total number of resting orders across every book. */
+    public int orderCount() {
+        final int[] total = {0};
+        books.forEachInt((symbolId, book) -> total[0] += book.orderCount());
+        return total[0];
+    }
+
+    /** Cumulative cold-path order-node allocations (pool misses); 0 in steady state. */
+    public long orderPoolAllocations() {
+        return orderPool.allocations();
+    }
+
+    /** Writes the full engine state to a snapshot sink in deterministic order. */
+    public void writeSnapshot(
+            final SnapshotManager snapshotManager,
+            final SnapshotManager.SnapshotSink sink,
+            final Runnable idler,
+            final long logPosition) {
+        snapshotManager.write(sink, idler, symbols, accounts, this::forEachOrderSorted, dedup, logPosition);
+    }
+
+    /** Clears this engine's state and prepares its stores to receive a snapshot load. */
+    public void beginSnapshotLoad(final SnapshotManager snapshotManager) {
+        books.clear();
+        snapshotManager.beginLoad(symbols, accounts, this::forEachOrderSorted, this::restoreOrder, dedup);
+    }
+
+    /** Clears all engine state; used to discard a rejected snapshot load. */
+    public void clearState() {
+        symbols.clear();
+        accounts.clear();
+        dedup.clear();
+        books.clear();
+    }
+
+    // Emits every resting order in ascending symbol order, each book best-first FIFO.
+    private void forEachOrderSorted(final SnapshotManager.OrderSink sink) {
+        final int count = books.size();
+        if (symbolScratch.length < count) {
+            symbolScratch = new int[count];
+        }
+        final int[] ids = symbolScratch;
+        final int[] cursor = {0};
+        books.forEachInt((symbolId, book) -> ids[cursor[0]++] = symbolId);
+        Arrays.sort(ids, 0, count);
+        for (int i = 0; i < count; i++) {
+            final int symbolId = ids[i];
+            final OrderBookNaive book = books.get(symbolId);
+            book.forEachOrderSorted((orderId, ask, price, size, filled, reserveBidPrice, uid, timestamp) ->
+                    sink.accept(symbolId, orderId, ask, price, size, filled, reserveBidPrice, uid, timestamp));
+        }
+    }
+
+    // Reinstates one resting order into its book (creating the book if needed).
+    private void restoreOrder(
+            final int symbolId,
+            final long orderId,
+            final boolean ask,
+            final long price,
+            final long size,
+            final long filled,
+            final long reserveBidPrice,
+            final long uid,
+            final long timestamp) {
+        bookForCreate(symbolId).restingInsert(orderId, ask, price, size, filled, reserveBidPrice, uid, timestamp);
     }
 }

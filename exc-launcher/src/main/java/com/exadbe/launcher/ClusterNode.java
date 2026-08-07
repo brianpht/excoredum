@@ -2,7 +2,9 @@ package com.exadbe.launcher;
 
 import com.exadbe.config.CoreConfig;
 import com.exadbe.core.MatchingService;
+import com.exadbe.telemetry.AtomicCounterSink;
 import com.exadbe.telemetry.CoreMetrics;
+import com.exadbe.telemetry.CounterSink;
 import io.aeron.archive.Archive;
 import io.aeron.archive.client.AeronArchive;
 import io.aeron.cluster.ClusteredMediaDriver;
@@ -11,6 +13,12 @@ import io.aeron.cluster.service.ClusteredService;
 import io.aeron.cluster.service.ClusteredServiceContainer;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
+import java.util.Locale;
+import org.agrona.BitUtil;
+import org.agrona.BufferUtil;
+import org.agrona.concurrent.UnsafeBuffer;
+import org.agrona.concurrent.status.AtomicCounter;
+import org.agrona.concurrent.status.CountersManager;
 
 /**
  * Launches and owns the Aeron components for one cluster node: the clustered
@@ -30,6 +38,7 @@ public final class ClusterNode implements AutoCloseable {
 
     private final ClusteredMediaDriver clusteredMediaDriver;
     private final ClusteredServiceContainer container;
+    private final CountersManager countersManager;
     private final CoreMetrics metrics;
 
     /** Launches a node that clears prior state on start (fresh cluster). */
@@ -60,7 +69,9 @@ public final class ClusterNode implements AutoCloseable {
             final CoreConfig coreConfig,
             final boolean cleanStart,
             final ClusteredServiceFactory serviceFactory) {
-        this.metrics = new CoreMetrics();
+        this.countersManager = newCountersManager();
+        this.metrics = new CoreMetrics(
+                new AtomicCounterSink(allocateCounters(countersManager), allocateGauges(countersManager)));
 
         final String localControlChannel = "aeron:ipc?term-length=64k";
 
@@ -117,6 +128,11 @@ public final class ClusterNode implements AutoCloseable {
         return metrics;
     }
 
+    /** The off-heap counters manager backing the core metrics for this node. */
+    public CountersManager countersManager() {
+        return countersManager;
+    }
+
     @Override
     public void close() {
         if (container != null) {
@@ -125,5 +141,34 @@ public final class ClusterNode implements AutoCloseable {
         if (clusteredMediaDriver != null) {
             clusteredMediaDriver.close();
         }
+    }
+
+    private static CountersManager newCountersManager() {
+        final int maxCounters = CounterSink.Counter.COUNT + CounterSink.Gauge.COUNT;
+        final UnsafeBuffer valuesBuffer = new UnsafeBuffer(BufferUtil.allocateDirectAligned(
+                maxCounters * CountersManager.COUNTER_LENGTH, BitUtil.CACHE_LINE_LENGTH));
+        final UnsafeBuffer metadataBuffer = new UnsafeBuffer(BufferUtil.allocateDirectAligned(
+                maxCounters * CountersManager.METADATA_LENGTH, BitUtil.CACHE_LINE_LENGTH));
+        return new CountersManager(metadataBuffer, valuesBuffer);
+    }
+
+    private static AtomicCounter[] allocateCounters(final CountersManager countersManager) {
+        final CounterSink.Counter[] all = CounterSink.Counter.values();
+        final AtomicCounter[] counters = new AtomicCounter[all.length];
+        for (final CounterSink.Counter counter : all) {
+            counters[counter.ordinal()] = countersManager.newCounter(
+                    "exc." + counter.name().toLowerCase(Locale.ROOT), CounterSink.TYPE_COUNTER);
+        }
+        return counters;
+    }
+
+    private static AtomicCounter[] allocateGauges(final CountersManager countersManager) {
+        final CounterSink.Gauge[] all = CounterSink.Gauge.values();
+        final AtomicCounter[] gauges = new AtomicCounter[all.length];
+        for (final CounterSink.Gauge gauge : all) {
+            gauges[gauge.ordinal()] =
+                    countersManager.newCounter("exc." + gauge.name().toLowerCase(Locale.ROOT), CounterSink.TYPE_GAUGE);
+        }
+        return gauges;
     }
 }

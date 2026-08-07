@@ -113,6 +113,7 @@ public final class CommandOutcome {
 
     private EventRecord[] events = newEventArray(INITIAL_EVENT_CAPACITY);
     private int eventCount;
+    private boolean grewEventBuffer;
 
     private static EventRecord[] newEventArray(final int capacity) {
         final EventRecord[] array = new EventRecord[capacity];
@@ -120,6 +121,18 @@ public final class CommandOutcome {
             array[i] = new EventRecord();
         }
         return array;
+    }
+
+    /** Creates an outcome with the default preallocated event capacity. */
+    public CommandOutcome() {
+        this(INITIAL_EVENT_CAPACITY);
+    }
+
+    /** Creates an outcome whose event buffer is preallocated to {@code eventCapacity}. */
+    public CommandOutcome(final int eventCapacity) {
+        if (eventCapacity != INITIAL_EVENT_CAPACITY) {
+            this.events = newEventArray(Math.max(1, eventCapacity));
+        }
     }
 
     /** Clears all fields and records the command identity for the next dispatch. */
@@ -134,6 +147,7 @@ public final class CommandOutcome {
         this.filledSize = 0L;
         this.hasFilledSize = false;
         this.eventCount = 0;
+        this.grewEventBuffer = false;
     }
 
     /** Copies identity and result fields from a cached dedup record. */
@@ -241,6 +255,12 @@ public final class CommandOutcome {
             larger[i] = new EventRecord();
         }
         events = larger;
+        grewEventBuffer = true;
+    }
+
+    /** True if the last command overflowed the preallocated buffer, forcing a grow. */
+    public boolean grewEventBuffer() {
+        return grewEventBuffer;
     }
 
     public void resultCode(final CommandResultCode code) {

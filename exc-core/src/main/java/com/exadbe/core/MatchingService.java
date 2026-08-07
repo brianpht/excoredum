@@ -12,6 +12,7 @@ import com.exadbe.protocol.OrderCommandType;
 import com.exadbe.protocol.ReduceEventEncoder;
 import com.exadbe.protocol.RejectEventEncoder;
 import com.exadbe.protocol.TradeEventEncoder;
+import com.exadbe.snapshot.SnapshotManager;
 import com.exadbe.telemetry.CoreMetrics;
 import io.aeron.ExclusivePublication;
 import io.aeron.Image;
@@ -46,7 +47,7 @@ public final class MatchingService implements ClusteredService {
     private final CommandEnvelopeDecoder envelopeDecoder = new CommandEnvelopeDecoder();
     private final MessageHeaderEncoder resultHeaderEncoder = new MessageHeaderEncoder();
     private final CommandResultEncoder resultEncoder = new CommandResultEncoder();
-    private final CommandOutcome outcome = new CommandOutcome();
+    private final CommandOutcome outcome;
     private final UnsafeBuffer egressBuffer = new UnsafeBuffer(new byte[EGRESS_BUFFER_LENGTH]);
 
     private final MessageHeaderEncoder eventHeaderEncoder = new MessageHeaderEncoder();
@@ -59,12 +60,15 @@ public final class MatchingService implements ClusteredService {
     private final L2MarketDataEncoder l2Encoder = new L2MarketDataEncoder();
     private final UnsafeBuffer l2Buffer;
 
+    private final SnapshotManager snapshotManager = new SnapshotManager();
+
     private Cluster cluster;
     private IdleStrategy idleStrategy;
 
     public MatchingService(final CoreConfig config, final CoreMetrics metrics) {
         this.metrics = metrics;
         this.engine = new MatchingEngine(config, metrics);
+        this.outcome = new CommandOutcome(config.eventBufferCapacity());
         this.l2Buffer = new UnsafeBuffer(new byte[128 + config.l2MaxLevels() * 48]);
     }
 
@@ -72,7 +76,9 @@ public final class MatchingService implements ClusteredService {
     public void onStart(final Cluster cluster, final Image snapshotImage) {
         this.cluster = cluster;
         this.idleStrategy = cluster.idleStrategy();
-        // Snapshot load arrives in phase 4.
+        if (snapshotImage != null) {
+            loadSnapshot(snapshotImage);
+        }
     }
 
     @Override
@@ -124,7 +130,56 @@ public final class MatchingService implements ClusteredService {
 
     @Override
     public void onTakeSnapshot(final ExclusivePublication snapshotPublication) {
-        // Native snapshot support arrives in phase 4.
+        final long start = cluster.time();
+        engine.writeSnapshot(
+                snapshotManager,
+                (recordBuffer, recordOffset, recordLength) ->
+                        offerToPublication(snapshotPublication, recordBuffer, recordOffset, recordLength),
+                idleStrategy::idle,
+                cluster.logPosition());
+        metrics.snapshotWriteMillis(cluster.time() - start);
+        metrics.onSnapshotTaken();
+    }
+
+    private void loadSnapshot(final Image snapshotImage) {
+        final long start = cluster.time();
+        engine.beginSnapshotLoad(snapshotManager);
+        while (!snapshotManager.loadComplete()) {
+            final int fragments = snapshotImage.poll(this::onSnapshotFragment, 32);
+            if (fragments == 0) {
+                if (snapshotImage.isEndOfStream()) {
+                    break;
+                }
+                idleStrategy.idle();
+            }
+        }
+        // A corrupt or truncated snapshot must never become committed state; fail
+        // fast so the node aborts recovery rather than serving broken state.
+        if (!snapshotManager.verifyInvariant()) {
+            throw new IllegalStateException("Snapshot integrity check failed: checksum mismatch or footer missing");
+        }
+        metrics.snapshotReadMillis(cluster.time() - start);
+        metrics.onSnapshotLoaded();
+    }
+
+    private void onSnapshotFragment(
+            final DirectBuffer buffer, final int offset, final int length, final Header header) {
+        snapshotManager.onRecord(buffer, offset);
+    }
+
+    private void offerToPublication(
+            final ExclusivePublication publication, final DirectBuffer buffer, final int offset, final int length) {
+        idleStrategy.reset();
+        while (true) {
+            final long result = publication.offer(buffer, offset, length);
+            if (result > 0) {
+                return;
+            }
+            if (result == Publication.CLOSED || result == Publication.MAX_POSITION_EXCEEDED) {
+                throw new IllegalStateException("Snapshot publication unavailable: " + result);
+            }
+            idleStrategy.idle();
+        }
     }
 
     @Override

@@ -13,6 +13,7 @@ dependencies {
     testImplementation(project(":exc-launcher"))
     testImplementation(project(":exc-client"))
     testImplementation(project(":exc-read"))
+    testImplementation(project(":exc-bench"))
     testImplementation(libs.bundles.aeron)
 
     testFixturesApi(project(":exc-protocol"))
@@ -72,7 +73,7 @@ tasks.named<Test>("test") {
 }
 
 tasks.named("check") {
-    dependsOn(integrationTest)
+    dependsOn(integrationTest, clusterTest, faultTest)
 }
 
 // Test code is not the production hot path; keep lint informative but non-fatal.

@@ -155,5 +155,61 @@
         </group>
     </sbe:message>
 
+    <!-- ============================ Snapshot records ============================ -->
+
+    <sbe:message name="SnapshotHeader" id="100" description="First record in a snapshot stream.">
+        <field name="logPosition"        id="1" type="uint64"/>
+        <field name="snapshotSchemaVer"  id="2" type="uint32"/>
+        <field name="symbolCount"        id="3" type="uint32"/>
+        <field name="userCount"          id="4" type="uint32"/>
+        <field name="orderCount"         id="5" type="uint32"/>
+        <field name="dedupClientCount"   id="6" type="uint32"/>
+    </sbe:message>
+
+    <sbe:message name="SymbolSpecRecord" id="101" description="One symbol spec, emitted ascending by symbolId.">
+        <field name="symbolId"      id="1" type="int32"/>
+        <field name="baseCurrency"  id="2" type="int32"/>
+        <field name="quoteCurrency" id="3" type="int32"/>
+        <field name="baseScaleK"    id="4" type="int64"/>
+        <field name="quoteScaleK"   id="5" type="int64"/>
+    </sbe:message>
+
+    <sbe:message name="UserRecord" id="102" description="One account existence marker, emitted ascending by uid.">
+        <field name="uid" id="1" type="uint64"/>
+    </sbe:message>
+
+    <sbe:message name="BalanceRecord" id="103" description="One balance entry, emitted ascending by (uid, currency).">
+        <field name="uid"      id="1" type="uint64"/>
+        <field name="currency" id="2" type="int32"/>
+        <field name="balance"  id="3" type="int64"/>
+    </sbe:message>
+
+    <sbe:message name="OrderRecord" id="104" description="One resting order, emitted ascending by symbol then book position.">
+        <field name="symbolId"        id="1" type="int32"/>
+        <field name="orderId"         id="2" type="int64"/>
+        <field name="ask"             id="3" type="uint8"/>
+        <field name="price"           id="4" type="int64"/>
+        <field name="size"            id="5" type="int64"/>
+        <field name="filled"          id="6" type="int64"/>
+        <field name="reserveBidPrice" id="7" type="int64"/>
+        <field name="uid"             id="8" type="uint64"/>
+        <field name="timestamp"       id="9" type="int64"/>
+    </sbe:message>
+
+    <sbe:message name="DedupRecord" id="105" description="One cached command result, emitted ascending by (clientId, clientSeq).">
+        <field name="clientId"    id="1" type="uint64"/>
+        <field name="clientSeq"   id="2" type="uint64"/>
+        <field name="commandIdHi" id="3" type="uint64"/>
+        <field name="commandIdLo" id="4" type="uint64"/>
+        <field name="resultCode"  id="5" type="CommandResultCode"/>
+        <field name="uid"         id="6" type="uint64" presence="optional"/>
+        <field name="orderId"     id="7" type="int64"  presence="optional"/>
+        <field name="filledSize"  id="8" type="int64"  presence="optional"/>
+    </sbe:message>
+
+    <sbe:message name="SnapshotFooter" id="199" description="Terminal record; carries an integrity checksum.">
+        <field name="checksum" id="1" type="int64"/>
+    </sbe:message>
+
 </sbe:messageSchema>
 

@@ -17,12 +17,18 @@ public final class OrderBookNaive {
     private static final long BUDGET_UNAVAILABLE = -1L;
 
     private final int symbolId;
+    private final OrderNodePool pool;
     private final OrderBookSide askSide = new OrderBookSide(true);
     private final OrderBookSide bidSide = new OrderBookSide(false);
     private final Long2ObjectHashMap<OrderNode> idMap = new Long2ObjectHashMap<>();
 
     public OrderBookNaive(final int symbolId) {
+        this(symbolId, new OrderNodePool(1024));
+    }
+
+    public OrderBookNaive(final int symbolId, final OrderNodePool pool) {
         this.symbolId = symbolId;
+        this.pool = pool;
     }
 
     /** Places a GTC order: match marketable portion, then rest the remainder. */
@@ -44,7 +50,7 @@ public final class OrderBookNaive {
             out.addReject(symbolId, orderId, uid, size - filled);
             return filled;
         }
-        final OrderNode node = new OrderNode();
+        final OrderNode node = pool.acquire();
         node.set(orderId, price, size, filled, reserveBidPrice, uid, timestamp, ask);
         ownSide(ask).getOrCreate(price).append(node);
         idMap.put(orderId, node);
@@ -100,6 +106,7 @@ public final class OrderBookNaive {
             side.remove(bucket);
         }
         out.addReduce(symbolId, orderId, uid, reducedBy, !node.ask, node.reserveBidPrice);
+        pool.release(node);
         return CommandResultCode.SUCCESS;
     }
 
@@ -123,10 +130,12 @@ public final class OrderBookNaive {
             if (bucket.numOrders == 0) {
                 side.remove(bucket);
             }
-        } else {
-            node.size -= reduceBy;
-            bucket.totalVolume -= reduceBy;
+            out.addReduce(symbolId, orderId, uid, reduceBy, !node.ask, node.reserveBidPrice);
+            pool.release(node);
+            return CommandResultCode.SUCCESS;
         }
+        node.size -= reduceBy;
+        bucket.totalVolume -= reduceBy;
         out.addReduce(symbolId, orderId, uid, reduceBy, !node.ask, node.reserveBidPrice);
         return CommandResultCode.SUCCESS;
     }
@@ -152,6 +161,7 @@ public final class OrderBookNaive {
                 matchInstantly(node.ask, newPrice, node.size, node.filled, node.uid, node.reserveBidPrice, true, out);
         if (filled == node.size) {
             idMap.remove(orderId);
+            pool.release(node);
             return CommandResultCode.SUCCESS;
         }
         node.filled = filled;
@@ -215,6 +225,7 @@ public final class OrderBookNaive {
                 if (makerCompleted) {
                     bucket.removeOrder(node);
                     idMap.remove(node.orderId);
+                    pool.release(node);
                 }
                 node = nextNode;
             }
@@ -251,6 +262,71 @@ public final class OrderBookNaive {
 
     private OrderBookSide ownSide(final boolean ask) {
         return ask ? askSide : bidSide;
+    }
+
+    /**
+     * Directly inserts a resting order without matching; used only to restore a
+     * book from a snapshot. Orders must be restored in book order (best-first,
+     * FIFO within a price) so the reconstructed structure is identical.
+     */
+    public void restingInsert(
+            final long orderId,
+            final boolean ask,
+            final long price,
+            final long size,
+            final long filled,
+            final long reserveBidPrice,
+            final long uid,
+            final long timestamp) {
+        final OrderNode node = pool.acquire();
+        node.set(orderId, price, size, filled, reserveBidPrice, uid, timestamp, ask);
+        ownSide(ask).getOrCreate(price).append(node);
+        idMap.put(orderId, node);
+    }
+
+    /**
+     * Emits every resting order in deterministic book order: ask side best-to-worse
+     * then bid side best-to-worse, FIFO within each price level.
+     *
+     * <p>Cold snapshot path only.
+     */
+    public void forEachOrderSorted(final OrderConsumer consumer) {
+        emitSide(askSide, consumer);
+        emitSide(bidSide, consumer);
+    }
+
+    private void emitSide(final OrderBookSide side, final OrderConsumer consumer) {
+        PriceBucket bucket = side.best();
+        while (bucket != null) {
+            OrderNode node = bucket.firstOrder;
+            while (node != null) {
+                consumer.accept(
+                        node.orderId,
+                        node.ask,
+                        node.price,
+                        node.size,
+                        node.filled,
+                        node.reserveBidPrice,
+                        node.uid,
+                        node.timestamp);
+                node = node.bucketNext;
+            }
+            bucket = bucket.worse;
+        }
+    }
+
+    /** Callback for deterministic resting-order iteration. */
+    @FunctionalInterface
+    public interface OrderConsumer {
+        void accept(
+                long orderId,
+                boolean ask,
+                long price,
+                long size,
+                long filled,
+                long reserveBidPrice,
+                long uid,
+                long timestamp);
     }
 
     public boolean contains(final long orderId) {

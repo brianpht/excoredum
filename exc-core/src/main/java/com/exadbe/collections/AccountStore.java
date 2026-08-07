@@ -117,6 +117,32 @@ public final class AccountStore {
         }
     }
 
+    /**
+     * Emits every user id in ascending order.
+     *
+     * <p>Cold snapshot path only; captures account existence even for users
+     * that hold no currency balances yet.
+     */
+    public void forEachUserSorted(final UserConsumer consumer) {
+        final int userCount = byUser.size();
+        if (userScratch.length < userCount) {
+            userScratch = new long[userCount];
+        }
+        final long[] uids = userScratch;
+        final int[] cursor = {0};
+        byUser.forEachLong((uid, balances) -> uids[cursor[0]++] = uid);
+        Arrays.sort(uids, 0, userCount);
+        for (int u = 0; u < userCount; u++) {
+            consumer.accept(uids[u]);
+        }
+    }
+
+    /** Primitive callback for deterministic user iteration. */
+    @FunctionalInterface
+    public interface UserConsumer {
+        void accept(long uid);
+    }
+
     /** Primitive callback for deterministic balance iteration. */
     @FunctionalInterface
     public interface BalanceConsumer {
