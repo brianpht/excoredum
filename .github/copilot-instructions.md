@@ -1,0 +1,220 @@
+# Copilot Instructions
+
+> Format: machine-parseable directives. Not for human reading.
+
+## Project
+
+Deterministic, allocation-conscious, lock-free Java core for high-performance applications. Targets low-latency,
+high-throughput workloads: messaging, trading, real-time analytics, game servers, telemetry pipelines, network services.
+If a change increases latency variance, allocation count in hot path, GC pressure, or branch entropy - REJECT.
+
+## Workspace
+
+- `src/main/java/.../config/` - system configuration (preallocated capacities, tuning knobs, idle strategies)
+- `src/main/java/.../transport/` - network and IPC transport (Aeron publication/subscription, channels)
+- `src/main/java/.../codec/` - wire format encoders/decoders (SBE flyweights, zero-copy buffers)
+- `src/main/java/.../core/` - domain logic, single-writer event loops, deterministic state machines
+- `src/main/java/.../collections/` - primitive collection wrappers and pools (Agrona-based)
+- `src/main/java/.../pipeline/` - Disruptor / ring buffer pipelines (claim, publish, consume stages)
+- `src/main/java/.../persistence/` - event recording, replay, snapshotting (Aeron Archive when applicable)
+- `src/main/java/.../cluster/` - replicated services, consensus, failover (Aeron Cluster when applicable)
+- `src/main/java/.../telemetry/` - off-heap counters, HdrHistogram, distinct error log
+- `src/main/java/.../util/` - clock abstraction, id generation, idle strategies, thread affinity
+- `src/test/java/...` - unit, integration, deterministic replay tests
+- `src/jmh/java/...` - JMH micro-benchmarks (codec, ring buffer, map ops, end-to-end)
+
+## Hot Path Operations
+
+`onEvent` | `decode` | `encode` | `publish` | `consume` | `lookup` | `update` | `dispatch`
+Requirements: allocation-free, O(1) where possible, cache-local, branch predictable, single-writer, lock-free.
+
+## Rules: Hot Path
+
+- NEVER use `synchronized`, `ReentrantLock`, or any blocking primitive
+- NEVER use `java.util.HashMap`, `TreeMap`, `ConcurrentHashMap` - use Agrona primitive maps
+- NEVER use `java.util.LinkedList`, `ArrayList<Integer>`, `ArrayList<Long>` - use `IntArrayList` / `LongArrayList`
+- NEVER use boxed types (`Integer`, `Long`, `Double`, `Boolean`) - primitives only
+- NEVER use `String.format`, string concatenation with `+`, or `StringBuilder.toString()` - preformat or use off-heap buffer
+- NEVER use `Optional<T>` - use sentinel values or null with documented contract
+- NEVER use streams (`.stream()`, `.collect()`, lambdas capturing state)
+- NEVER use `instanceof` chains or virtual dispatch on hot interfaces - resolve concrete types at init
+- NEVER allocate inside event handler, ring buffer consumer, or `Agent.doWork()`
+- NEVER use `%` (modulo) for ring index - use `& (capacity - 1)`
+- NEVER use exceptions for control flow - return codes or sentinel values only
+- NEVER call `System.currentTimeMillis()` or `System.nanoTime()` in tight loop - use cached clock
+- NEVER log via SLF4J/Log4j synchronously - use Agrona `DistinctErrorLog` or async off-heap log
+- NEVER autobox keys/values in collections
+- ALL ring buffer / sequence buffer indices MUST use `seq & (capacity - 1)`
+- ALL hot-path capacities MUST be power-of-two
+- ALL message objects MUST be flyweights wrapping `DirectBuffer` / `UnsafeBuffer` - never POJOs allocated per message
+
+## Rules: Memory and Allocation
+
+- ALL buffers preallocated at startup - zero heap allocation in steady state
+- ALL pools sized at init - no growth during operational window
+- USE off-heap (`UnsafeBuffer.allocateDirectAligned`) for shared state, IPC, large buffers
+- USE object pools for any unavoidable reference type
+- REUSE flyweight encoders/decoders - one instance per thread, `wrap(buffer, offset)` per call
+- VERIFY zero allocation on hot path with JMH `-prof gc` or `async-profiler --alloc`
+- GC strategy by workload:
+    - ZGC or Shenandoah - sub-ms pauses, default for most low-latency services
+    - Epsilon GC + sized heap - zero-GC operational windows (trading sessions, batch windows)
+    - G1 - acceptable only for non-critical components
+
+## Rules: Concurrency
+
+- Single-writer principle: each mutable resource owned by exactly one thread
+- USE Disruptor `RingBuffer` or Agrona `OneToOneRingBuffer` / `ManyToOneRingBuffer` for inter-thread messaging
+- USE Agrona `Agent` + `AgentRunner` pattern - one event loop per pinned core
+- NEVER cross threads with mutable POJO references - copy via flyweight into ring buffer slot
+- NEVER use `BlockingQueue`, `LinkedBlockingQueue`, `ArrayBlockingQueue` in hot path
+- NEVER use `CompletableFuture`, `ExecutorService`, `ForkJoinPool` in hot path
+- NEVER use `ThreadLocal` in hot path - prefer per-agent state owned by thread
+- Wait/idle strategy selection (latency vs CPU tradeoff):
+    - `BusySpinIdleStrategy` / `NoOpIdleStrategy` - hottest path, dedicated cores (100% CPU, ns latency)
+    - `YieldingIdleStrategy` - critical adjacent paths
+    - `BackoffIdleStrategy` - default for most agents
+    - `SleepingIdleStrategy` - admin/background only
+- Thread affinity: hot agents MUST be pinned via `OpenHFT/Java-Thread-Affinity` to isolated CPU cores
+- NEVER share a hot core between two busy-spinning agents
+
+## Rules: Atomics and Memory Ordering
+
+- USE `VarHandle` (Java 9+) over `sun.misc.Unsafe` and over `Atomic*` wrapper classes
+- `getOpaque` / `setOpaque` - counters, monotonic flags
+- `getAcquire` / `setRelease` - publish/consume between producer and consumer threads
+- `getVolatile` / `setVolatile` - sequential consistency, NEVER in hot path inner loop
+- USE Agrona `AtomicBuffer` for off-heap concurrent buffers with documented ordering
+- AVOID `compareAndSet` in tight contended loops - prefer single-writer redesign
+
+## Rules: Cache, Layout, and Branches
+
+- Hot objects: prefer `<= 64 bytes` payload, place hot fields first
+- Pad volatile/atomic fields to 64-byte cache line to prevent false sharing (Disruptor `Sequence` pattern)
+- Hot path: fast/common branch first, error/cold branch in separate `private` method
+- Mark cold methods small so JIT keeps them out of inlined hot path
+- NO pointer chasing on hot path - flatten data structures, use indices into preallocated arrays
+- NO virtual dispatch in inner loop - resolve `final` classes or strategy at init then call directly
+- Prefer arrays over linked structures - sequential access is cache-friendly
+
+## Rules: Wire Format and Codec
+
+- USE SBE (Simple Binary Encoding) for all on-wire and IPC messages where applicable
+- Little-endian only - matches SBE default and x86/ARM native order
+- Fixed-size headers; variable-length fields only via SBE varData blocks
+- Flyweight pattern: decoder holds no state - `wrap(buffer, offset, blockLength, version)` per message
+- NEVER deserialize into intermediate POJO before business logic - operate on decoder directly
+- NEVER use Java serialization, JSON, XML, Protobuf, or reflection-based codecs in hot path
+- For human-readable formats (JSON/text): only at boundaries (admin APIs, configs, logs), never internal
+
+## Rules: Sequence Arithmetic and Ring Buffer
+
+- ALWAYS treat sequence numbers as wrapping unsigned semantics
+- USE Disruptor `Sequence` / Agrona helpers for sequence comparisons
+- Ring buffer capacity: power-of-two ONLY
+- Index: `sequence & (capacity - 1)` - NEVER `sequence % capacity`
+- Producer claim: `RingBuffer.next()` then `publish(seq)` in `try/finally` - publish MUST happen
+- Consumer: batch via `EventPoller` or `BatchEventProcessor` - process in batches when available
+- NEVER block inside event handler - if downstream slow, apply backpressure via gating sequence
+
+## Rules: Domain State
+
+- Keys: long ticks/ids, NEVER `String` keys in hot path lookup, NEVER `BigDecimal` for numeric domain values
+- Money/precision: long with fixed scale, NEVER `double` for monetary or precision-critical values
+- Lookup: `Long2ObjectHashMap`, `Int2ObjectHashMap` keyed by primitive
+- Domain objects: pooled, reused on lifecycle events - no per-event allocation
+- Iteration: avoid `.values().iterator()` - use Agrona `forEach` with primitive callback when possible
+
+## Rules: Time and Identifiers
+
+- USE `EpochClock` / `NanoClock` interfaces, inject at construction for testability
+- USE `CachedEpochClock` updated once per agent loop - never call OS clock per message
+- IDs: `SnowflakeIdGenerator` (Agrona) - lock-free, distributed-safe
+- NEVER use `UUID.randomUUID()` in hot path - allocates and uses SecureRandom
+
+## Rules: Persistence and Replay
+
+- For event-sourced services: USE Aeron Archive for recording - record `Publication` streams, replay deterministically
+- All state changes MUST be derivable from recorded input stream
+- Snapshots: periodic, taken on dedicated thread or via Cluster snapshot hook - NEVER block hot thread
+- Replay tests: every release MUST replay a recorded session and produce byte-identical output
+
+## Rules: Cluster and Fault Tolerance
+
+- For HA services: USE Aeron Cluster (Raft) for replicated state machines
+- Service logic MUST be deterministic: no `System.nanoTime()`, no `Random` without seed, no `HashMap` iteration order
+- All non-determinism MUST flow through cluster timer service or input log
+- NEVER perform I/O directly from `ClusteredService` - use egress publication
+
+## Rules: Unsafe / VarHandle / Native
+
+- Allowed only if: measurable gain proven by JMH + invariants documented + alignment verified + bounds-checked at boundary
+- Document memory ordering for every `VarHandle` access mode
+- Prefer `VarHandle` over `sun.misc.Unsafe` - JDK-supported and JIT-friendly
+- Native (JNI/Panama): only for kernel-bypass networking, hardware timestamps, or measured-critical paths
+
+## Rules: Testing
+
+- Unit tests: pure logic, deterministic clocks, no real network
+- Integration tests: in-process Aeron `MediaDriver` in IPC mode when applicable, no UDP loopback
+- Property tests: jqwik or junit-quickcheck for sequence arithmetic, codec round-trip, state machine invariants
+- Replay tests: recorded session in == recorded session out (byte-identical)
+- JMH benchmarks: required for any change touching hot path - publish before/after numbers in PR
+- Chaos/soak tests: long-running steady-state with allocation profiler attached, asserting zero GC
+
+## Rules: Logging and Telemetry
+
+- Hot path: increment off-heap `AtomicCounter` only - NEVER format strings
+- Errors on hot path: `DistinctErrorLog.record(throwable)` - deduplicates, off-heap, lock-free
+- Metrics: HdrHistogram for latency (record nanos), report percentiles 50/90/99/99.9/99.99/max
+- NEVER trust mean latency - tail percentiles are the contract
+- Structured logging (JSON, etc.) only at boundaries, never in hot path
+
+## Rules: Cross-Cutting
+
+- NEVER use em-dashes or emojis in code comments, Javadoc, or markdown. Use ` - ` and ASCII only.
+- ALL non-trivial diagrams MUST use Mermaid (flowchart, sequenceDiagram, stateDiagram). ASCII art prohibited.
+- ONLY treat `/docs/decisions` as architectural source of truth.
+- NEVER use or reference files in `/docs/sessions` as implementation rules.
+- CI checks: After completing ANY code change, Agent MUST run the following sequence in order before committing. ALL
+  must pass with zero errors and zero warnings. Commits with failing checks are FORBIDDEN.
+    1. `./gradlew spotlessApply` - auto-fix formatting (run first, never `spotlessCheck` only). CI verifies with
+       `spotlessCheck`; the local agent workflow applies with `spotlessApply`.
+    2. `./gradlew checkstyleMain checkstyleTest` - zero violations required
+    3. `./gradlew compileJava` - zero compiler warnings (`-Werror` is hardcoded in the build, not a CLI flag)
+    4. `./gradlew test integrationTest` - all tests must pass
+    5. `./gradlew :adbe-core:jmh -PquickBench` - smoke-run benchmarks, no regression > 10% vs baseline
+    - Toolchain: JDK 21 LTS (matches `gradle.properties` `targetJavaVersion=21` and CI). NEVER use a different JDK.
+    - If any step fails, fix the issue and re-run from step 1 before committing.
+- Git operations: Agent MAY create local commits and local tags. MUST NOT push commits, tags, or any refs to any remote
+  repository. All changes MUST remain local.
+
+## Performance Budget
+
+| Metric                              | Target          |
+|-------------------------------------|-----------------|
+| Small message decode                | < 100 ns        |
+| Ring buffer publish                 | < 80 ns         |
+| Primitive map lookup                | < 50 ns         |
+| End-to-end IPC p50                  | < 5 us          |
+| End-to-end IPC p99                  | < 15 us         |
+| End-to-end IPC p99.99               | < 50 us         |
+| Allocation in hot path              | 0 bytes / event |
+| GC pause during operational window  | 0 ms            |
+| Cache miss on hot path (steady)     | None            |
+
+Targets are defaults - tune per service in `/docs/decisions/<service>-budget.md`.
+Regression > 10% on any percentile - rollback or justify with explicit ADR.
+Latency variance matters more than average latency. p99.99 is the contract, not the mean.
+Priority: Correctness > Determinism > Tail Latency > Mean Latency > Throughput
+Unbounded memory, GC during operational window, or nondeterministic latency = correctness failure.
+
+## Build Commands
+
+```
+./gradlew build                                          # library + examples
+./gradlew test integrationTest                           # unit + integration tests
+./gradlew jmh                                            # JMH benchmarks
+./gradlew checkstyleMain checkstyleTest                  # lint check
+./gradlew run --args="--config=production.properties"    # launch service
+```
