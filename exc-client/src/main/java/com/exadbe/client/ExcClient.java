@@ -130,6 +130,16 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         return submit(OrderCommandType.ADD_USER, uid);
     }
 
+    /** Suspends {@code uid}, blocking new order placement until resumed. */
+    public long suspendUser(final long uid) {
+        return submit(OrderCommandType.SUSPEND_USER, uid);
+    }
+
+    /** Resumes a previously suspended {@code uid}. */
+    public long resumeUser(final long uid) {
+        return submit(OrderCommandType.RESUME_USER, uid);
+    }
+
     /** Submits a signed {@code BALANCE_ADJUSTMENT} for {@code (uid, currency)}. */
     public long adjustBalance(final long uid, final int currency, final long amount) {
         return encodeAndSubmit(OrderCommandType.BALANCE_ADJUSTMENT, uid, currency, amount);

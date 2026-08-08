@@ -42,6 +42,28 @@ final class Commands {
         return encode(clientId, clientSeq, commandId, OrderCommandType.BALANCE_ADJUSTMENT, uid, currency, amount);
     }
 
+    CommandEnvelopeDecoder suspend(final long clientId, final long clientSeq, final long commandId, final long uid) {
+        return encode(
+                clientId,
+                clientSeq,
+                commandId,
+                OrderCommandType.SUSPEND_USER,
+                uid,
+                CommandEnvelopeEncoder.currencyNullValue(),
+                CommandEnvelopeEncoder.balanceAmountNullValue());
+    }
+
+    CommandEnvelopeDecoder resume(final long clientId, final long clientSeq, final long commandId, final long uid) {
+        return encode(
+                clientId,
+                clientSeq,
+                commandId,
+                OrderCommandType.RESUME_USER,
+                uid,
+                CommandEnvelopeEncoder.currencyNullValue(),
+                CommandEnvelopeEncoder.balanceAmountNullValue());
+    }
+
     CommandEnvelopeDecoder addSymbol(
             final long clientId,
             final long clientSeq,

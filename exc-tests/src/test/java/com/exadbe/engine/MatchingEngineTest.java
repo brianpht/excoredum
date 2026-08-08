@@ -70,6 +70,53 @@ class MatchingEngineTest {
     }
 
     @Test
+    void suspendBlocksPlacementUntilResumed() {
+        final int sym = 1;
+        final int btc = 1;
+        engine.process(commands.addUser(1L, 1L, 100L, 7L), 0L, out);
+        engine.process(commands.addSymbol(1L, 2L, 101L, sym, btc, USD, 1L, 1L), 0L, out);
+        engine.process(commands.adjust(1L, 3L, 102L, 7L, USD, 100_000L), 0L, out);
+
+        engine.process(commands.suspend(1L, 4L, 103L, 7L), 0L, out);
+        assertEquals(CommandResultCode.SUCCESS, out.resultCode());
+
+        engine.process(commands.placeGtc(1L, 5L, 104L, sym, 1L, false, 100L, 1L, 100L, 7L), 0L, out);
+        assertEquals(CommandResultCode.USER_SUSPENDED, out.resultCode());
+
+        engine.process(commands.resume(1L, 6L, 105L, 7L), 0L, out);
+        assertEquals(CommandResultCode.SUCCESS, out.resultCode());
+
+        engine.process(commands.placeGtc(1L, 7L, 106L, sym, 2L, false, 100L, 1L, 100L, 7L), 0L, out);
+        assertEquals(CommandResultCode.SUCCESS, out.resultCode());
+    }
+
+    @Test
+    void suspendUnknownUserRejected() {
+        engine.process(commands.suspend(1L, 1L, 100L, 99L), 0L, out);
+
+        assertEquals(CommandResultCode.USER_NOT_FOUND, out.resultCode());
+    }
+
+    @Test
+    void doubleSuspendRejected() {
+        engine.process(commands.addUser(1L, 1L, 100L, 7L), 0L, out);
+        engine.process(commands.suspend(1L, 2L, 101L, 7L), 0L, out);
+
+        engine.process(commands.suspend(1L, 3L, 102L, 7L), 0L, out);
+
+        assertEquals(CommandResultCode.USER_ALREADY_SUSPENDED, out.resultCode());
+    }
+
+    @Test
+    void resumeNonSuspendedRejected() {
+        engine.process(commands.addUser(1L, 1L, 100L, 7L), 0L, out);
+
+        engine.process(commands.resume(1L, 2L, 101L, 7L), 0L, out);
+
+        assertEquals(CommandResultCode.USER_NOT_SUSPENDED, out.resultCode());
+    }
+
+    @Test
     void overflowReturnsCodeAndLeavesBalanceUnchanged() {
         engine.process(commands.addUser(1L, 1L, 100L, 7L), 0L, out);
         engine.process(commands.adjust(1L, 2L, 101L, 7L, USD, Long.MAX_VALUE), 0L, out);

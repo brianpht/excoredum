@@ -40,6 +40,8 @@ class SnapshotRoundTripTest {
         engine.process(commands.placeGtc(CLIENT, seq, seq++, SYMBOL, 202L, true, 100L, 3L, 0L, 3L), 1005L, out);
         // Reduce a resting bid, keeping it on the book.
         engine.process(commands.reduce(CLIENT, seq, seq++, SYMBOL, 101L, 2L, 2L), 1006L, out);
+        // Suspend a user so status is exercised through the snapshot.
+        engine.process(commands.suspend(CLIENT, seq, seq++, 4L), 1007L, out);
         return engine;
     }
 
@@ -70,5 +72,6 @@ class SnapshotRoundTripTest {
         assertEquals(source.balance(1L, QUOTE), restored.balance(1L, QUOTE));
         assertEquals(source.balance(3L, BASE), restored.balance(3L, BASE));
         assertEquals(4, restored.orderCount());
+        assertTrue(restored.isSuspended(4L), "suspended status must survive the snapshot");
     }
 }

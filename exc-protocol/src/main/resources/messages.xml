@@ -2,7 +2,7 @@
 <sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
                    package="com.exadbe.protocol"
                    id="1"
-                   version="1"
+                   version="2"
                    semanticVersion="1.0"
                    byteOrder="littleEndian"
                    description="excoredum wire and snapshot messages.">
@@ -29,6 +29,10 @@
             <validValue name="ADD_USER">5</validValue>
             <validValue name="BALANCE_ADJUSTMENT">6</validValue>
             <validValue name="ADD_SYMBOL">7</validValue>
+            <validValue name="SUSPEND_USER">8</validValue>
+            <validValue name="RESUME_USER">9</validValue>
+            <validValue name="RESET">10</validValue>
+            <validValue name="NOP">11</validValue>
         </enum>
 
         <enum name="OrderAction" encodingType="uint8">
@@ -64,6 +68,9 @@
             <validValue name="UNSUPPORTED_COMMAND">700</validValue>
             <validValue name="USER_ALREADY_EXISTS">800</validValue>
             <validValue name="USER_NOT_FOUND">801</validValue>
+            <validValue name="USER_SUSPENDED">802</validValue>
+            <validValue name="USER_ALREADY_SUSPENDED">803</validValue>
+            <validValue name="USER_NOT_SUSPENDED">804</validValue>
         </enum>
     </types>
 
@@ -175,7 +182,8 @@
     </sbe:message>
 
     <sbe:message name="UserRecord" id="102" description="One account existence marker, emitted ascending by uid.">
-        <field name="uid" id="1" type="uint64"/>
+        <field name="uid"    id="1" type="uint64"/>
+        <field name="status" id="2" type="uint8" presence="optional" sinceVersion="2"/>
     </sbe:message>
 
     <sbe:message name="BalanceRecord" id="103" description="One balance entry, emitted ascending by (uid, currency).">

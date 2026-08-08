@@ -155,10 +155,11 @@ public final class SnapshotManager {
             emit(sink, idler, MessageHeaderEncoder.ENCODED_LENGTH + l);
         });
 
-        accounts.forEachUserSorted(uid -> {
+        accounts.forEachUserSorted((uid, status) -> {
             final int l = userEncoder
                     .wrapAndApplyHeader(recordBuffer, 0, headerEncoder)
                     .uid(uid)
+                    .status((short) status)
                     .encodedLength();
             emit(sink, idler, MessageHeaderEncoder.ENCODED_LENGTH + l);
         });
@@ -260,7 +261,13 @@ public final class SnapshotManager {
             }
             case UserRecordDecoder.TEMPLATE_ID -> {
                 userDecoder.wrap(buffer, bodyOffset, blockLength, version);
-                loadAccounts.addUser(userDecoder.uid());
+                final long uid = userDecoder.uid();
+                loadAccounts.addUser(uid);
+                final short status = userDecoder.status();
+                // A pre-status (v1) snapshot decodes as the null value; treat it as active.
+                if (status != UserRecordDecoder.statusNullValue()) {
+                    loadAccounts.setStatus(uid, status);
+                }
             }
             case BalanceRecordDecoder.TEMPLATE_ID -> {
                 balanceDecoder.wrap(buffer, bodyOffset, blockLength, version);
@@ -344,7 +351,10 @@ public final class SnapshotManager {
             h[0] = combine(h[0], spec.baseScaleK());
             h[0] = combine(h[0], spec.quoteScaleK());
         });
-        accounts.forEachUserSorted(uid -> h[0] = combine(h[0], uid));
+        accounts.forEachUserSorted((uid, status) -> {
+            h[0] = combine(h[0], uid);
+            h[0] = combine(h[0], status);
+        });
         accounts.forEachSorted((uid, currency, balance) -> {
             h[0] = combine(h[0], uid);
             h[0] = combine(h[0], currency);

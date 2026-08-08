@@ -8,6 +8,8 @@ import com.exadbe.core.CommandOutcome;
 import com.exadbe.engine.handlers.AddSymbolHandler;
 import com.exadbe.engine.handlers.AddUserHandler;
 import com.exadbe.engine.handlers.BalanceAdjustmentHandler;
+import com.exadbe.engine.handlers.ResumeUserHandler;
+import com.exadbe.engine.handlers.SuspendUserHandler;
 import com.exadbe.engine.orderbook.L2View;
 import com.exadbe.engine.orderbook.OrderBookNaive;
 import com.exadbe.engine.orderbook.OrderNodePool;
@@ -40,6 +42,8 @@ public final class MatchingEngine {
     private final AddUserHandler addUserHandler;
     private final BalanceAdjustmentHandler balanceAdjustmentHandler;
     private final AddSymbolHandler addSymbolHandler;
+    private final SuspendUserHandler suspendUserHandler;
+    private final ResumeUserHandler resumeUserHandler;
 
     private final SymbolSpecStore symbols = new SymbolSpecStore();
     private final DirectExchangeRisk risk;
@@ -57,6 +61,8 @@ public final class MatchingEngine {
         this.addUserHandler = new AddUserHandler(accounts);
         this.balanceAdjustmentHandler = new BalanceAdjustmentHandler(accounts);
         this.addSymbolHandler = new AddSymbolHandler(symbols);
+        this.suspendUserHandler = new SuspendUserHandler(accounts);
+        this.resumeUserHandler = new ResumeUserHandler(accounts);
         this.risk = new DirectExchangeRisk(accounts);
         this.orderPool = new OrderNodePool(config.orderPoolCapacity());
         this.l2 = new L2View(config.l2MaxLevels());
@@ -129,6 +135,10 @@ public final class MatchingEngine {
             case MOVE_ORDER -> handleMove(cmd, out);
             case REDUCE_ORDER -> handleReduce(cmd, out);
             case ORDER_BOOK_REQUEST -> handleOrderBookRequest(cmd, out);
+            case SUSPEND_USER -> suspendUserHandler.handle(cmd.uid(), out);
+            case RESUME_USER -> resumeUserHandler.handle(cmd.uid(), out);
+            case RESET -> handleReset(out);
+            case NOP -> handleNop(cmd, out);
             default -> unsupported(cmd, out);
         }
     }
@@ -147,6 +157,10 @@ public final class MatchingEngine {
         }
         if (!accounts.userExists(uid)) {
             out.resultCode(CommandResultCode.USER_NOT_FOUND);
+            return;
+        }
+        if (accounts.isSuspended(uid)) {
+            out.resultCode(CommandResultCode.USER_SUSPENDED);
             return;
         }
 
@@ -352,6 +366,18 @@ public final class MatchingEngine {
         return book;
     }
 
+    // Clears all engine state; an administrative reset used by tests and benchmarks.
+    private void handleReset(final CommandOutcome out) {
+        clearState();
+        out.resultCode(CommandResultCode.SUCCESS);
+    }
+
+    // A no-op acknowledged like any command; useful as a heartbeat or latency probe.
+    private void handleNop(final CommandEnvelopeDecoder cmd, final CommandOutcome out) {
+        out.uid(cmd.uid());
+        out.resultCode(CommandResultCode.SUCCESS);
+    }
+
     // Reached only by NULL_VAL / unknown command types.
     private void unsupported(final CommandEnvelopeDecoder cmd, final CommandOutcome out) {
         out.uid(cmd.uid());
@@ -374,6 +400,11 @@ public final class MatchingEngine {
 
     public boolean userExists(final long uid) {
         return accounts.userExists(uid);
+    }
+
+    /** Whether the user is suspended (blocked from placing new orders). */
+    public boolean isSuspended(final long uid) {
+        return accounts.isSuspended(uid);
     }
 
     public long balance(final long uid, final int currency) {
