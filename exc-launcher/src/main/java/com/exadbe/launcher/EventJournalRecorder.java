@@ -20,7 +20,7 @@ public final class EventJournalRecorder implements Agent, EventJournalRing.Event
     private final IdleStrategy offerIdle;
     private final int fragmentLimit;
 
-    private long published;
+    private volatile long published;
 
     public EventJournalRecorder(
             final EventJournalRing ring,

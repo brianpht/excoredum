@@ -3,6 +3,8 @@ package com.exadbe.core;
 import com.exadbe.config.CoreConfig;
 import com.exadbe.engine.MatchingEngine;
 import com.exadbe.engine.orderbook.L2View;
+import com.exadbe.journal.DomainEventJournal;
+import com.exadbe.journal.EventJournalRing;
 import com.exadbe.protocol.CommandEnvelopeDecoder;
 import com.exadbe.protocol.CommandResultEncoder;
 import com.exadbe.protocol.L2MarketDataEncoder;
@@ -62,6 +64,10 @@ public final class MatchingService implements ClusteredService {
 
     private final SnapshotManager snapshotManager = new SnapshotManager();
 
+    private final EventJournalRing journal;
+    private final DomainEventJournal domainJournal;
+    private boolean leader;
+
     private Cluster cluster;
     private IdleStrategy idleStrategy;
 
@@ -70,6 +76,8 @@ public final class MatchingService implements ClusteredService {
         this.engine = new MatchingEngine(config, metrics);
         this.outcome = new CommandOutcome(config.eventBufferCapacity());
         this.l2Buffer = new UnsafeBuffer(new byte[128 + config.l2MaxLevels() * 48]);
+        this.journal = new EventJournalRing(config.journalSlotCount(), config.journalSlotSize());
+        this.domainJournal = new DomainEventJournal(journal);
     }
 
     @Override
@@ -119,6 +127,11 @@ public final class MatchingService implements ClusteredService {
             emitEvents(session, timestamp);
             if (commandType == OrderCommandType.ORDER_BOOK_REQUEST) {
                 sendL2(session);
+            }
+            // Only the leader publishes to the durable journal; followers stay silent
+            // so the stream carries each committed event once (keyed for dedup).
+            if (leader) {
+                domainJournal.emit(outcome, cluster.logPosition(), timestamp);
             }
         }
     }
@@ -184,12 +197,17 @@ public final class MatchingService implements ClusteredService {
 
     @Override
     public void onRoleChange(final Cluster.Role newRole) {
-        // No role-specific behaviour in phase 0.
+        this.leader = newRole == Cluster.Role.LEADER;
     }
 
     @Override
     public void onTerminate(final Cluster cluster) {
         // No resources to release in phase 0.
+    }
+
+    /** The domain-event ring the journaler agent drains; owned by this service. */
+    public EventJournalRing journal() {
+        return journal;
     }
 
     private void sendResult(final ClientSession session) {

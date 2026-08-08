@@ -29,6 +29,12 @@ public final class CoreConfig {
     /** Default preallocated matcher-event buffer capacity per command. */
     public static final int DEFAULT_EVENT_BUFFER_CAPACITY = 1 << 10;
 
+    /** Default number of slots in the domain-event journal ring (power of two). */
+    public static final int DEFAULT_JOURNAL_SLOT_COUNT = 1 << 16;
+
+    /** Default size in bytes of one journal ring slot. */
+    public static final int DEFAULT_JOURNAL_SLOT_SIZE = 128;
+
     private final int symbolCapacity;
     private final int accountCapacity;
     private final int dedupClientCapacity;
@@ -36,6 +42,8 @@ public final class CoreConfig {
     private final int orderPoolCapacity;
     private final int l2MaxLevels;
     private final int eventBufferCapacity;
+    private final int journalSlotCount;
+    private final int journalSlotSize;
 
     private CoreConfig(
             final int symbolCapacity,
@@ -44,7 +52,9 @@ public final class CoreConfig {
             final int dedupWindow,
             final int orderPoolCapacity,
             final int l2MaxLevels,
-            final int eventBufferCapacity) {
+            final int eventBufferCapacity,
+            final int journalSlotCount,
+            final int journalSlotSize) {
         this.symbolCapacity = symbolCapacity;
         this.accountCapacity = accountCapacity;
         this.dedupClientCapacity = dedupClientCapacity;
@@ -52,6 +62,8 @@ public final class CoreConfig {
         this.orderPoolCapacity = orderPoolCapacity;
         this.l2MaxLevels = l2MaxLevels;
         this.eventBufferCapacity = eventBufferCapacity;
+        this.journalSlotCount = journalSlotCount;
+        this.journalSlotSize = journalSlotSize;
     }
 
     public static CoreConfig defaults() {
@@ -62,7 +74,9 @@ public final class CoreConfig {
                 DEFAULT_DEDUP_WINDOW,
                 DEFAULT_ORDER_POOL_CAPACITY,
                 DEFAULT_L2_MAX_LEVELS,
-                DEFAULT_EVENT_BUFFER_CAPACITY);
+                DEFAULT_EVENT_BUFFER_CAPACITY,
+                DEFAULT_JOURNAL_SLOT_COUNT,
+                DEFAULT_JOURNAL_SLOT_SIZE);
     }
 
     public int symbolCapacity() {
@@ -91,5 +105,13 @@ public final class CoreConfig {
 
     public int eventBufferCapacity() {
         return eventBufferCapacity;
+    }
+
+    public int journalSlotCount() {
+        return journalSlotCount;
+    }
+
+    public int journalSlotSize() {
+        return journalSlotSize;
     }
 }

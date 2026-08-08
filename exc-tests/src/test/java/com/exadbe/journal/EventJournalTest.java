@@ -91,6 +91,22 @@ class EventJournalTest {
         assertEquals(5L, events.get(2).size);
     }
 
+    @Test
+    void dedupAcceptsIncreasingKeysAndRejectsReplays() {
+        final JournalDedup dedup = new JournalDedup();
+
+        assertTrue(dedup.accept(100L, 0));
+        assertTrue(dedup.accept(100L, 1));
+        assertTrue(dedup.accept(101L, 0));
+
+        // A failover re-publishes the same committed events: keys not greater are rejected.
+        assertFalse(dedup.accept(100L, 1));
+        assertFalse(dedup.accept(101L, 0));
+        assertFalse(dedup.accept(50L, 9));
+
+        assertTrue(dedup.accept(101L, 1));
+    }
+
     private static List<Decoded> drain(final EventJournalRing ring) {
         final MessageHeaderDecoder header = new MessageHeaderDecoder();
         final JournalEventDecoder decoder = new JournalEventDecoder();

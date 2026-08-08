@@ -5,8 +5,11 @@ import com.exadbe.core.MatchingService;
 import com.exadbe.telemetry.AtomicCounterSink;
 import com.exadbe.telemetry.CoreMetrics;
 import com.exadbe.telemetry.CounterSink;
+import io.aeron.Aeron;
+import io.aeron.ExclusivePublication;
 import io.aeron.archive.Archive;
 import io.aeron.archive.client.AeronArchive;
+import io.aeron.archive.codecs.SourceLocation;
 import io.aeron.cluster.ClusteredMediaDriver;
 import io.aeron.cluster.ConsensusModule;
 import io.aeron.cluster.service.ClusteredService;
@@ -16,6 +19,9 @@ import io.aeron.driver.ThreadingMode;
 import java.util.Locale;
 import org.agrona.BitUtil;
 import org.agrona.BufferUtil;
+import org.agrona.CloseHelper;
+import org.agrona.concurrent.AgentRunner;
+import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.UnsafeBuffer;
 import org.agrona.concurrent.status.AtomicCounter;
 import org.agrona.concurrent.status.CountersManager;
@@ -36,10 +42,23 @@ public final class ClusterNode implements AutoCloseable {
         ClusteredService create(CoreConfig config, CoreMetrics metrics);
     }
 
+    /** IPC channel the domain-event journal is published and recorded on. */
+    public static final String JOURNAL_CHANNEL = "aeron:ipc";
+
+    /** Stream id of the recorded domain-event journal. */
+    public static final int JOURNAL_STREAM_ID = 200;
+
+    private static final int JOURNAL_FRAGMENT_LIMIT = 64;
+
     private final ClusteredMediaDriver clusteredMediaDriver;
     private final ClusteredServiceContainer container;
     private final CountersManager countersManager;
     private final CoreMetrics metrics;
+    private final Aeron journalAeron;
+    private final AeronArchive journalArchive;
+    private final ExclusivePublication journalPublication;
+    private final AgentRunner journalRunner;
+    private final EventJournalRecorder journalRecorder;
 
     /** Launches a node that clears prior state on start (fresh cluster). */
     public ClusterNode(final ClusterConfig config, final CoreConfig coreConfig) {
@@ -122,10 +141,52 @@ public final class ClusterNode implements AutoCloseable {
             clusteredMediaDriver.close();
             throw e;
         }
+
+        // Drain the service's domain-event ring to a recorded journal stream on a
+        // dedicated thread; the Archive is the always-on consumer so the recorder
+        // never stalls and the consensus thread is never touched by journal I/O.
+        Aeron aeronClient = null;
+        AeronArchive archiveClient = null;
+        ExclusivePublication publication = null;
+        AgentRunner runner = null;
+        EventJournalRecorder eventRecorder = null;
+        if (service instanceof MatchingService matchingService) {
+            try {
+                aeronClient = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectoryName()));
+                archiveClient = AeronArchive.connect(new AeronArchive.Context()
+                        .aeron(aeronClient)
+                        .controlRequestChannel(localControlChannel)
+                        .controlResponseChannel(localControlChannel));
+                archiveClient.startRecording(JOURNAL_CHANNEL, JOURNAL_STREAM_ID, SourceLocation.LOCAL);
+                publication = aeronClient.addExclusivePublication(JOURNAL_CHANNEL, JOURNAL_STREAM_ID);
+                eventRecorder = new EventJournalRecorder(
+                        matchingService.journal(), publication, new BackoffIdleStrategy(), JOURNAL_FRAGMENT_LIMIT);
+                runner = new AgentRunner(new BackoffIdleStrategy(), Throwable::printStackTrace, null, eventRecorder);
+                AgentRunner.startOnThread(runner);
+            } catch (final RuntimeException e) {
+                CloseHelper.quietClose(runner);
+                CloseHelper.quietClose(publication);
+                CloseHelper.quietClose(archiveClient);
+                CloseHelper.quietClose(aeronClient);
+                container.close();
+                clusteredMediaDriver.close();
+                throw e;
+            }
+        }
+        this.journalAeron = aeronClient;
+        this.journalArchive = archiveClient;
+        this.journalPublication = publication;
+        this.journalRunner = runner;
+        this.journalRecorder = eventRecorder;
     }
 
     public CoreMetrics metrics() {
         return metrics;
+    }
+
+    /** Total domain events published to the recorded journal stream so far. */
+    public long journalPublished() {
+        return journalRecorder == null ? 0L : journalRecorder.published();
     }
 
     /** The off-heap counters manager backing the core metrics for this node. */
@@ -135,6 +196,10 @@ public final class ClusterNode implements AutoCloseable {
 
     @Override
     public void close() {
+        CloseHelper.quietClose(journalRunner);
+        CloseHelper.quietClose(journalPublication);
+        CloseHelper.quietClose(journalArchive);
+        CloseHelper.quietClose(journalAeron);
         if (container != null) {
             container.close();
         }
