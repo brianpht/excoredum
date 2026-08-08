@@ -85,6 +85,11 @@ public final class JournalReplayReader implements AutoCloseable {
         return true;
     }
 
+    /** Starts a live-following replay from {@code fromPosition} to the growing end. */
+    public boolean startReplay(final long fromPosition) {
+        return startReplay(fromPosition, AeronArchive.NULL_LENGTH);
+    }
+
     /** Polls the replay, delivering up to {@code limit} deduped events. */
     public int poll(final int limit) {
         return consumer == null ? 0 : consumer.poll(limit);

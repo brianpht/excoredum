@@ -66,7 +66,6 @@ public final class MatchingService implements ClusteredService {
 
     private final EventJournalRing journal;
     private final DomainEventJournal domainJournal;
-    private boolean leader;
 
     private Cluster cluster;
     private IdleStrategy idleStrategy;
@@ -128,11 +127,9 @@ public final class MatchingService implements ClusteredService {
             if (commandType == OrderCommandType.ORDER_BOOK_REQUEST) {
                 sendL2(session);
             }
-            // Only the leader publishes to the durable journal; followers stay silent
-            // so the stream carries each committed event once (keyed for dedup).
-            if (leader) {
-                domainJournal.emit(outcome, cluster.logPosition(), timestamp);
-            }
+            // Every node records the same committed events, keyed for dedup, so the
+            // journal survives a leader loss and consumers merge archives idempotently.
+            domainJournal.emit(outcome, cluster.logPosition(), timestamp);
         }
     }
 
@@ -197,7 +194,7 @@ public final class MatchingService implements ClusteredService {
 
     @Override
     public void onRoleChange(final Cluster.Role newRole) {
-        this.leader = newRole == Cluster.Role.LEADER;
+        // Journaling is role-independent: every node records the committed events.
     }
 
     @Override
