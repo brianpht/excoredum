@@ -2,6 +2,7 @@ package com.exadbe.launcher;
 
 import com.exadbe.config.CoreConfig;
 import com.exadbe.core.MatchingService;
+import com.exadbe.journal.JournalStreams;
 import com.exadbe.telemetry.AtomicCounterSink;
 import com.exadbe.telemetry.CoreMetrics;
 import com.exadbe.telemetry.CounterSink;
@@ -43,10 +44,10 @@ public final class ClusterNode implements AutoCloseable {
     }
 
     /** IPC channel the domain-event journal is published and recorded on. */
-    public static final String JOURNAL_CHANNEL = "aeron:ipc";
+    public static final String JOURNAL_CHANNEL = JournalStreams.JOURNAL_CHANNEL;
 
     /** Stream id of the recorded domain-event journal. */
-    public static final int JOURNAL_STREAM_ID = 200;
+    public static final int JOURNAL_STREAM_ID = JournalStreams.JOURNAL_STREAM_ID;
 
     private static final int JOURNAL_FRAGMENT_LIMIT = 64;
 
