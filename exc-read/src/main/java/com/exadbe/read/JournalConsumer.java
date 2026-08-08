@@ -37,7 +37,7 @@ public final class JournalConsumer {
 
     private final Subscription subscription;
     private final Listener listener;
-    private final JournalDedup dedup = new JournalDedup();
+    private final JournalDedup dedup;
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
     private final JournalEventDecoder eventDecoder = new JournalEventDecoder();
     private final FragmentHandler fragmentHandler = this::onFragment;
@@ -46,8 +46,14 @@ public final class JournalConsumer {
     private long duplicates;
 
     public JournalConsumer(final Subscription subscription, final Listener listener) {
+        this(subscription, listener, new JournalDedup());
+    }
+
+    /** Uses a shared dedup so several sources (e.g. failover archives) merge idempotently. */
+    public JournalConsumer(final Subscription subscription, final Listener listener, final JournalDedup dedup) {
         this.subscription = subscription;
         this.listener = listener;
+        this.dedup = dedup;
     }
 
     /** Polls the stream, delivering up to {@code limit} deduped events; call in a loop. */
