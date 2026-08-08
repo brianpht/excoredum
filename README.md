@@ -15,9 +15,10 @@ result is byte-reproducible across nodes, and the steady-state hot path allocate
 nothing.
 
 It ports the matching semantics of exchange-core (price-time priority, GTC / IOC
-/ FOK-BUDGET orders, direct-exchange spot risk) onto the Aeron ecosystem,
-replacing exchange-core's bespoke disk journal and Chronicle-Wire snapshots with
-the Aeron consensus log and native cluster snapshots.
+/ FOK-BUDGET orders, direct-exchange spot risk with maker / taker fees) onto the
+Aeron ecosystem, replacing exchange-core's bespoke disk journal and Chronicle-Wire
+snapshots with the Aeron consensus log, native cluster snapshots, and a
+highly-available domain event journal on the Aeron Archive.
 
 ## Features
 
@@ -34,9 +35,12 @@ the Aeron consensus log and native cluster snapshots.
   arithmetic; no floating point anywhere in the matching or settlement path.
 - **Price-Time Matching**: a naive order book with strict price-time priority for
   GTC, IOC, and FOK-BUDGET orders, plus PLACE / CANCEL / MOVE / REDUCE.
-- **Direct-Exchange Risk**: funds are reserved on placement, settled at the
-  actual fill price, and released on cancel / reduce, with value conserved across
-  every trade (no fees, no margin in this delivery).
+- **Direct-Exchange Risk with Fees**: funds are reserved on placement, settled at
+  the actual fill price with maker / taker fees accruing to a fee account, and
+  released on cancel / reduce, with value conserved across every trade including
+  fees (no margin in this delivery).
+- **User Lifecycle**: accounts can be suspended and resumed; a suspended user is
+  blocked from placing new orders while its balances stay intact.
 - **Native Snapshots**: engine state (symbols, accounts, resting orders, dedup)
   is streamed to the Archive in deterministic key order with an integrity
   checksum; recovery loads the snapshot and replays the remaining log.
@@ -48,6 +52,10 @@ the Aeron consensus log and native cluster snapshots.
 - **CQRS Read Replica**: `exc-read` runs a non-voting node that follows a cluster
   member's Aeron Archive and reproduces engine state for eventually-consistent
   reads, without joining Raft or affecting quorum.
+- **HA Domain Event Journal**: every node records a durable, semantic stream of
+  trade / reduce / reject events to the Aeron Archive off the consensus thread;
+  consumers replay it and dedup on `(logPosition, eventIndex)` for exactly-once
+  delivery that survives a leader kill and follows a live source across failover.
 - **Off-Heap Telemetry**: core counters are mirrored to a standalone off-heap
   `CountersManager` so operators can read them from another thread without
   perturbing the single-writer hot path.
@@ -169,8 +177,8 @@ arrive at `MatchingService` in total order on a single thread:
 
 1. **Dispatch**: `onSessionMessage` decodes the SBE envelope. The dedup table is
    checked first; a hit returns the cached result verbatim. A miss dispatches to
-   the engine (add symbol / add user / balance adjustment / place / cancel /
-   move / reduce / order-book request).
+   the engine (add symbol / add user / balance adjustment / suspend / resume user /
+   place / cancel / move / reduce / order-book request / reset / nop).
 2. **Match and settle**: order commands run against the per-symbol order book with
    price-time priority. Funds are reserved before matching, settled at the actual
    fill price, and any over-reserve released. Trades, reduces, and rejects are
@@ -183,6 +191,11 @@ arrive at `MatchingService` in total order on a single thread:
 5. **Snapshot and recovery**: on a controlled trigger, state is streamed to the
    Archive in deterministic key order (including the dedup table). On restart the
    snapshot is loaded and the remaining log is replayed.
+6. **Domain event journal**: on every node, committed trade / reduce / reject
+   events are encoded into an off-heap ring and drained by a journaler agent to a
+   recorded Aeron stream, off the consensus thread. Consumers replay it and dedup
+   on `(logPosition, eventIndex)` for exactly-once delivery that survives a leader
+   loss.
 
 The business logic lives in `MatchingEngine`, which has no Aeron dependency and
 is therefore unit and replay testable in isolation.
@@ -199,6 +212,8 @@ they index a ring:
 | `dedupWindow`           | 2^10    | Most recent commands retained per client  |
 | `orderPoolCapacity`     | 2^16    | Retained free order nodes (reuse pool)    |
 | `eventBufferCapacity`   | 2^10    | Preallocated matcher events per command   |
+| `journalSlotCount`      | 2^16    | Domain-event ring slots (power of two)    |
+| `journalSlotSize`       | 128     | Bytes per journal ring slot               |
 | `l2MaxLevels`           | 32      | Max L2 depth returned per side            |
 
 `ClusterConfig` describes node id, cluster members, directories, and channels:
@@ -233,15 +248,20 @@ flowchart TB
                 SY["SymbolSpecStore"]
             end
             SM["SnapshotManager\nstreaming SBE"]
+            RING["EventJournalRing\noff-heap SPSC"]
             MS --> ME --> DT
             ME --> AC
             ME --> OB
             ME --> SY
             MS --> SM
+            MS --> RING
         end
+        JR["Journaler Agent\nEventJournalRecorder"]
         CM -->|" committed log "| MS
         SM -->|" records "| AR
         AR -->|" snapshot image "| MS
+        RING -->|" drain "| JR
+        JR -->|" journal (stream 200) "| AR
     end
 
     GW["Client (exc-client)"] -->|" CommandEnvelope (SBE) ingress "| CM
@@ -250,16 +270,20 @@ flowchart TB
     subgraph READ["Read Replica (exc-read)"]
         RR["ExcReadReplica\nLiveLogSubscriber -> MatchingEngine"]
     end
+    subgraph JCON["Journal Consumer (exc-read)"]
+        HJC["HaJournalConsumer\nreplay + dedup + failover"]
+    end
     AR -.->|" consensus log (stream 100) replay "| RR
+    AR -.->|" journal (stream 200) replay "| HJC
 ```
 
 | Module         | Responsibility                                                            |
 |----------------|---------------------------------------------------------------------------|
 | `exc-protocol` | SBE schema and generated flyweight codecs (wire, egress events, snapshot) |
 | `exc-core`     | Deterministic matching engine, order book, risk, dedup, snapshot, telemetry |
-| `exc-launcher` | Aeron bootstrap: Media Driver, Archive, Consensus Module, Service Container |
+| `exc-launcher` | Aeron bootstrap: Media Driver, Archive, Consensus, Container, journaler agent |
 | `exc-client`   | Client-side SDK: leader-change handling, idempotent retry, correlation, events |
-| `exc-read`     | CQRS read side: a non-voting replica that follows the log via the Archive |
+| `exc-read`     | CQRS read side and journal consumers: log follower, replay, dedup, HA failover |
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram)     |
 | `exc-tests`    | Unit, property, integration, cluster, fault tests and fixtures            |
 | `exc-examples` | Placeholder for runnable examples                                        |
@@ -278,6 +302,7 @@ Indicative micro-benchmark results on x86_64 Linux, JDK 21 (JMH quick run):
 | IOC match (1 fill vs deep book)   | ~6.3 ns  | price-time matching loop              |
 | Resting place + cancel            | ~22.9 ns | pooled book insert and remove         |
 | Full dispatch (place + cancel)    | ~86 ns   | dedup, symbol/user checks, risk, book |
+| Journal emit (4 events + drain)   | ~46 ns   | off-heap ring, zero-alloc producer    |
 
 Run with the GC profiler to confirm zero steady-state allocation:
 
@@ -312,9 +337,11 @@ Performance targets (defaults; tune per service):
 
 | Suite                              | Type        | What it covers                                          |
 |------------------------------------|-------------|---------------------------------------------------------|
-| `MatchingEngineTest`               | Unit        | Dedup, account handlers, result codes                   |
+| `MatchingEngineTest`               | Unit        | Dedup, account handlers, suspend / resume, result codes |
 | `OrderBookConformanceTest`         | Unit        | GTC / IOC / FOK-BUDGET, cancel / move / reduce, L2      |
 | `SpotRiskTest`                     | Unit        | Reserve / settle / release, value conservation          |
+| `FeeTest`                          | Unit        | Maker / taker fees, fee account, conservation with fees |
+| `EventJournalTest`                 | Unit        | Journal ring order / back-pressure, encoding, dedup     |
 | `EngineDeterminismTest`            | Property    | Replay determinism and sum-of-deltas (jqwik)            |
 | `SnapshotRoundTripTest`            | Unit        | Byte-identical snapshot round trip and checksum         |
 | `SnapshotIntegrityTest`            | Unit        | Truncation and corruption are rejected                  |
@@ -324,8 +351,12 @@ Performance targets (defaults; tune per service):
 | `ExcOrderBookIntegrationTest`      | Integration | Resting maker matched by taker, trade on egress         |
 | `BenchHarnessSmokeTest`            | Integration | End-to-end latency harness boots and measures           |
 | `ReadReplicaIntegrationTest`       | Integration | Replica reproduces users, balances, resting depth       |
+| `JournalClusterIntegrationTest`    | Integration | A committed trade reaches the recorded journal stream   |
+| `JournalReplayIntegrationTest`     | Integration | Archive replay decodes trades; repeated replay dedups   |
 | `SnapshotWarmRestartIntegrationTest` | Cluster   | Warm restart recovers state from a native snapshot      |
 | `LeaderKillFailoverTest`           | Fault       | Three-node leader kill; exactly-once, no loss or dup    |
+| `JournalHaFailoverTest`            | Fault       | Journal survives a leader kill; trades exactly-once     |
+| `JournalLiveFailoverTest`          | Fault       | Live consumer fails over to a survivor without loss     |
 
 ## Benchmarks
 

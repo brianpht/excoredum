@@ -21,6 +21,7 @@
 - [Wire Format](#wire-format)
 - [Order Book Semantics](#order-book-semantics)
 - [Direct-Exchange Risk](#direct-exchange-risk)
+- [Domain Event Journal](#domain-event-journal)
 - [Data Flows](#data-flows)
     - [Flow 1 - Command Dispatch and ACK](#flow-1---command-dispatch-and-ack)
     - [Flow 2 - Idempotent Retry](#flow-2---idempotent-retry)
@@ -48,18 +49,20 @@ Two concerns, strictly separated:
 - **Business logic** (`MatchingEngine`) - pure, single-writer, allocation-free,
   free of any Aeron dependency so it can be unit and replay tested in isolation.
 - **Cluster integration** (`MatchingService`) - decodes session messages, drives
-  the engine, encodes results and trade / L2 events to egress, and handles
-  snapshot read and write.
+  the engine, encodes results and trade / L2 events to egress, emits domain events
+  to the journal, and handles snapshot read and write.
 
 Everything the engine needs arrives through the replicated log. There is no
 external I/O, no local clock, and no random or GUID generation in the state
 machine. Identifiers are minted by the client and carried in the command
 envelope; the only time source is the leader-assigned timestamp.
 
-This delivery covers the direct-exchange (spot) risk mode, order types GTC / IOC
-/ FOK-BUDGET, order operations PLACE / CANCEL / MOVE / REDUCE, and account
-operations ADD_USER / BALANCE_ADJUSTMENT / ADD_SYMBOL. Margin trading, maker /
-taker fees, and symbol / user sharding are out of scope for now.
+This delivery covers the direct-exchange (spot) risk mode with maker / taker fees,
+order types GTC / IOC / FOK-BUDGET, order operations PLACE / CANCEL / MOVE /
+REDUCE, account operations ADD_USER / BALANCE_ADJUSTMENT / ADD_SYMBOL /
+SUSPEND_USER / RESUME_USER, the RESET / NOP admin commands, and a
+highly-available domain event journal on the Aeron Archive. Margin trading and
+symbol / user sharding are out of scope for now.
 
 ---
 
@@ -73,26 +76,31 @@ excoredum/
 |-- config/checkstyle/checkstyle.xml        Baseline style rules for all modules
 |
 |-- exc-protocol/                   SBE schema + generated flyweight codecs
-|   +-- src/main/resources/messages.xml     CommandEnvelope, CommandResult, egress events, snapshot records
+|   +-- src/main/resources/messages.xml     CommandEnvelope, CommandResult, egress events, JournalEvent, snapshot records
 |
 |-- exc-core/                       Deterministic state machine (this is the hot path)
 |   |-- config/checkstyle/determinism.xml   Bans clocks, randomness, unordered maps, streams, floats
-|   |-- src/jmh/java/com/exadbe/bench/       CodecBenchmark, OrderBookBenchmark, MatchingEngineBenchmark
+|   |-- src/jmh/java/com/exadbe/bench/       CodecBenchmark, OrderBookBenchmark, MatchingEngineBenchmark, JournalBenchmark
 |   +-- src/main/java/com/exadbe/
 |       |-- config/CoreConfig.java           Preallocated capacities and tuning knobs
 |       |-- util/Amounts.java                Overflow-checked 64-bit arithmetic
 |       |-- collections/
-|       |   |-- AccountStore.java            uid -> (currency -> balance), sorted iteration for snapshots
+|       |   |-- AccountStore.java            uid -> (currency -> balance) + user status, sorted iteration
 |       |   |-- DedupTable.java              Per-client dedup rings (idempotency)
 |       |   +-- DedupRing.java               Power-of-two ring, seq & (capacity - 1)
 |       |-- engine/
 |       |   |-- MatchingEngine.java          Dispatch + dedup + settlement (cluster-independent)
-|       |   |-- handlers/                     AddUser, BalanceAdjustment, AddSymbol
+|       |   |-- handlers/                     AddUser, BalanceAdjustment, AddSymbol, SuspendUser, ResumeUser
 |       |   |-- orderbook/                    OrderBookNaive, OrderBookSide, PriceBucket, OrderNode(+Pool), L2View
-|       |   +-- risk/                         SymbolSpec(+Store), DirectExchangeRisk
+|       |   +-- risk/                         SymbolSpec(+Store), DirectExchangeRisk (fees + fee account)
 |       |-- core/
-|       |   |-- MatchingService.java         ClusteredService: decode, apply, ACK, emit events, snapshot
+|       |   |-- MatchingService.java         ClusteredService: decode, apply, ACK, emit events + journal, snapshot
 |       |   +-- CommandOutcome.java           Reusable result + matcher-event buffer (no per-command allocation)
+|       |-- journal/
+|       |   |-- EventJournalRing.java         Off-heap SPSC ring for domain events (zero-alloc producer)
+|       |   |-- DomainEventJournal.java       Encodes matcher events into the ring, keyed (logPosition, eventIndex)
+|       |   |-- JournalDedup.java             Consumer-side exactly-once gate
+|       |   +-- JournalStreams.java           Journal channel / stream id constants
 |       |-- snapshot/SnapshotManager.java    Streaming SBE snapshot write / load with checksum
 |       +-- telemetry/
 |           |-- CoreMetrics.java             Single-writer counters mirrored to a sink
@@ -102,7 +110,8 @@ excoredum/
 |-- exc-launcher/                   Aeron component bootstrap
 |   +-- src/main/java/com/exadbe/launcher/
 |       |-- ClusterConfig.java              Endpoints and directories per node
-|       |-- ClusterNode.java                Media Driver + Archive + Consensus + Service Container + off-heap counters
+|       |-- ClusterNode.java                Media Driver + Archive + Consensus + Container + counters + journaler
+|       |-- EventJournalRecorder.java       Agent: drains the journal ring to a recorded Aeron stream
 |       +-- ClusterLauncher.java            main(): start one node, block until terminated
 |
 |-- exc-client/                     Client SDK (depends only on exc-protocol)
@@ -118,6 +127,9 @@ excoredum/
 |   +-- src/main/java/com/exadbe/read/
 |       |-- ExcReadReplica.java             Poll-driven follower: own driver + archive client + engine
 |       |-- LiveLogSubscriber.java          Replays the consensus log, applies commands to the engine
+|       |-- JournalConsumer.java            Decodes a journal stream, dedups to exactly-once
+|       |-- JournalReplayReader.java        Replays a member's recorded journal from the Archive
+|       |-- HaJournalConsumer.java          Live journal follower with multi-archive failover
 |       |-- ReadStreams.java                Consensus log / replay stream id constants
 |       |-- ReplicationHealth.java          Health and applied position published for readers
 |       |-- config/ReadReplicaConfig.java   Archive control channel, stream id, local host
@@ -156,14 +168,23 @@ flowchart TB
             DT["DedupTable"]
             AC["AccountStore"]
             OB["OrderBookNaive (per symbol)"]
+            RING["EventJournalRing\n(off-heap SPSC)"]
             MS --> ME
             ME --> DT
             ME --> AC
             ME --> OB
+            MS --> RING
         end
+        JR["Journaler Agent\n(EventJournalRecorder)"]
         CM -->|" committed log "| MS
         MS -->|" snapshot offer "| AR
         AR -->|" snapshot image "| MS
+        RING -->|" drain "| JR
+        JR -->|" record journal (stream 200) "| AR
+    end
+
+    subgraph JCON["Journal Consumer (exc-read)"]
+        HJC["HaJournalConsumer\nreplay + dedup + failover"]
     end
 
     subgraph READ["Read Replica (exc-read)"]
@@ -178,6 +199,7 @@ flowchart TB
     CLIENT -->|" CommandEnvelope (SBE) ingress "| CM
     MS -->|" CommandResult + Trade/Reduce/Reject + L2 (SBE) egress "| CLIENT
     AR -.->|" consensus log replay "| LLS
+    AR -.->|" journal replay "| HJC
 ```
 
 A node's components communicate over IPC. The `ClusteredServiceAgent` receives
@@ -204,6 +226,7 @@ Little-endian, fixed field order.
 | `ReduceEvent`      | 21          | A resting order was reduced or cancelled             |
 | `RejectEvent`      | 22          | Unmatched size rejected (IOC / FOK / duplicate id)   |
 | `L2MarketData`     | 30          | L2 order-book snapshot for an order-book request      |
+| `JournalEvent`     | 40          | One durable domain event (audit / AI journal stream) |
 | `SnapshotHeader`   | 100         | First snapshot record: log position and counts       |
 | `SymbolSpecRecord` | 101         | One symbol spec (ascending symbolId)                 |
 | `UserRecord`       | 102         | One account existence marker (ascending uid)         |
@@ -214,7 +237,9 @@ Little-endian, fixed field order.
 
 Optional fields (`presence="optional"`) carry order and account operands that are
 absent for other command types, and prepare the schema for backward-compatible
-evolution. Enums: `OrderCommandType`, `OrderAction`, `OrderType`,
+evolution. Fee and user-status fields were added at schema version 2 with
+`sinceVersion`, so a version-1 snapshot still loads (missing fields default to
+zero fee / active). Enums: `OrderCommandType`, `OrderAction`, `OrderType`,
 `MatcherEventType`, `CommandResultCode`.
 
 ### exc-core - Deterministic State Machine
@@ -229,15 +254,18 @@ free of Aeron so it runs in tests; `MatchingService` adapts it to the cluster.
 | `CommandOutcome`    | Reusable result holder plus a bounded matcher-event buffer               |
 | `AddUserHandler`    | Create an account                                                        |
 | `BalanceAdjustmentHandler` | Signed balance adjustment, overflow-checked                      |
-| `AddSymbolHandler`  | Register a symbol spec (base / quote currency, scales)                   |
+| `AddSymbolHandler`  | Register a symbol spec (base / quote currency, scales, maker / taker fees) |
+| `SuspendUserHandler` / `ResumeUserHandler` | Block / re-enable a user's order placement       |
 | `OrderBookNaive`    | Per-symbol price-time order book: place, match, cancel, move, reduce, L2 |
 | `OrderBookSide`     | One side as a best-first linked list of price buckets plus a price map   |
 | `PriceBucket`       | A FIFO queue of resting orders at one price                             |
 | `OrderNode` / `OrderNodePool` | Intrusive resting-order node and its reuse pool                |
-| `DirectExchangeRisk`| Reserve / release / settle funds at the actual fill price                |
+| `DirectExchangeRisk`| Reserve / release / settle funds and fees; fee account (uid 0)           |
 | `SymbolSpecStore`   | Symbol specs keyed by symbolId, sorted iteration for snapshots           |
-| `AccountStore`      | `uid -> (currency -> balance)`, sorted iteration for snapshots           |
+| `AccountStore`      | `uid -> (currency -> balance)` plus user status, sorted iteration        |
 | `DedupTable` / `DedupRing` | Per-client rings, O(1) idempotency within the dedup window        |
+| `EventJournalRing` / `DomainEventJournal` | Off-heap ring and encoder for the domain event journal |
+| `JournalDedup`      | Consumer-side exactly-once gate on `(logPosition, eventIndex)`            |
 | `SnapshotManager`   | Streaming SBE snapshot writer / loader with deterministic key ordering   |
 | `CoreMetrics` / `CounterSink` / `AtomicCounterSink` | Single-writer counters, off-heap mirror      |
 
@@ -251,7 +279,8 @@ read replica.
 | Component        | Responsibility                                                        |
 |------------------|-----------------------------------------------------------------------|
 | `ClusterConfig`  | Endpoints and directories; `singleNodeLocalhost`, `multiNodeLocalhost`, `fromProperties` |
-| `ClusterNode`    | Launches Media Driver + Archive + Consensus Module + Container; `cleanStart` controls state reuse; allocates the off-heap `CountersManager` mirror |
+| `ClusterNode`    | Launches Media Driver + Archive + Consensus Module + Container; allocates the off-heap `CountersManager`; starts recording the domain journal and runs the journaler agent |
+| `EventJournalRecorder` | Agent draining the service's journal ring to a recorded Aeron stream, off the consensus thread |
 | `ClusterLauncher`| Entry point: start a node (single-node or `--config` properties) and block until terminated |
 
 ### exc-client - Client SDK
@@ -271,8 +300,8 @@ signalling, and egress trade-event delivery on top of an Aeron cluster client.
 | `BackpressureException` | Signals a full in-flight window rather than silently dropping a command |
 
 Typed helpers cover the full command set: `addSymbol`, `addUser`,
-`adjustBalance`, `placeGtc`, `placeIoc`, `placeFokBudget`, `cancelOrder`,
-`moveOrder`, `reduceOrder`, `requestOrderBook`.
+`adjustBalance`, `suspendUser`, `resumeUser`, `placeGtc`, `placeIoc`,
+`placeFokBudget`, `cancelOrder`, `moveOrder`, `reduceOrder`, `requestOrderBook`.
 
 ### exc-read - Read Replica (CQRS)
 
@@ -293,6 +322,9 @@ independently.
 |---------------------|----------------------------------------------------------------------|
 | `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log; balance / count queries |
 | `LiveLogSubscriber` | Subscribes the consensus recording, parses cluster framing, applies commands to the engine |
+| `JournalConsumer`   | Decodes a journal fragment stream and dedups to exactly-once delivery |
+| `JournalReplayReader` | Replays a member's recorded journal from the Archive through a `JournalConsumer` |
+| `HaJournalConsumer` | Follows one member's journal live and fails over to another on source loss |
 | `ReplicationHealth` | Health and applied cluster-global position published for readers     |
 | `ReadStreams`       | Consensus log and replay stream id constants                         |
 | `ReadReplicaConfig` | Archive control channel, control stream id, local host               |
@@ -331,7 +363,7 @@ idempotency possible without the engine knowing any real user identity.
 | `clientId`           | Session identity assigned by the client / edge                 |
 | `clientSeq`          | Monotonic per-client sequence; drives the dedup window         |
 | `commandId` (hi, lo) | Globally unique 128-bit id minted by the client                |
-| `commandType`        | PLACE_ORDER, CANCEL_ORDER, MOVE_ORDER, REDUCE_ORDER, ORDER_BOOK_REQUEST, ADD_USER, BALANCE_ADJUSTMENT, ADD_SYMBOL |
+| `commandType`        | PLACE_ORDER, CANCEL_ORDER, MOVE_ORDER, REDUCE_ORDER, ORDER_BOOK_REQUEST, ADD_USER, BALANCE_ADJUSTMENT, ADD_SYMBOL, SUSPEND_USER, RESUME_USER, RESET, NOP |
 | `uid`                | Account id the command acts on                                 |
 | `symbolId`           | Symbol the order targets                                       |
 | `orderId`            | Client-assigned resting-order id                               |
@@ -339,7 +371,7 @@ idempotency possible without the engine knowing any real user identity.
 | `reserveBidPrice`    | Max price a bid reserves against (direct-exchange hold)        |
 | `action`, `orderType`| ASK / BID, and GTC / IOC / FOK_BUDGET                          |
 | `currency`, `balanceAmount` | Operands for BALANCE_ADJUSTMENT                          |
-| `baseCurrency`, `quoteCurrency`, `baseScaleK`, `quoteScaleK` | Operands for ADD_SYMBOL |
+| `baseCurrency`, `quoteCurrency`, `baseScaleK`, `quoteScaleK`, `takerFee`, `makerFee` | Operands for ADD_SYMBOL |
 
 The reply is a `CommandResult` carrying the original `commandId`, a
 `CommandResultCode`, and optional `uid` / `orderId` / `filledSize`. A freshly
@@ -348,9 +380,10 @@ frames on egress; an `ORDER_BOOK_REQUEST` emits an `L2MarketData` frame.
 
 Result codes include `SUCCESS`, `MATCHING_UNKNOWN_ORDER_ID`,
 `MATCHING_REDUCE_FAILED_WRONG_SIZE`, `MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT`,
-`RISK_NSF`, `RISK_INVALID_RESERVE_PRICE`, `INVALID_SYMBOL`, `OVERFLOW`,
-`INVALID_AMOUNT`, `UNSUPPORTED_COMMAND`, `USER_ALREADY_EXISTS`, and
-`USER_NOT_FOUND`.
+`RISK_NSF`, `RISK_INVALID_RESERVE_PRICE`, `RISK_ASK_PRICE_LOWER_THAN_FEE`,
+`INVALID_SYMBOL`, `OVERFLOW`, `INVALID_AMOUNT`, `UNSUPPORTED_COMMAND`,
+`USER_ALREADY_EXISTS`, `USER_NOT_FOUND`, `USER_SUSPENDED`,
+`USER_ALREADY_SUSPENDED`, and `USER_NOT_SUSPENDED`.
 
 ---
 
@@ -382,19 +415,61 @@ path (tracked by a metric).
 
 ## Direct-Exchange Risk
 
-`DirectExchangeRisk` applies integer-only spot fund management. There are no fees
-and no margin in this delivery.
+`DirectExchangeRisk` applies integer-only spot fund management with maker / taker
+fees. Fees are charged per lot in quote currency and accrue to a reserved fee
+account (uid 0). Margin is out of scope.
 
-- **Reserve on place** - a bid holds `size * reserveBidPrice * quoteScaleK` quote
-  (or `budget * quoteScaleK` for FOK-BUDGET); an ask holds `size * baseScaleK`
-  base. An insufficient balance returns `RISK_NSF` and leaves the book untouched.
-- **Settle on fill** - the maker is settled at the actual fill price and any
-  over-reserved quote is released; the taker is settled in aggregate. Value is
-  conserved across every trade (a property test asserts this).
-- **Release on cancel / reduce** - the freed hold returns to available balance.
+- **Reserve on place** - a bid holds `size * (reserveBidPrice * quoteScaleK +
+  takerFee)` quote (or `budget * quoteScaleK + size * takerFee` for FOK-BUDGET),
+  covering the worst-case taker fee; an ask holds `size * baseScaleK` base and is
+  rejected with `RISK_ASK_PRICE_LOWER_THAN_FEE` if its price cannot cover the fee.
+  An insufficient balance returns `RISK_NSF` and leaves the book untouched.
+- **Settle on fill** - the taker pays the taker fee, each maker pays the lower
+  maker fee, and a resting bid maker is refunded the fee differential it
+  over-reserved. Both fees accrue to the fee account. Value is conserved across
+  every trade including fees (a property test asserts `taker + maker + fee` is
+  constant).
+- **Release on cancel / reduce** - the freed hold (including its reserved taker
+  fee) returns to available balance.
 
 All amounts are signed 64-bit `long` with a fixed scale; `Amounts` detects
-overflow and returns a status code rather than wrapping silently.
+overflow and returns a status code rather than wrapping silently. The fee account
+is reserved: `ADD_USER(0)` and placing as uid 0 are rejected.
+
+---
+
+## Domain Event Journal
+
+Beyond the per-command ACK, the engine publishes a durable, semantic stream of
+domain events (trade / reduce / reject) for audit, analytics, and risk consumers.
+It is decoupled from the hot path and highly available.
+
+- **Zero-alloc emission** - at apply time `MatchingService` encodes each matcher
+  event into an off-heap `EventJournalRing` (single-producer). The producer cost
+  is one `memcpy` plus a release store; a JMH `-prof gc` run confirms zero
+  steady-state allocation. A full ring signals back-pressure rather than dropping.
+- **Off the consensus thread** - a dedicated `EventJournalRecorder` agent drains
+  the ring and offers each event to an Aeron publication that the node's Archive
+  records (stream 200). No journal I/O ever touches the Raft thread.
+- **Highly available** - every node records the same committed events (the log is
+  deterministic), so any surviving member holds the full journal even after the
+  leader is lost.
+- **Exactly-once** - each event carries the idempotency key
+  `(logPosition, eventIndex)`. A consumer applies a `JournalDedup` gate so events
+  re-delivered across a failover, a repeated replay, or a source switch are
+  delivered exactly once.
+- **Consumers** - `JournalReplayReader` replays a member's recorded journal from
+  the Archive; `HaJournalConsumer` follows one member live and fails over to
+  another when its source dies, merging archives through a shared dedup.
+
+```mermaid
+flowchart LR
+    MS["MatchingService\n(every node, apply time)"] -->|" encode + memcpy "| RING["EventJournalRing\n(off-heap SPSC)"]
+    RING -->|" drain batch "| REC["EventJournalRecorder\n(agent, own thread)"]
+    REC -->|" offer "| AR["Aeron Archive\n(journal recording)"]
+    AR -.->|" replay "| HJC["HaJournalConsumer\n(dedup + failover)"]
+    HJC --> CONS["audit / analytics / AI"]
+```
 
 ---
 
@@ -487,7 +562,7 @@ flowchart TD
     WRAP --> DEDUP{"dedup hit for\n(clientId, clientSeq)?"}
     DEDUP -- Yes --> CACHED["load cached result\n(no re-apply)"]
     DEDUP -- No --> DISPATCH{"commandType"}
-    DISPATCH -->|" ADD_USER / BALANCE_ADJUSTMENT / ADD_SYMBOL "| ACCT["account / symbol handler"]
+    DISPATCH -->|" ADD_USER / BALANCE_ADJUSTMENT / ADD_SYMBOL / SUSPEND_USER / RESUME_USER / RESET / NOP "| ACCT["account / symbol / admin handler"]
     DISPATCH -->|" PLACE_ORDER "| PLACE["reserve -> match -> settle fills -> release rejects"]
     DISPATCH -->|" CANCEL / REDUCE "| CANCEL["remove/shrink -> release hold"]
     DISPATCH -->|" MOVE "| MOVE["relocate -> settle if marketable"]
@@ -501,6 +576,7 @@ flowchart TD
     CACHED --> SEND
     SEND --> EVENTS["emit Trade/Reduce/Reject (+ L2) events"]
     EVENTS --> EGRESS["offer to session\n(retry + idle on back-pressure)"]
+    EVENTS --> JOURNAL["emit domain events to ring\n(keyed logPosition, eventIndex)"]
 ```
 
 ---
@@ -533,8 +609,8 @@ and keys within each section are sorted so two nodes produce identical bytes.
 
 ```
 [SnapshotHeader]      logPosition, schemaVersion, symbol / user / order / dedup counts
-[SymbolSpecRecord...] sorted by symbolId
-[UserRecord...]       sorted by uid (captures accounts with no balances)
+[SymbolSpecRecord...] sorted by symbolId (currencies, scales, maker / taker fees)
+[UserRecord...]       sorted by uid (captures accounts with no balances, plus status)
 [BalanceRecord...]    sorted by (uid, currency)
 [OrderRecord...]      per symbol, best-first FIFO book order (reconstructs identical books)
 [DedupRecord...]      sorted by (clientId, clientSeq)   <-- idempotency survives recovery
@@ -561,6 +637,8 @@ values.
 | `dedupWindow`         | 2^10    | Most recent commands retained per client    |
 | `orderPoolCapacity`   | 2^16    | Retained free order nodes (reuse pool)      |
 | `eventBufferCapacity` | 2^10    | Preallocated matcher events per command     |
+| `journalSlotCount`    | 2^16    | Domain-event ring slots (power of two)      |
+| `journalSlotSize`     | 128     | Bytes per journal ring slot                 |
 | `l2MaxLevels`         | 32      | Max L2 depth returned per side              |
 
 `ClusterConfig` provides node id, cluster members, directories, and channels; the
@@ -587,9 +665,11 @@ snapshot write / read time. The hot path only increments a counter.
 
 | Suite                                | Type        | What it covers                                          |
 |--------------------------------------|-------------|---------------------------------------------------------|
-| `MatchingEngineTest`                 | Unit        | Dedup, account handlers, result codes                   |
+| `MatchingEngineTest`                 | Unit        | Dedup, account handlers, suspend / resume, result codes |
 | `OrderBookConformanceTest`           | Unit        | GTC / IOC / FOK-BUDGET, cancel / move / reduce, L2      |
 | `SpotRiskTest`                       | Unit        | Reserve / settle / release, value conservation          |
+| `FeeTest`                            | Unit        | Maker / taker fees, fee account, conservation with fees |
+| `EventJournalTest`                   | Unit        | Journal ring order / back-pressure, encoding, dedup     |
 | `EngineDeterminismTest`              | Property    | Replay determinism and sum-of-deltas (jqwik)            |
 | `SnapshotRoundTripTest`              | Unit        | Byte-identical snapshot round trip and checksum         |
 | `SnapshotIntegrityTest`              | Unit        | Truncation and corruption are rejected                  |
@@ -599,8 +679,14 @@ snapshot write / read time. The hot path only increments a counter.
 | `ExcOrderBookIntegrationTest`        | Integration | Resting maker matched by taker, trade on egress         |
 | `BenchHarnessSmokeTest`              | Integration | End-to-end latency harness boots and measures           |
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth       |
+| `EventJournalRecorderIntegrationTest`| Integration | Recorder drains the ring onto an Aeron stream           |
+| `JournalClusterIntegrationTest`      | Integration | A committed trade reaches the recorded journal stream   |
+| `JournalConsumerIntegrationTest`     | Integration | Re-delivered events are deduped to exactly-once         |
+| `JournalReplayIntegrationTest`       | Integration | Archive replay decodes trades; repeated replay dedups   |
 | `SnapshotWarmRestartIntegrationTest` | Cluster     | Warm restart recovers state from a native snapshot      |
 | `LeaderKillFailoverTest`             | Fault       | Three-node leader kill; exactly-once, no loss or dup    |
+| `JournalHaFailoverTest`              | Fault       | Journal survives a leader kill; trades exactly-once     |
+| `JournalLiveFailoverTest`            | Fault       | Live consumer fails over to a survivor without loss     |
 
 Only `test` and `integrationTest` are the minimal gate; excoredum additionally
 wires `clusterTest` and `faultTest` into the default `check`.
