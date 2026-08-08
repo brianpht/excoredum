@@ -145,13 +145,25 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         return encodeAndSubmit(OrderCommandType.BALANCE_ADJUSTMENT, uid, currency, amount);
     }
 
-    /** Registers a spot symbol specification. */
+    /** Registers a spot symbol specification with zero fees. */
     public long addSymbol(
             final int symbolId,
             final int baseCurrency,
             final int quoteCurrency,
             final long baseScaleK,
             final long quoteScaleK) {
+        return addSymbol(symbolId, baseCurrency, quoteCurrency, baseScaleK, quoteScaleK, 0L, 0L);
+    }
+
+    /** Registers a spot symbol specification with per-lot taker/maker fees. */
+    public long addSymbol(
+            final int symbolId,
+            final int baseCurrency,
+            final int quoteCurrency,
+            final long baseScaleK,
+            final long quoteScaleK,
+            final long takerFee,
+            final long makerFee) {
         if (freeTop == 0) {
             backpressureEvents++;
             throw new BackpressureException("in-flight window full: " + config.maxInFlight());
@@ -183,7 +195,9 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 .baseCurrency(baseCurrency)
                 .quoteCurrency(quoteCurrency)
                 .baseScaleK(baseScaleK)
-                .quoteScaleK(quoteScaleK);
+                .quoteScaleK(quoteScaleK)
+                .takerFee(takerFee)
+                .makerFee(makerFee);
 
         pc.length = MessageHeaderEncoder.ENCODED_LENGTH + envelopeEncoder.encodedLength();
         pc.submitNanos = System.nanoTime();
@@ -350,7 +364,9 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 .baseCurrency(CommandEnvelopeEncoder.baseCurrencyNullValue())
                 .quoteCurrency(CommandEnvelopeEncoder.quoteCurrencyNullValue())
                 .baseScaleK(CommandEnvelopeEncoder.baseScaleKNullValue())
-                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue());
+                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue())
+                .takerFee(CommandEnvelopeEncoder.takerFeeNullValue())
+                .makerFee(CommandEnvelopeEncoder.makerFeeNullValue());
 
         pc.length = MessageHeaderEncoder.ENCODED_LENGTH + envelopeEncoder.encodedLength();
         pc.submitNanos = System.nanoTime();
@@ -404,7 +420,9 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 .baseCurrency(CommandEnvelopeEncoder.baseCurrencyNullValue())
                 .quoteCurrency(CommandEnvelopeEncoder.quoteCurrencyNullValue())
                 .baseScaleK(CommandEnvelopeEncoder.baseScaleKNullValue())
-                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue());
+                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue())
+                .takerFee(CommandEnvelopeEncoder.takerFeeNullValue())
+                .makerFee(CommandEnvelopeEncoder.makerFeeNullValue());
 
         pc.length = MessageHeaderEncoder.ENCODED_LENGTH + envelopeEncoder.encodedLength();
         pc.submitNanos = System.nanoTime();

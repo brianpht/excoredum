@@ -101,7 +101,9 @@ public class MatchingEngineBenchmark {
                 .baseCurrency(CommandEnvelopeEncoder.baseCurrencyNullValue())
                 .quoteCurrency(CommandEnvelopeEncoder.quoteCurrencyNullValue())
                 .baseScaleK(CommandEnvelopeEncoder.baseScaleKNullValue())
-                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue());
+                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue())
+                .takerFee(CommandEnvelopeEncoder.takerFeeNullValue())
+                .makerFee(CommandEnvelopeEncoder.makerFeeNullValue());
         return wrap();
     }
 
@@ -121,7 +123,9 @@ public class MatchingEngineBenchmark {
                 .baseCurrency(CommandEnvelopeEncoder.baseCurrencyNullValue())
                 .quoteCurrency(CommandEnvelopeEncoder.quoteCurrencyNullValue())
                 .baseScaleK(CommandEnvelopeEncoder.baseScaleKNullValue())
-                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue());
+                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue())
+                .takerFee(CommandEnvelopeEncoder.takerFeeNullValue())
+                .makerFee(CommandEnvelopeEncoder.makerFeeNullValue());
         return wrap();
     }
 
@@ -141,7 +145,9 @@ public class MatchingEngineBenchmark {
                 .baseCurrency(BASE)
                 .quoteCurrency(QUOTE)
                 .baseScaleK(1L)
-                .quoteScaleK(1L);
+                .quoteScaleK(1L)
+                .takerFee(0L)
+                .makerFee(0L);
         return wrap();
     }
 
@@ -161,7 +167,9 @@ public class MatchingEngineBenchmark {
                 .baseCurrency(CommandEnvelopeEncoder.baseCurrencyNullValue())
                 .quoteCurrency(CommandEnvelopeEncoder.quoteCurrencyNullValue())
                 .baseScaleK(CommandEnvelopeEncoder.baseScaleKNullValue())
-                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue());
+                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue())
+                .takerFee(CommandEnvelopeEncoder.takerFeeNullValue())
+                .makerFee(CommandEnvelopeEncoder.makerFeeNullValue());
         return wrap();
     }
 
@@ -181,7 +189,9 @@ public class MatchingEngineBenchmark {
                 .baseCurrency(CommandEnvelopeEncoder.baseCurrencyNullValue())
                 .quoteCurrency(CommandEnvelopeEncoder.quoteCurrencyNullValue())
                 .baseScaleK(CommandEnvelopeEncoder.baseScaleKNullValue())
-                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue());
+                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue())
+                .takerFee(CommandEnvelopeEncoder.takerFeeNullValue())
+                .makerFee(CommandEnvelopeEncoder.makerFeeNullValue());
         return wrap();
     }
 

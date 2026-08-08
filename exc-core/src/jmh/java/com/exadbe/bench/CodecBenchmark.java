@@ -64,7 +64,9 @@ public class CodecBenchmark {
                 .baseCurrency(CommandEnvelopeEncoder.baseCurrencyNullValue())
                 .quoteCurrency(CommandEnvelopeEncoder.quoteCurrencyNullValue())
                 .baseScaleK(CommandEnvelopeEncoder.baseScaleKNullValue())
-                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue());
+                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue())
+                .takerFee(CommandEnvelopeEncoder.takerFeeNullValue())
+                .makerFee(CommandEnvelopeEncoder.makerFeeNullValue());
     }
 
     @Benchmark

@@ -129,7 +129,14 @@ public final class MatchingEngine {
             case BALANCE_ADJUSTMENT -> balanceAdjustmentHandler.handle(
                     cmd.uid(), cmd.currency(), cmd.balanceAmount(), out);
             case ADD_SYMBOL -> addSymbolHandler.handle(
-                    cmd.symbolId(), cmd.baseCurrency(), cmd.quoteCurrency(), cmd.baseScaleK(), cmd.quoteScaleK(), out);
+                    cmd.symbolId(),
+                    cmd.baseCurrency(),
+                    cmd.quoteCurrency(),
+                    cmd.baseScaleK(),
+                    cmd.quoteScaleK(),
+                    feeOrZero(cmd.takerFee()),
+                    feeOrZero(cmd.makerFee()),
+                    out);
             case PLACE_ORDER -> handlePlace(cmd, timestamp, out);
             case CANCEL_ORDER -> handleCancel(cmd, out);
             case MOVE_ORDER -> handleMove(cmd, out);
@@ -155,6 +162,10 @@ public final class MatchingEngine {
             out.resultCode(CommandResultCode.INVALID_SYMBOL);
             return;
         }
+        if (uid == DirectExchangeRisk.FEE_ACCOUNT_UID) {
+            out.resultCode(CommandResultCode.USER_NOT_FOUND);
+            return;
+        }
         if (!accounts.userExists(uid)) {
             out.resultCode(CommandResultCode.USER_NOT_FOUND);
             return;
@@ -173,11 +184,16 @@ public final class MatchingEngine {
         final int holdCurrency;
         final long holdAmount;
         if (ask) {
+            // An ask must fill for at least its taker fee, or proceeds could go negative.
+            if (price * spec.quoteScaleK() < spec.takerFee()) {
+                out.resultCode(CommandResultCode.RISK_ASK_PRICE_LOWER_THAN_FEE);
+                return;
+            }
             holdCurrency = spec.baseCurrency();
             holdAmount = DirectExchangeRisk.askHold(spec, size);
         } else if (type == OrderType.FOK_BUDGET) {
             holdCurrency = spec.quoteCurrency();
-            holdAmount = DirectExchangeRisk.bidBudgetHold(spec, price);
+            holdAmount = DirectExchangeRisk.bidBudgetHold(spec, size, price);
         } else {
             if (reserveBidPrice < price) {
                 out.resultCode(CommandResultCode.RISK_INVALID_RESERVE_PRICE);
@@ -298,8 +314,9 @@ public final class MatchingEngine {
             final long heldPriceSum = fokBudget ? budget : takerReserve * sizeSum;
             risk.settleTakerBuy(spec, takerUid, heldPriceSum, sizePriceSum, sizeSum);
         } else {
-            risk.settleTakerSell(spec, takerUid, sizePriceSum);
+            risk.settleTakerSell(spec, takerUid, sizePriceSum, sizeSum);
         }
+        risk.collectFee(spec, (spec.takerFee() + spec.makerFee()) * sizeSum);
     }
 
     // Releases the taker's hold for any rejected (unmatched) size.
@@ -319,9 +336,13 @@ public final class MatchingEngine {
             if (takerAsk) {
                 risk.release(e.makerUid(), spec.baseCurrency(), e.size() * spec.baseScaleK());
             } else if (fokBudget) {
-                risk.release(e.makerUid(), spec.quoteCurrency(), DirectExchangeRisk.bidBudgetHold(spec, budget));
+                risk.release(
+                        e.makerUid(), spec.quoteCurrency(), DirectExchangeRisk.bidBudgetHold(spec, e.size(), budget));
             } else {
-                risk.release(e.makerUid(), spec.quoteCurrency(), e.size() * reserveBidPrice * spec.quoteScaleK());
+                risk.release(
+                        e.makerUid(),
+                        spec.quoteCurrency(),
+                        DirectExchangeRisk.bidHold(spec, e.size(), reserveBidPrice));
             }
         }
     }
@@ -339,7 +360,9 @@ public final class MatchingEngine {
             }
             if (e.makerBid()) {
                 risk.release(
-                        e.makerUid(), spec.quoteCurrency(), e.size() * e.makerReserveBidPrice() * spec.quoteScaleK());
+                        e.makerUid(),
+                        spec.quoteCurrency(),
+                        DirectExchangeRisk.bidHold(spec, e.size(), e.makerReserveBidPrice()));
             } else {
                 risk.release(e.makerUid(), spec.baseCurrency(), e.size() * spec.baseScaleK());
             }
@@ -376,6 +399,11 @@ public final class MatchingEngine {
     private void handleNop(final CommandEnvelopeDecoder cmd, final CommandOutcome out) {
         out.uid(cmd.uid());
         out.resultCode(CommandResultCode.SUCCESS);
+    }
+
+    // Normalizes an absent (v1) optional fee to zero.
+    private static long feeOrZero(final long fee) {
+        return fee == CommandEnvelopeDecoder.takerFeeNullValue() ? 0L : fee;
     }
 
     // Reached only by NULL_VAL / unknown command types.

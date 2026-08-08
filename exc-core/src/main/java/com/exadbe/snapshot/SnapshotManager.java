@@ -151,6 +151,8 @@ public final class SnapshotManager {
                     .quoteCurrency(spec.quoteCurrency())
                     .baseScaleK(spec.baseScaleK())
                     .quoteScaleK(spec.quoteScaleK())
+                    .takerFee(spec.takerFee())
+                    .makerFee(spec.makerFee())
                     .encodedLength();
             emit(sink, idler, MessageHeaderEncoder.ENCODED_LENGTH + l);
         });
@@ -257,7 +259,9 @@ public final class SnapshotManager {
                         symbolDecoder.baseCurrency(),
                         symbolDecoder.quoteCurrency(),
                         symbolDecoder.baseScaleK(),
-                        symbolDecoder.quoteScaleK()));
+                        symbolDecoder.quoteScaleK(),
+                        feeOrZero(symbolDecoder.takerFee(), SymbolSpecRecordDecoder.takerFeeNullValue()),
+                        feeOrZero(symbolDecoder.makerFee(), SymbolSpecRecordDecoder.makerFeeNullValue())));
             }
             case UserRecordDecoder.TEMPLATE_ID -> {
                 userDecoder.wrap(buffer, bodyOffset, blockLength, version);
@@ -350,6 +354,8 @@ public final class SnapshotManager {
             h[0] = combine(h[0], spec.quoteCurrency());
             h[0] = combine(h[0], spec.baseScaleK());
             h[0] = combine(h[0], spec.quoteScaleK());
+            h[0] = combine(h[0], spec.takerFee());
+            h[0] = combine(h[0], spec.makerFee());
         });
         accounts.forEachUserSorted((uid, status) -> {
             h[0] = combine(h[0], uid);
@@ -384,6 +390,11 @@ public final class SnapshotManager {
 
     private static long combine(final long h, final long v) {
         return h * HASH_PRIME + v;
+    }
+
+    // Normalizes an absent (v1) optional fee to zero.
+    private static long feeOrZero(final long fee, final long nullValue) {
+        return fee == nullValue ? 0L : fee;
     }
 
     /** Length of the small reusable per-record buffer. */

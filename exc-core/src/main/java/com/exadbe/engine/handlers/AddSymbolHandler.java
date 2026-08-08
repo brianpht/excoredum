@@ -20,9 +20,11 @@ public final class AddSymbolHandler {
             final int quoteCurrency,
             final long baseScaleK,
             final long quoteScaleK,
+            final long takerFee,
+            final long makerFee,
             final CommandOutcome out) {
-        final boolean added =
-                symbols.add(new SymbolSpec(symbolId, baseCurrency, quoteCurrency, baseScaleK, quoteScaleK));
+        final boolean added = symbols.add(
+                new SymbolSpec(symbolId, baseCurrency, quoteCurrency, baseScaleK, quoteScaleK, takerFee, makerFee));
         out.resultCode(added ? CommandResultCode.SUCCESS : CommandResultCode.DUPLICATE);
     }
 }

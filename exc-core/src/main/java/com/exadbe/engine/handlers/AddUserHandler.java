@@ -2,6 +2,7 @@ package com.exadbe.engine.handlers;
 
 import com.exadbe.collections.AccountStore;
 import com.exadbe.core.CommandOutcome;
+import com.exadbe.engine.risk.DirectExchangeRisk;
 import com.exadbe.protocol.CommandResultCode;
 
 /**
@@ -19,6 +20,11 @@ public final class AddUserHandler {
 
     public void handle(final long uid, final CommandOutcome out) {
         out.uid(uid);
+        // uid 0 is reserved for the fee account and cannot be claimed by a user.
+        if (uid == DirectExchangeRisk.FEE_ACCOUNT_UID) {
+            out.resultCode(CommandResultCode.USER_ALREADY_EXISTS);
+            return;
+        }
         out.resultCode(accounts.addUser(uid) ? CommandResultCode.SUCCESS : CommandResultCode.USER_ALREADY_EXISTS);
     }
 }

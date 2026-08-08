@@ -73,6 +73,21 @@ final class Commands {
             final int quoteCurrency,
             final long baseScaleK,
             final long quoteScaleK) {
+        return addSymbol(
+                clientId, clientSeq, commandId, symbolId, baseCurrency, quoteCurrency, baseScaleK, quoteScaleK, 0L, 0L);
+    }
+
+    CommandEnvelopeDecoder addSymbol(
+            final long clientId,
+            final long clientSeq,
+            final long commandId,
+            final int symbolId,
+            final int baseCurrency,
+            final int quoteCurrency,
+            final long baseScaleK,
+            final long quoteScaleK,
+            final long takerFee,
+            final long makerFee) {
         envelopeEncoder
                 .wrapAndApplyHeader(buffer, 0, headerEncoder)
                 .clientId(clientId)
@@ -94,7 +109,9 @@ final class Commands {
                 .baseCurrency(baseCurrency)
                 .quoteCurrency(quoteCurrency)
                 .baseScaleK(baseScaleK)
-                .quoteScaleK(quoteScaleK);
+                .quoteScaleK(quoteScaleK)
+                .takerFee(takerFee)
+                .makerFee(makerFee);
 
         headerDecoder.wrap(buffer, 0);
         envelopeDecoder.wrap(
@@ -131,7 +148,9 @@ final class Commands {
                 .baseCurrency(CommandEnvelopeEncoder.baseCurrencyNullValue())
                 .quoteCurrency(CommandEnvelopeEncoder.quoteCurrencyNullValue())
                 .baseScaleK(CommandEnvelopeEncoder.baseScaleKNullValue())
-                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue());
+                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue())
+                .takerFee(CommandEnvelopeEncoder.takerFeeNullValue())
+                .makerFee(CommandEnvelopeEncoder.makerFeeNullValue());
 
         headerDecoder.wrap(buffer, 0);
         envelopeDecoder.wrap(
@@ -358,7 +377,9 @@ final class Commands {
                 .baseCurrency(CommandEnvelopeEncoder.baseCurrencyNullValue())
                 .quoteCurrency(CommandEnvelopeEncoder.quoteCurrencyNullValue())
                 .baseScaleK(CommandEnvelopeEncoder.baseScaleKNullValue())
-                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue());
+                .quoteScaleK(CommandEnvelopeEncoder.quoteScaleKNullValue())
+                .takerFee(CommandEnvelopeEncoder.takerFeeNullValue())
+                .makerFee(CommandEnvelopeEncoder.makerFeeNullValue());
 
         headerDecoder.wrap(buffer, 0);
         envelopeDecoder.wrap(
