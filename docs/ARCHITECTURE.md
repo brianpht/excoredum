@@ -318,10 +318,20 @@ by one thread and readers always see a consistent state. A read replica is NOT a
 cluster member: it does not vote, does not affect quorum, and can be restarted
 independently.
 
+The replica also serves the read-side report framework over its private engine
+(eventually consistent, no ingress or consensus round trip): `singleUserReport(uid)`
+returns a user's balances and resting orders, `totalCurrencyBalance()` returns the
+per-currency total of balances plus funds reserved by resting orders (invariant
+across trades, so it verifies value conservation including fees on account 0), and
+`stateHash()` returns a deterministic fingerprint identical to a snapshot footer
+checksum for comparing replicas or reconciling against a snapshot.
+
 | Component           | Responsibility                                                       |
 |---------------------|----------------------------------------------------------------------|
-| `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log; balance / count queries |
+| `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log; balance / count / report queries |
 | `LiveLogSubscriber` | Subscribes the consensus recording, parses cluster framing, applies commands to the engine |
+| `ReportGenerator`   | Assembles single-user, total-currency-balance, and state-hash reports over the replica engine |
+| `SingleUserReport` / `TotalCurrencyBalance` | Read-side result holders for the report queries      |
 | `JournalConsumer`   | Decodes a journal fragment stream and dedups to exactly-once delivery |
 | `JournalReplayReader` | Replays a member's recorded journal from the Archive through a `JournalConsumer` |
 | `HaJournalConsumer` | Follows one member's journal live and fails over to another on source loss |

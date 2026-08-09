@@ -1,6 +1,7 @@
 package com.exadbe.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.exadbe.client.config.ClientConfig;
@@ -78,6 +79,24 @@ class ReadReplicaIntegrationTest {
                 assertEquals(400L, replica.balance(MAKER, QUOTE), "maker sold 4 base at price 100");
                 assertTrue(replica.isHealthy());
                 assertTrue(replica.appliedPosition() > 0L);
+
+                final com.exadbe.read.report.SingleUserReport makerReport = replica.singleUserReport(MAKER);
+                assertTrue(makerReport.exists(), "the maker report must reflect the replicated account");
+                assertEquals(400L, makerReport.balance(QUOTE), "maker proceeds from the 4-unit sale");
+                assertEquals(1, makerReport.orders().size(), "the maker's ask remainder still rests");
+                final com.exadbe.read.report.SingleUserReport.OrderLine makerOrder =
+                        makerReport.orders().get(0);
+                assertTrue(makerOrder.ask());
+                assertEquals(10L, makerOrder.size());
+                assertEquals(4L, makerOrder.filled(), "4 of the 10-unit ask filled");
+
+                final com.exadbe.read.report.TotalCurrencyBalance totals = replica.totalCurrencyBalance();
+                assertEquals(1000L, totals.total(BASE), "base conserved across balances and the ask hold");
+                assertEquals(1_000_000L, totals.total(QUOTE), "quote conserved across balances and holds");
+
+                final long hash = replica.stateHash();
+                assertNotEquals(0L, hash, "a populated replica has a non-trivial state hash");
+                assertEquals(hash, replica.stateHash(), "state hash is stable on repeated reads");
             }
         }
     }

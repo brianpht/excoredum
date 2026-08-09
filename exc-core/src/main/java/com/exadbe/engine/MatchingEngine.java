@@ -459,6 +459,26 @@ public final class MatchingEngine {
         return orderPool.allocations();
     }
 
+    /** Deterministic fingerprint of the full engine state, matching a snapshot checksum. */
+    public long stateHash() {
+        return SnapshotManager.checksum(symbols, accounts, this::forEachOrderSorted, dedup);
+    }
+
+    /** The symbol spec for {@code symbolId}, or {@code null} if unregistered. */
+    public SymbolSpec symbolSpec(final int symbolId) {
+        return symbols.get(symbolId);
+    }
+
+    /** Emits every resting order across all books in deterministic order; cold read path. */
+    public void forEachOrder(final SnapshotManager.OrderSink sink) {
+        forEachOrderSorted(sink);
+    }
+
+    /** Emits every balance entry in ascending {@code (uid, currency)} order; cold read path. */
+    public void forEachBalance(final AccountStore.BalanceConsumer consumer) {
+        accounts.forEachSorted(consumer);
+    }
+
     /** Writes the full engine state to a snapshot sink in deterministic order. */
     public void writeSnapshot(
             final SnapshotManager snapshotManager,

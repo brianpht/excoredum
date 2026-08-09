@@ -4,6 +4,9 @@ import com.exadbe.config.CoreConfig;
 import com.exadbe.core.CommandOutcome;
 import com.exadbe.engine.MatchingEngine;
 import com.exadbe.read.config.ReadReplicaConfig;
+import com.exadbe.read.report.ReportGenerator;
+import com.exadbe.read.report.SingleUserReport;
+import com.exadbe.read.report.TotalCurrencyBalance;
 import com.exadbe.telemetry.CoreMetrics;
 import io.aeron.Aeron;
 import io.aeron.archive.client.AeronArchive;
@@ -34,6 +37,7 @@ public final class ExcReadReplica implements AutoCloseable {
     private final CommandOutcome outcome;
     private final ReplicationHealth health = new ReplicationHealth();
     private final String localHost;
+    private final ReportGenerator reports;
 
     private LiveLogSubscriber liveLog;
     private long appliedPosition;
@@ -43,6 +47,7 @@ public final class ExcReadReplica implements AutoCloseable {
         this.engine = new MatchingEngine(coreConfig, new CoreMetrics());
         this.outcome = new CommandOutcome(coreConfig.eventBufferCapacity());
         this.localHost = config.localHost();
+        this.reports = new ReportGenerator(engine);
 
         MediaDriver driver = null;
         Aeron aeronClient = null;
@@ -132,6 +137,21 @@ public final class ExcReadReplica implements AutoCloseable {
 
     public int orderCount() {
         return engine.orderCount();
+    }
+
+    /** Balances and resting orders for {@code uid}, from the replicated state. */
+    public SingleUserReport singleUserReport(final long uid) {
+        return reports.singleUser(uid);
+    }
+
+    /** Per-currency total of all balances plus funds reserved by resting orders. */
+    public TotalCurrencyBalance totalCurrencyBalance() {
+        return reports.totalCurrencyBalance();
+    }
+
+    /** Deterministic fingerprint of the replicated state, matching a snapshot checksum. */
+    public long stateHash() {
+        return reports.stateHash();
     }
 
     @Override

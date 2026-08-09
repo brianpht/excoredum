@@ -335,6 +335,15 @@ public final class SnapshotManager {
         return footerSeen && computeChecksum(loadSymbols, loadAccounts, loadOrderSource, loadDedup) == expectedChecksum;
     }
 
+    /** Deterministic fingerprint of the given state, identical to a snapshot footer checksum. */
+    public static long checksum(
+            final SymbolSpecStore symbols,
+            final AccountStore accounts,
+            final OrderSource orderSource,
+            final DedupTable dedup) {
+        return computeChecksum(symbols, accounts, orderSource, dedup);
+    }
+
     private static int countOrders(final OrderSource orderSource) {
         final int[] count = {0};
         orderSource.forEach(
