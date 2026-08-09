@@ -17,6 +17,7 @@
     - [exc-client - Client SDK](#exc-client---client-sdk)
     - [exc-read - Read Replica (CQRS)](#exc-read---read-replica-cqrs)
     - [exc-bench - Latency Harness](#exc-bench---latency-harness)
+    - [exc-xcore-bench - exchange-core Comparison](#exc-xcore-bench---exchange-core-comparison)
     - [exc-tests - Verification and Fixtures](#exc-tests---verification-and-fixtures)
 - [Wire Format](#wire-format)
 - [Order Book Semantics](#order-book-semantics)
@@ -70,7 +71,7 @@ symbol / user sharding are out of scope for now.
 
 ```
 excoredum/
-|-- settings.gradle.kts             Gradle multi-module (8 modules)
+|-- settings.gradle.kts             Gradle multi-module (9 modules)
 |-- build.gradle.kts                Shared conventions: JDK 21, spotless, checkstyle, -Werror
 |-- gradle/libs.versions.toml       Version catalog (Aeron, Agrona, SBE, JMH, HdrHistogram, ...)
 |-- config/checkstyle/checkstyle.xml        Baseline style rules for all modules
@@ -139,6 +140,22 @@ excoredum/
 |   +-- src/main/java/com/exadbe/bench/
 |       |-- ExcBenchHarness.java            Boots a cluster + client, closed-loop HdrHistogram latency
 |       +-- LatencyResult.java              Throughput + percentile record
+|
+|-- exc-xcore-bench/                Comparative benchmarks vs exchange-core 0.5.3
+|   |-- src/main/java/com/exadbe/xcorebench/
+|   |   |-- WorkloadGenerator.java          Deterministic port of exchange-core's TestOrdersGenerator
+|   |   |-- Workload.java                   Replayable command sequence as primitive arrays
+|   |   |-- ExcBookRunner.java              Replay through OrderBookNaive (reference)
+|   |   |-- XcoreBookRunner.java            Replay through OrderBookNaiveImpl / OrderBookDirectImpl
+|   |   |-- BookStats.java                  Event counters + full-depth L2 digest for cross-validation
+|   |   |-- ExcEngineRunner.java            Closed-loop full-dispatch latency (decode + dedup + risk + match)
+|   |   |-- XcorePipelineRunner.java        Closed-loop ExchangeCore disruptor pipeline latency
+|   |   |-- BookComparison.java             book mode: replay throughput + parity check
+|   |   |-- EngineComparison.java           engine mode: dispatch vs pipeline tables
+|   |   |-- E2eComparison.java              e2e mode: cluster vs pipeline tables (reuses exc-bench)
+|   |   +-- XcoreBenchMain.java             CLI (--mode=book|engine|e2e|all)
+|   +-- src/jmh/java/com/exadbe/xcorebench/
+|       +-- OrderBookComparisonBenchmark.java  JMH: 3 impls x place/cancel, IOC match, replay chunk
 |
 |-- exc-examples/                   Placeholder for runnable examples
 |
@@ -350,6 +367,18 @@ in-process single-node cluster and drives it with the real client in a closed lo
 in an HdrHistogram and reporting tail percentiles. Each measured op is a taker
 order that fully fills one unit against a deep resting maker, so the book stays
 bounded. JMH micro-benchmarks for the hot path live in `exc-core`'s jmh source set.
+
+### exc-xcore-bench - exchange-core Comparison
+
+Comparative benchmarks against upstream exchange-core 0.5.3 (exempt from the
+core determinism rules). A faithful port of exchange-core's
+`TestOrdersGenerator` produces a deterministic command mix that is replayed
+through excoredum's `OrderBookNaive` (reference) and both exchange-core books,
+with built-in cross-validation of event counters and full-depth L2. Engine-path
+and end-to-end modes measure closed-loop latency through `MatchingEngine.process`
+vs the exchange-core disruptor pipeline, and through the full cluster vs the
+pipeline. See [BENCHMARKING-XCORE.md](BENCHMARKING-XCORE.md) for methodology and
+fairness notes.
 
 ### exc-tests - Verification and Fixtures
 
@@ -690,6 +719,7 @@ snapshot write / read time. The hot path only increments a counter.
 | `ExcAccountsIntegrationTest`         | Integration | Account lifecycle result codes end to end               |
 | `ExcOrderBookIntegrationTest`        | Integration | Resting maker matched by taker, trade on egress         |
 | `BenchHarnessSmokeTest`              | Integration | End-to-end latency harness boots and measures           |
+| `XcoreBenchSmokeTest`                | Integration | exchange-core replay cross-validates; pipeline boots    |
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth       |
 | `EventJournalRecorderIntegrationTest`| Integration | Recorder drains the ring onto an Aeron stream           |
 | `JournalClusterIntegrationTest`      | Integration | A committed trade reaches the recorded journal stream   |
@@ -725,6 +755,10 @@ wires `clusterTest` and `faultTest` into the default `check`.
 
 # End-to-end latency harness
 ./gradlew :exc-bench:run --args="--warmup=5000 --ops=20000"
+
+# Comparison vs exchange-core (book / engine / e2e / all)
+./gradlew :exc-xcore-bench:run --args="--mode=book --commands=100000"
+./gradlew :exc-xcore-bench:jmh -PquickBench
 ```
 
 Toolchain: JDK 21 LTS. Aeron 1.48, Agrona 2.2, SBE 1.35. The dependency chain for

@@ -7,6 +7,11 @@ affinity = "3.23.3"
 junit = "5.11.4"
 jqwik = "1.9.2"
 jmh = "1.37"
+exchangeCore2 = "0.5.3"
+slf4j = "1.7.36"
+# exchange-core 0.5.3 drags chronicle-wire 2.19.1, which predates JDK 21; the
+# comparison module upgrades it (binary-command serialization only).
+chronicleWire = "2.25ea16"
 checkstyle = "10.20.1"
 netty = "4.1.136.Final"
 jacoco = "0.8.12"
@@ -32,6 +37,10 @@ netty-codec-http = { group = "io.netty", name = "netty-codec-http", version.ref 
 
 errorprone-core = { group = "com.google.errorprone", name = "error_prone_core", version.ref = "errorprone" }
 nullaway = { group = "com.uber.nullaway", name = "nullaway", version.ref = "nullaway" }
+
+exchange-core2 = { group = "exchange.core2", name = "exchange-core", version.ref = "exchangeCore2" }
+slf4j-simple = { group = "org.slf4j", name = "slf4j-simple", version.ref = "slf4j" }
+chronicle-wire = { group = "net.openhft", name = "chronicle-wire", version.ref = "chronicleWire" }
 
 junit-jupiter = { group = "org.junit.jupiter", name = "junit-jupiter", version.ref = "junit" }
 junit-platform-launcher = { group = "org.junit.platform", name = "junit-platform-launcher", version = "1.11.4" }

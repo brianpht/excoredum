@@ -14,6 +14,7 @@ dependencies {
     testImplementation(project(":exc-client"))
     testImplementation(project(":exc-read"))
     testImplementation(project(":exc-bench"))
+    testImplementation(project(":exc-xcore-bench"))
     testImplementation(libs.bundles.aeron)
 
     testFixturesApi(project(":exc-protocol"))
@@ -74,6 +75,19 @@ tasks.named<Test>("test") {
 
 tasks.named("check") {
     dependsOn(integrationTest, clusterTest, faultTest)
+}
+
+// The exchange-core comparison smoke test boots exchange-core's disruptor,
+// whose chronicle stack needs these reflective opens on JDK 21.
+tasks.withType<Test>().configureEach {
+    jvmArgs(
+        "--add-exports", "java.base/jdk.internal.ref=ALL-UNNAMED",
+        "--add-opens", "java.base/java.lang=ALL-UNNAMED",
+        "--add-opens", "java.base/java.lang.reflect=ALL-UNNAMED",
+        "--add-opens", "java.base/java.io=ALL-UNNAMED",
+        "--add-opens", "java.base/java.nio=ALL-UNNAMED",
+        "--add-opens", "java.base/java.util=ALL-UNNAMED",
+    )
 }
 
 // Test code is not the production hot path; keep lint informative but non-fatal.

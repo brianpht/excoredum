@@ -55,6 +55,7 @@ data flows, determinism rules, and order-book semantics.
 | `exc-client`   | Client SDK (depends only on `exc-protocol`): leader-change handling, idempotent retry, correlation, egress events. |
 | `exc-read`     | CQRS read replica and HA journal consumers (replay + dedup + failover), plus balance report generation. |
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram).  |
+| `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3: replay parity, engine/pipeline latency, e2e, JMH. Exempt from determinism rules. |
 | `exc-tests`    | Unit, property, integration, cluster, and fault suites + test fixtures.  |
 | `exc-examples` | Placeholder for runnable examples.                                        |
 

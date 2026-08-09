@@ -285,6 +285,7 @@ flowchart TB
 | `exc-client`   | Client-side SDK: leader-change handling, idempotent retry, correlation, events |
 | `exc-read`     | CQRS read side and journal consumers: log follower, replay, dedup, HA failover |
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram)     |
+| `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3 (replay parity, latency, JMH) |
 | `exc-tests`    | Unit, property, integration, cluster, fault tests and fixtures            |
 | `exc-examples` | Placeholder for runnable examples                                        |
 
@@ -371,6 +372,25 @@ in a closed loop and reports HdrHistogram round-trip tail latency:
 ```bash
 ./gradlew :exc-bench:run --args="--warmup=5000 --ops=20000"
 ```
+
+### Comparison with exchange-core
+
+The `exc-xcore-bench` module benchmarks excoredum against the upstream
+exchange-core 0.5.3 it ports: a matching-level replay of exchange-core's own
+deterministic workload generator (with built-in cross-validation that both
+engines produce identical trades and L2), single-thread engine dispatch vs the
+exchange-core disruptor pipeline, cluster end-to-end vs pipeline end-to-end,
+and a JMH comparison of all three order-book implementations.
+
+```bash
+./gradlew :exc-xcore-bench:run --args="--mode=book --commands=100000"
+./gradlew :exc-xcore-bench:run --args="--mode=engine --warmup=5000 --ops=20000"
+./gradlew :exc-xcore-bench:run --args="--mode=e2e --warmup=5000 --ops=20000"
+./gradlew :exc-xcore-bench:jmh -PquickBench
+```
+
+See [docs/BENCHMARKING-XCORE.md](docs/BENCHMARKING-XCORE.md) for methodology and
+fairness notes.
 
 ## License
 
