@@ -320,11 +320,13 @@ independently.
 
 The replica also serves the read-side report framework over its private engine
 (eventually consistent, no ingress or consensus round trip): `singleUserReport(uid)`
-returns a user's balances and resting orders, `totalCurrencyBalance()` returns the
-per-currency total of balances plus funds reserved by resting orders (invariant
-across trades, so it verifies value conservation including fees on account 0), and
-`stateHash()` returns a deterministic fingerprint identical to a snapshot footer
-checksum for comparing replicas or reconciling against a snapshot.
+returns a user's status, balances, and resting orders, `totalCurrencyBalance()`
+returns the per-currency total of balances plus funds reserved by resting orders,
+broken out into client account balances, collected fees, and reserved order
+balances (invariant across trades, so it verifies value conservation including
+fees on account 0), and `stateHash()` returns a deterministic fingerprint
+identical to a snapshot footer checksum for comparing replicas or reconciling
+against a snapshot.
 
 | Component           | Responsibility                                                       |
 |---------------------|----------------------------------------------------------------------|

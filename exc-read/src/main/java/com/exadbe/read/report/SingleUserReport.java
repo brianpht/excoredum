@@ -15,14 +15,16 @@ public final class SingleUserReport {
 
     private final long uid;
     private final boolean exists;
+    private final boolean suspended;
 
     // Currency ids are widened to long keys; Agrona has no Int2Long map.
     private final Long2LongHashMap balances = new Long2LongHashMap(MISSING);
     private final List<OrderLine> orders = new ArrayList<>();
 
-    public SingleUserReport(final long uid, final boolean exists) {
+    public SingleUserReport(final long uid, final boolean exists, final boolean suspended) {
         this.uid = uid;
         this.exists = exists;
+        this.suspended = suspended;
     }
 
     void putBalance(final int currency, final long balance) {
@@ -40,6 +42,11 @@ public final class SingleUserReport {
     /** Whether the account exists on the replicated state. */
     public boolean exists() {
         return exists;
+    }
+
+    /** Whether the account is suspended (blocked from placing new orders). */
+    public boolean suspended() {
+        return suspended;
     }
 
     /** The balance for {@code currency}, or {@code 0} if the user holds none. */

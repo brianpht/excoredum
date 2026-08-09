@@ -1,6 +1,7 @@
 package com.exadbe.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -82,6 +83,7 @@ class ReadReplicaIntegrationTest {
 
                 final com.exadbe.read.report.SingleUserReport makerReport = replica.singleUserReport(MAKER);
                 assertTrue(makerReport.exists(), "the maker report must reflect the replicated account");
+                assertFalse(makerReport.suspended(), "the maker is active");
                 assertEquals(400L, makerReport.balance(QUOTE), "maker proceeds from the 4-unit sale");
                 assertEquals(1, makerReport.orders().size(), "the maker's ask remainder still rests");
                 final com.exadbe.read.report.SingleUserReport.OrderLine makerOrder =
@@ -93,6 +95,10 @@ class ReadReplicaIntegrationTest {
                 final com.exadbe.read.report.TotalCurrencyBalance totals = replica.totalCurrencyBalance();
                 assertEquals(1000L, totals.total(BASE), "base conserved across balances and the ask hold");
                 assertEquals(1_000_000L, totals.total(QUOTE), "quote conserved across balances and holds");
+                assertEquals(
+                        totals.total(QUOTE),
+                        totals.accountBalances(QUOTE) + totals.fees(QUOTE) + totals.ordersBalances(QUOTE),
+                        "quote total is the sum of its breakdown");
 
                 final long hash = replica.stateHash();
                 assertNotEquals(0L, hash, "a populated replica has a non-trivial state hash");

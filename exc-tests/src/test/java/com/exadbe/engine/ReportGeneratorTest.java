@@ -53,6 +53,7 @@ class ReportGeneratorTest {
         final SingleUserReport report = reports.singleUser(MAKER);
 
         assertTrue(report.exists());
+        assertFalse(report.suspended());
         assertEquals(MAKER, report.uid());
         // 10 base reserved by the resting ask; 990 remains free.
         assertEquals(990L, report.balance(BASE));
@@ -71,8 +72,20 @@ class ReportGeneratorTest {
         final SingleUserReport report = reports.singleUser(999L);
 
         assertFalse(report.exists());
+        assertFalse(report.suspended());
         assertEquals(0L, report.balance(BASE));
         assertTrue(report.orders().isEmpty());
+    }
+
+    @Test
+    void singleUserReportReflectsSuspension() {
+        fund(MAKER, BASE, 1000L);
+        run(cmd.suspend(1L, seq, seq, MAKER));
+
+        final SingleUserReport report = reports.singleUser(MAKER);
+
+        assertTrue(report.exists());
+        assertTrue(report.suspended(), "a suspended account is flagged in its report");
     }
 
     @Test
@@ -93,6 +106,17 @@ class ReportGeneratorTest {
         // Trades and fees only move value between balances and holds; totals are invariant.
         assertEquals(1000L, after.total(BASE), "base conserved: balances plus remaining ask hold");
         assertEquals(100_000L, after.total(QUOTE), "quote conserved including fees on account 0");
+        // The total breaks down into client balances, collected fees, and reserved holds.
+        assertEquals(18L, after.fees(QUOTE), "collected fees are reported separately");
+        assertEquals(0L, after.fees(BASE), "fees accrue only in the quote currency");
+        assertEquals(
+                after.total(QUOTE),
+                after.accountBalances(QUOTE) + after.fees(QUOTE) + after.ordersBalances(QUOTE),
+                "total is the sum of its quote breakdown");
+        assertEquals(
+                after.total(BASE),
+                after.accountBalances(BASE) + after.fees(BASE) + after.ordersBalances(BASE),
+                "total is the sum of its base breakdown");
     }
 
     @Test

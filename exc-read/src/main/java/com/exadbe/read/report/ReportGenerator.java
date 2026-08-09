@@ -20,7 +20,8 @@ public final class ReportGenerator {
 
     /** Balances and resting orders for {@code uid}. */
     public SingleUserReport singleUser(final long uid) {
-        final SingleUserReport report = new SingleUserReport(uid, engine.userExists(uid));
+        final boolean exists = engine.userExists(uid);
+        final SingleUserReport report = new SingleUserReport(uid, exists, exists && engine.isSuspended(uid));
         engine.forEachBalance((u, currency, balance) -> {
             if (u == uid) {
                 report.putBalance(currency, balance);
@@ -38,7 +39,13 @@ public final class ReportGenerator {
     /** Per-currency total of all balances plus funds reserved by resting orders. */
     public TotalCurrencyBalance totalCurrencyBalance() {
         final TotalCurrencyBalance total = new TotalCurrencyBalance();
-        engine.forEachBalance((uid, currency, balance) -> total.add(currency, balance));
+        engine.forEachBalance((uid, currency, balance) -> {
+            if (uid == DirectExchangeRisk.FEE_ACCOUNT_UID) {
+                total.addFee(currency, balance);
+            } else {
+                total.addAccountBalance(currency, balance);
+            }
+        });
         engine.forEachOrder((symbolId, orderId, ask, price, size, filled, reserveBidPrice, uid, timestamp) -> {
             final SymbolSpec spec = engine.symbolSpec(symbolId);
             if (spec == null) {
@@ -46,9 +53,9 @@ public final class ReportGenerator {
             }
             final long remaining = size - filled;
             if (ask) {
-                total.add(spec.baseCurrency(), DirectExchangeRisk.askHold(spec, remaining));
+                total.addOrderHold(spec.baseCurrency(), DirectExchangeRisk.askHold(spec, remaining));
             } else {
-                total.add(spec.quoteCurrency(), DirectExchangeRisk.bidHold(spec, remaining, reserveBidPrice));
+                total.addOrderHold(spec.quoteCurrency(), DirectExchangeRisk.bidHold(spec, remaining, reserveBidPrice));
             }
         });
         return total;
