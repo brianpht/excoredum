@@ -211,6 +211,7 @@ they index a ring:
 | `dedupClientCapacity`   | 2^12    | Preallocated dedup clients                |
 | `dedupWindow`           | 2^10    | Most recent commands retained per client  |
 | `orderPoolCapacity`     | 2^16    | Retained free order nodes (reuse pool)    |
+| `priceBucketCapacity`   | 2^13    | Retained free price levels (bucket pool)  |
 | `eventBufferCapacity`   | 2^10    | Preallocated matcher events per command   |
 | `journalSlotCount`      | 2^16    | Domain-event ring slots (power of two)    |
 | `journalSlotSize`       | 128     | Bytes per journal ring slot               |

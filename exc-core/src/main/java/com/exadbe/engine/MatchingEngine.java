@@ -13,6 +13,7 @@ import com.exadbe.engine.handlers.SuspendUserHandler;
 import com.exadbe.engine.orderbook.L2View;
 import com.exadbe.engine.orderbook.OrderBookNaive;
 import com.exadbe.engine.orderbook.OrderNodePool;
+import com.exadbe.engine.orderbook.PriceBucketPool;
 import com.exadbe.engine.risk.DirectExchangeRisk;
 import com.exadbe.engine.risk.SymbolSpec;
 import com.exadbe.engine.risk.SymbolSpecStore;
@@ -49,10 +50,12 @@ public final class MatchingEngine {
     private final DirectExchangeRisk risk;
     private final Int2ObjectHashMap<OrderBookNaive> books = new Int2ObjectHashMap<>();
     private final OrderNodePool orderPool;
+    private final PriceBucketPool bucketPool;
     private final L2View l2;
 
     private int[] symbolScratch = new int[0];
     private long lastPoolAllocations;
+    private long lastBucketPoolAllocations;
 
     public MatchingEngine(final CoreConfig config, final CoreMetrics metrics) {
         this.accounts = new AccountStore(config.accountCapacity());
@@ -65,6 +68,7 @@ public final class MatchingEngine {
         this.resumeUserHandler = new ResumeUserHandler(accounts);
         this.risk = new DirectExchangeRisk(accounts);
         this.orderPool = new OrderNodePool(config.orderPoolCapacity());
+        this.bucketPool = new PriceBucketPool(config.priceBucketCapacity());
         this.l2 = new L2View(config.l2MaxLevels());
     }
 
@@ -105,6 +109,10 @@ public final class MatchingEngine {
         if (orderPool.allocations() != lastPoolAllocations) {
             lastPoolAllocations = orderPool.allocations();
             metrics.onOrderPoolExhausted();
+        }
+        if (bucketPool.allocations() != lastBucketPoolAllocations) {
+            lastBucketPoolAllocations = bucketPool.allocations();
+            metrics.onPriceBucketPoolExhausted();
         }
 
         dedup.store(
@@ -383,7 +391,7 @@ public final class MatchingEngine {
     private OrderBookNaive bookForCreate(final int symbolId) {
         OrderBookNaive book = books.get(symbolId);
         if (book == null) {
-            book = new OrderBookNaive(symbolId, orderPool);
+            book = new OrderBookNaive(symbolId, orderPool, bucketPool);
             books.put(symbolId, book);
         }
         return book;
@@ -457,6 +465,11 @@ public final class MatchingEngine {
     /** Cumulative cold-path order-node allocations (pool misses); 0 in steady state. */
     public long orderPoolAllocations() {
         return orderPool.allocations();
+    }
+
+    /** Cumulative cold-path price-bucket allocations (pool misses); 0 in steady state. */
+    public long priceBucketPoolAllocations() {
+        return bucketPool.allocations();
     }
 
     /** Deterministic fingerprint of the full engine state, matching a snapshot checksum. */

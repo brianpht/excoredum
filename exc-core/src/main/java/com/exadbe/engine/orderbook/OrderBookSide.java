@@ -10,12 +10,14 @@ import org.agrona.collections.Long2ObjectHashMap;
 final class OrderBookSide {
 
     private final boolean ask;
+    private final PriceBucketPool bucketPool;
     private final Long2ObjectHashMap<PriceBucket> byPrice = new Long2ObjectHashMap<>();
 
     private PriceBucket best;
 
-    OrderBookSide(final boolean ask) {
+    OrderBookSide(final boolean ask, final PriceBucketPool bucketPool) {
         this.ask = ask;
+        this.bucketPool = bucketPool;
     }
 
     PriceBucket best() {
@@ -30,13 +32,13 @@ final class OrderBookSide {
         return byPrice.size();
     }
 
-    /** Returns the bucket for {@code price}, inserting a new one in sorted order. */
+    /** Returns the bucket for {@code price}, inserting a pooled one in sorted order. */
     PriceBucket getOrCreate(final long price) {
         final PriceBucket existing = byPrice.get(price);
         if (existing != null) {
             return existing;
         }
-        final PriceBucket bucket = new PriceBucket();
+        final PriceBucket bucket = bucketPool.acquire();
         bucket.reset(price);
         insertSorted(bucket);
         byPrice.put(price, bucket);
@@ -55,6 +57,7 @@ final class OrderBookSide {
             worse.better = better;
         }
         byPrice.remove(bucket.price);
+        bucketPool.release(bucket);
     }
 
     private void insertSorted(final PriceBucket bucket) {

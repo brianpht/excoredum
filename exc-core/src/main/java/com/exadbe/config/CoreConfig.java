@@ -23,6 +23,14 @@ public final class CoreConfig {
     /** Default resting-order pool capacity (retained free nodes). */
     public static final int DEFAULT_ORDER_POOL_CAPACITY = 1 << 16;
 
+    /**
+     * Default price-bucket pool capacity (retained free price levels). A price
+     * level aggregates many orders, so far fewer buckets than order nodes are
+     * live at once; 2^13 covers thousands of concurrent levels across all
+     * symbols at a few hundred KB.
+     */
+    public static final int DEFAULT_PRICE_BUCKET_CAPACITY = 1 << 13;
+
     /** Default maximum L2 depth returned per side for an order-book request. */
     public static final int DEFAULT_L2_MAX_LEVELS = 32;
 
@@ -40,6 +48,7 @@ public final class CoreConfig {
     private final int dedupClientCapacity;
     private final int dedupWindow;
     private final int orderPoolCapacity;
+    private final int priceBucketCapacity;
     private final int l2MaxLevels;
     private final int eventBufferCapacity;
     private final int journalSlotCount;
@@ -51,6 +60,7 @@ public final class CoreConfig {
             final int dedupClientCapacity,
             final int dedupWindow,
             final int orderPoolCapacity,
+            final int priceBucketCapacity,
             final int l2MaxLevels,
             final int eventBufferCapacity,
             final int journalSlotCount,
@@ -60,6 +70,7 @@ public final class CoreConfig {
         this.dedupClientCapacity = dedupClientCapacity;
         this.dedupWindow = dedupWindow;
         this.orderPoolCapacity = orderPoolCapacity;
+        this.priceBucketCapacity = priceBucketCapacity;
         this.l2MaxLevels = l2MaxLevels;
         this.eventBufferCapacity = eventBufferCapacity;
         this.journalSlotCount = journalSlotCount;
@@ -73,6 +84,7 @@ public final class CoreConfig {
                 DEFAULT_DEDUP_CLIENT_CAPACITY,
                 DEFAULT_DEDUP_WINDOW,
                 DEFAULT_ORDER_POOL_CAPACITY,
+                DEFAULT_PRICE_BUCKET_CAPACITY,
                 DEFAULT_L2_MAX_LEVELS,
                 DEFAULT_EVENT_BUFFER_CAPACITY,
                 DEFAULT_JOURNAL_SLOT_COUNT,
@@ -97,6 +109,10 @@ public final class CoreConfig {
 
     public int orderPoolCapacity() {
         return orderPoolCapacity;
+    }
+
+    public int priceBucketCapacity() {
+        return priceBucketCapacity;
     }
 
     public int l2MaxLevels() {

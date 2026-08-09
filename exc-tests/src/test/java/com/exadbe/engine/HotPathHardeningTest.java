@@ -47,6 +47,28 @@ class HotPathHardeningTest {
     }
 
     @Test
+    void priceBucketPoolReusesBucketsAcrossPlaceCancelCycles() {
+        final MatchingEngine engine = new MatchingEngine(CoreConfig.defaults(), new CoreMetrics());
+        final Commands c = new Commands();
+        final CommandOutcome out = new CommandOutcome();
+        long seq = 0L;
+        engine.process(c.addSymbol(CLIENT, seq, seq++, SYM, BASE, QUOTE, 1L, 1L), 1L, out);
+        engine.process(c.addUser(CLIENT, seq, seq++, UID), 1L, out);
+        engine.process(c.adjust(CLIENT, seq, seq++, UID, QUOTE, 1_000_000_000L), 1L, out);
+
+        for (int i = 0; i < 2000; i++) {
+            final long orderId = 1000L + i;
+            engine.process(c.placeGtc(CLIENT, seq, seq++, SYM, orderId, false, 50L, 10L, 50L, UID), 1L, out);
+            engine.process(c.cancel(CLIENT, seq, seq++, SYM, orderId, UID), 1L, out);
+        }
+        // One price level comes and goes per cycle, so the pooled bucket is reused
+        // and the pool allocates only a handful of buckets in total.
+        assertTrue(
+                engine.priceBucketPoolAllocations() <= 4L,
+                "bucket pool should reuse levels; allocations=" + engine.priceBucketPoolAllocations());
+    }
+
+    @Test
     void commandOutcomeFlagsEventBufferGrowth() {
         final CommandOutcome out = new CommandOutcome(2);
         out.reset(0L, 0L);

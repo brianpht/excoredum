@@ -18,17 +18,23 @@ public final class OrderBookNaive {
 
     private final int symbolId;
     private final OrderNodePool pool;
-    private final OrderBookSide askSide = new OrderBookSide(true);
-    private final OrderBookSide bidSide = new OrderBookSide(false);
+    private final OrderBookSide askSide;
+    private final OrderBookSide bidSide;
     private final Long2ObjectHashMap<OrderNode> idMap = new Long2ObjectHashMap<>();
 
     public OrderBookNaive(final int symbolId) {
-        this(symbolId, new OrderNodePool(1024));
+        this(symbolId, new OrderNodePool(1024), new PriceBucketPool(1024));
     }
 
     public OrderBookNaive(final int symbolId, final OrderNodePool pool) {
+        this(symbolId, pool, new PriceBucketPool(1024));
+    }
+
+    public OrderBookNaive(final int symbolId, final OrderNodePool pool, final PriceBucketPool bucketPool) {
         this.symbolId = symbolId;
         this.pool = pool;
+        this.askSide = new OrderBookSide(true, bucketPool);
+        this.bidSide = new OrderBookSide(false, bucketPool);
     }
 
     /** Places a GTC order: match marketable portion, then rest the remainder. */

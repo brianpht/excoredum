@@ -92,7 +92,7 @@ excoredum/
 |       |-- engine/
 |       |   |-- MatchingEngine.java          Dispatch + dedup + settlement (cluster-independent)
 |       |   |-- handlers/                     AddUser, BalanceAdjustment, AddSymbol, SuspendUser, ResumeUser
-|       |   |-- orderbook/                    OrderBookNaive, OrderBookSide, PriceBucket, OrderNode(+Pool), L2View
+|       |   |-- orderbook/                    OrderBookNaive, OrderBookSide, PriceBucket(+Pool), OrderNode(+Pool), L2View
 |       |   +-- risk/                         SymbolSpec(+Store), DirectExchangeRisk (fees + fee account)
 |       |-- core/
 |       |   |-- MatchingService.java         ClusteredService: decode, apply, ACK, emit events + journal, snapshot
@@ -275,7 +275,7 @@ free of Aeron so it runs in tests; `MatchingService` adapts it to the cluster.
 | `SuspendUserHandler` / `ResumeUserHandler` | Block / re-enable a user's order placement       |
 | `OrderBookNaive`    | Per-symbol price-time order book: place, match, cancel, move, reduce, L2 |
 | `OrderBookSide`     | One side as a best-first linked list of price buckets plus a price map   |
-| `PriceBucket`       | A FIFO queue of resting orders at one price                             |
+| `PriceBucket` / `PriceBucketPool` | A FIFO queue of resting orders at one price, and its reuse pool |
 | `OrderNode` / `OrderNodePool` | Intrusive resting-order node and its reuse pool                |
 | `DirectExchangeRisk`| Reserve / release / settle funds and fees; fee account (uid 0)           |
 | `SymbolSpecStore`   | Symbol specs keyed by symbolId, sorted iteration for snapshots           |
@@ -447,10 +447,11 @@ exchange-core's naive order book onto Agrona structures (no `TreeMap`, no stream
   reserved price (that would leave the hold insufficient), and a marketable move
   matches immediately.
 
-Resting nodes come from an `OrderNodePool` (a grow-to-high-water free stack), so
-steady-state matching allocates nothing after warmup. Matcher events accumulate
-into the `CommandOutcome` buffer, which is preallocated and only grows on a cold
-path (tracked by a metric).
+Resting nodes come from an `OrderNodePool` and price levels from a
+`PriceBucketPool` (both grow-to-high-water free stacks), so steady-state matching
+allocates nothing after warmup. Matcher events accumulate into the
+`CommandOutcome` buffer, which is preallocated and only grows on a cold path
+(tracked by a metric).
 
 ---
 
@@ -677,6 +678,7 @@ values.
 | `dedupClientCapacity` | 2^12    | Preallocated dedup clients                  |
 | `dedupWindow`         | 2^10    | Most recent commands retained per client    |
 | `orderPoolCapacity`   | 2^16    | Retained free order nodes (reuse pool)      |
+| `priceBucketCapacity` | 2^13    | Retained free price levels (bucket pool)    |
 | `eventBufferCapacity` | 2^10    | Preallocated matcher events per command     |
 | `journalSlotCount`    | 2^16    | Domain-event ring slots (power of two)      |
 | `journalSlotSize`     | 128     | Bytes per journal ring slot                 |

@@ -25,6 +25,7 @@ public final class CoreMetrics {
     private long snapshotsLoaded;
     private long eventBufferOverflows;
     private long orderPoolExhaustions;
+    private long priceBucketPoolExhaustions;
     private long lastSnapshotWriteMillis;
     private long lastSnapshotReadMillis;
 
@@ -82,6 +83,13 @@ public final class CoreMetrics {
         sink.increment(Counter.ORDER_POOL_EXHAUSTED);
     }
 
+    // The price-bucket pool was empty when a fresh price level was needed,
+    // forcing a cold-path allocation. A rising count means the pool is undersized.
+    public void onPriceBucketPoolExhausted() {
+        priceBucketPoolExhaustions++;
+        sink.increment(Counter.PRICE_BUCKET_POOL_EXHAUSTED);
+    }
+
     public void snapshotWriteMillis(final long millis) {
         this.lastSnapshotWriteMillis = millis;
         sink.set(Gauge.SNAPSHOT_WRITE_MILLIS, millis);
@@ -122,6 +130,10 @@ public final class CoreMetrics {
 
     public long orderPoolExhaustions() {
         return orderPoolExhaustions;
+    }
+
+    public long priceBucketPoolExhaustions() {
+        return priceBucketPoolExhaustions;
     }
 
     public long lastSnapshotWriteMillis() {
