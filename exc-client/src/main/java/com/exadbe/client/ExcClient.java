@@ -8,6 +8,8 @@ import com.exadbe.protocol.MessageHeaderEncoder;
 import com.exadbe.protocol.OrderAction;
 import com.exadbe.protocol.OrderCommandType;
 import com.exadbe.protocol.OrderType;
+import com.exadbe.protocol.ReduceEventDecoder;
+import com.exadbe.protocol.RejectEventDecoder;
 import com.exadbe.protocol.TradeEventDecoder;
 import io.aeron.cluster.client.AeronCluster;
 import io.aeron.cluster.client.EgressListener;
@@ -49,8 +51,12 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
     private final CommandResultDecoder resultDecoder = new CommandResultDecoder();
     private final TradeEventDecoder tradeDecoder = new TradeEventDecoder();
+    private final ReduceEventDecoder reduceDecoder = new ReduceEventDecoder();
+    private final RejectEventDecoder rejectDecoder = new RejectEventDecoder();
 
     private TradeEventListener tradeListener = TradeEventListener.NONE;
+    private ReduceEventListener reduceListener = ReduceEventListener.NONE;
+    private RejectEventListener rejectListener = RejectEventListener.NONE;
 
     private final Long2ObjectHashMap<PendingCommand> pending;
     private final PendingCommand[] pool;
@@ -211,6 +217,16 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     /** Registers a listener for trade events; replaces any previous listener. */
     public void tradeListener(final TradeEventListener listener) {
         this.tradeListener = listener == null ? TradeEventListener.NONE : listener;
+    }
+
+    /** Registers a listener for reduce events; replaces any previous listener. */
+    public void reduceListener(final ReduceEventListener listener) {
+        this.reduceListener = listener == null ? ReduceEventListener.NONE : listener;
+    }
+
+    /** Registers a listener for reject events; replaces any previous listener. */
+    public void rejectListener(final RejectEventListener listener) {
+        this.rejectListener = listener == null ? RejectEventListener.NONE : listener;
     }
 
     /** Submits a GTC limit order. */
@@ -514,6 +530,38 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                     tradeDecoder.price(),
                     tradeDecoder.size(),
                     tradeDecoder.makerOrderCompleted() != 0);
+            return;
+        }
+        if (templateId == ReduceEventDecoder.TEMPLATE_ID) {
+            reduceDecoder.wrap(
+                    buffer,
+                    offset + MessageHeaderDecoder.ENCODED_LENGTH,
+                    headerDecoder.blockLength(),
+                    headerDecoder.version());
+            reduceListener.onReduce(
+                    reduceDecoder.commandIdHi(),
+                    reduceDecoder.commandIdLo(),
+                    reduceDecoder.eventIndex(),
+                    reduceDecoder.symbolId(),
+                    reduceDecoder.orderId(),
+                    reduceDecoder.uid(),
+                    reduceDecoder.reducedBy());
+            return;
+        }
+        if (templateId == RejectEventDecoder.TEMPLATE_ID) {
+            rejectDecoder.wrap(
+                    buffer,
+                    offset + MessageHeaderDecoder.ENCODED_LENGTH,
+                    headerDecoder.blockLength(),
+                    headerDecoder.version());
+            rejectListener.onReject(
+                    rejectDecoder.commandIdHi(),
+                    rejectDecoder.commandIdLo(),
+                    rejectDecoder.eventIndex(),
+                    rejectDecoder.symbolId(),
+                    rejectDecoder.orderId(),
+                    rejectDecoder.uid(),
+                    rejectDecoder.rejectedSize());
             return;
         }
         if (templateId != CommandResultDecoder.TEMPLATE_ID) {

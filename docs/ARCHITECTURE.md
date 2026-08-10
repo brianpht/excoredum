@@ -121,6 +121,8 @@ excoredum/
 |       |-- config/ClientConfig.java        Immutable client configuration (builder)
 |       |-- ResultHandler.java              Result callback correlated by command id
 |       |-- TradeEventListener.java         Trade-event callback
+|       |-- ReduceEventListener.java        Reduce-event callback
+|       |-- RejectEventListener.java        Reject-event callback
 |       |-- PendingCommand.java             Pooled in-flight command bytes for verbatim resend
 |       +-- BackpressureException.java      Signals a full in-flight window
 |
@@ -305,14 +307,17 @@ read replica.
 The client-side SDK. It depends only on the `exc-protocol` wire contract, never on
 `exc-core`. It adds leader-change handling, idempotent retry (reusing the original
 `commandId`), asynchronous request / response correlation, explicit backpressure
-signalling, and egress trade-event delivery on top of an Aeron cluster client.
+signalling, and egress trade / reduce / reject event delivery on top of an Aeron
+cluster client.
 
 | Component               | Responsibility                                                    |
 |-------------------------|-------------------------------------------------------------------|
-| `ExcClient`             | Async submit / poll: resend on leader change, correlate results by command id, decode trade events |
+| `ExcClient`             | Async submit / poll: resend on leader change, correlate results by command id, decode trade / reduce / reject events |
 | `ClientConfig`          | Immutable client configuration (endpoints, timeouts, retry, in-flight window) |
 | `ResultHandler`         | Callback invoked when a `CommandResult` correlates to a request    |
 | `TradeEventListener`    | Callback invoked when a `TradeEvent` is delivered on egress        |
+| `ReduceEventListener`   | Callback invoked when a `ReduceEvent` is delivered on egress       |
+| `RejectEventListener`   | Callback invoked when a `RejectEvent` is delivered on egress       |
 | `PendingCommand`        | Pooled holder of an in-flight command's bytes for verbatim resend  |
 | `BackpressureException` | Signals a full in-flight window rather than silently dropping a command |
 
@@ -720,6 +725,7 @@ snapshot write / read time. The hot path only increments a counter.
 | `ExcClientIntegrationTest`           | Integration | Client submit / poll, command-id correlation            |
 | `ExcAccountsIntegrationTest`         | Integration | Account lifecycle result codes end to end               |
 | `ExcOrderBookIntegrationTest`        | Integration | Resting maker matched by taker, trade on egress         |
+| `ExcReduceRejectEventsIntegrationTest` | Integration | Cancel / reduce / IOC / FOK reduce and reject on egress |
 | `BenchHarnessSmokeTest`              | Integration | End-to-end latency harness boots and measures           |
 | `XcoreBenchSmokeTest`                | Integration | exchange-core replay cross-validates; pipeline boots    |
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth       |
