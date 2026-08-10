@@ -72,10 +72,10 @@ class HotPathHardeningTest {
     void commandOutcomeFlagsEventBufferGrowth() {
         final CommandOutcome out = new CommandOutcome(2);
         out.reset(0L, 0L);
-        out.addReject(SYM, 1L, UID, 1L);
-        out.addReject(SYM, 2L, UID, 1L);
+        out.addReject(SYM, 1L, UID, 1L, 0L);
+        out.addReject(SYM, 2L, UID, 1L, 0L);
         assertFalse(out.grewEventBuffer(), "two events fit the preallocated buffer");
-        out.addReject(SYM, 3L, UID, 1L);
+        out.addReject(SYM, 3L, UID, 1L, 0L);
         assertTrue(out.grewEventBuffer(), "the third event overflowed and grew the buffer");
         out.reset(0L, 0L);
         assertFalse(out.grewEventBuffer(), "the flag clears on reset");

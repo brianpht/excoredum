@@ -8,7 +8,8 @@ package com.exadbe.client;
 @FunctionalInterface
 public interface RejectEventListener {
 
-    RejectEventListener NONE = (commandIdHi, commandIdLo, eventIndex, symbolId, orderId, uid, rejectedSize) -> {};
+    RejectEventListener NONE =
+            (commandIdHi, commandIdLo, eventIndex, symbolId, orderId, uid, rejectedSize, price) -> {};
 
     void onReject(
             long commandIdHi,
@@ -17,5 +18,6 @@ public interface RejectEventListener {
             int symbolId,
             long orderId,
             long uid,
-            long rejectedSize);
+            long rejectedSize,
+            long price);
 }

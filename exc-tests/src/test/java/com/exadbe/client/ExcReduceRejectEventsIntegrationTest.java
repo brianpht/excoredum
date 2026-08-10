@@ -1,6 +1,8 @@
 package com.exadbe.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.exadbe.client.config.ClientConfig;
 import com.exadbe.config.CoreConfig;
@@ -59,12 +61,15 @@ class ExcReduceRejectEventsIntegrationTest {
         final AtomicLong reduceOrderId = new AtomicLong(-1L);
         final AtomicLong reduceUid = new AtomicLong(-1L);
         final AtomicLong reducedBy = new AtomicLong(-1L);
+        final AtomicLong reducePrice = new AtomicLong(-1L);
         final AtomicLong reduceCommandIdLo = new AtomicLong(-1L);
+        final boolean[] reduceOrderCompleted = {false};
 
         final AtomicInteger rejects = new AtomicInteger();
         final AtomicLong rejectOrderId = new AtomicLong(-1L);
         final AtomicLong rejectUid = new AtomicLong(-1L);
         final AtomicLong rejectedSize = new AtomicLong(-1L);
+        final AtomicLong rejectPrice = new AtomicLong(-1L);
         final AtomicLong rejectCommandIdLo = new AtomicLong(-1L);
 
         final AtomicInteger trades = new AtomicInteger();
@@ -82,22 +87,25 @@ class ExcReduceRejectEventsIntegrationTest {
                 .build();
 
         try (ExcClient client = new ExcClient(config, handler)) {
-            client.reduceListener((idHi, idLo, index, symbolId, orderId, uid, reduced) -> {
+            client.reduceListener((idHi, idLo, index, symbolId, orderId, uid, reduced, price, orderCompleted) -> {
                 assertEquals(CLIENT_ID, idHi);
                 assertEquals(SYM, symbolId);
                 reduces.incrementAndGet();
                 reduceOrderId.set(orderId);
                 reduceUid.set(uid);
                 reducedBy.set(reduced);
+                reducePrice.set(price);
+                reduceOrderCompleted[0] = orderCompleted;
                 reduceCommandIdLo.set(idLo);
             });
-            client.rejectListener((idHi, idLo, index, symbolId, orderId, uid, rejected) -> {
+            client.rejectListener((idHi, idLo, index, symbolId, orderId, uid, rejected, price) -> {
                 assertEquals(CLIENT_ID, idHi);
                 assertEquals(SYM, symbolId);
                 rejects.incrementAndGet();
                 rejectOrderId.set(orderId);
                 rejectUid.set(uid);
                 rejectedSize.set(rejected);
+                rejectPrice.set(price);
                 rejectCommandIdLo.set(idLo);
             });
             client.tradeListener(
@@ -122,6 +130,8 @@ class ExcReduceRejectEventsIntegrationTest {
             assertEquals(10L, reduceOrderId.get());
             assertEquals(MAKER, reduceUid.get());
             assertEquals(10L, reducedBy.get());
+            assertEquals(100L, reducePrice.get());
+            assertTrue(reduceOrderCompleted[0], "a cancel completes the order");
             assertEquals(cancelId, reduceCommandIdLo.get());
 
             // REDUCE_ORDER shrinks the resting order; the remainder stays reducible.
@@ -133,6 +143,8 @@ class ExcReduceRejectEventsIntegrationTest {
             awaitCount(client, reduces, 2);
             assertEquals(11L, reduceOrderId.get());
             assertEquals(3L, reducedBy.get());
+            assertEquals(101L, reducePrice.get());
+            assertFalse(reduceOrderCompleted[0], "a partial reduce leaves the order resting");
             assertEquals(partialReduceId, reduceCommandIdLo.get());
 
             final long finalCancelId = client.cancelOrder(SYM, 11L, MAKER);
@@ -141,6 +153,8 @@ class ExcReduceRejectEventsIntegrationTest {
             awaitCount(client, reduces, 3);
             assertEquals(11L, reduceOrderId.get());
             assertEquals(7L, reducedBy.get());
+            assertEquals(101L, reducePrice.get());
+            assertTrue(reduceOrderCompleted[0], "cancelling the remainder completes the order");
             assertEquals(finalCancelId, reduceCommandIdLo.get());
 
             // IOC ask crossing a resting bid: the unmatched remainder is rejected.
@@ -155,6 +169,7 @@ class ExcReduceRejectEventsIntegrationTest {
             assertEquals(13L, rejectOrderId.get());
             assertEquals(TAKER, rejectUid.get());
             assertEquals(6L, rejectedSize.get());
+            assertEquals(95L, rejectPrice.get(), "reject carries the IOC limit price");
             assertEquals(iocId, rejectCommandIdLo.get());
 
             // FOK-BUDGET against an empty book is rejected wholesale.
@@ -166,6 +181,7 @@ class ExcReduceRejectEventsIntegrationTest {
             assertEquals(14L, rejectOrderId.get());
             assertEquals(TAKER, rejectUid.get());
             assertEquals(5L, rejectedSize.get());
+            assertEquals(1_000L, rejectPrice.get(), "reject carries the FOK-BUDGET budget");
             assertEquals(fokId, rejectCommandIdLo.get());
         }
     }

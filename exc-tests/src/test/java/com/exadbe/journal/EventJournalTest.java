@@ -63,8 +63,8 @@ class EventJournalTest {
         final CommandOutcome out = new CommandOutcome();
         out.reset(0L, 1L);
         out.addTrade(SYM, 100L, 11L, 22L, 500L, 3L, true, false, 0L, true, 600L);
-        out.addReduce(SYM, 101L, 33L, 4L, true, 600L);
-        out.addReject(SYM, 102L, 44L, 5L);
+        out.addReduce(SYM, 101L, 33L, 4L, true, 600L, 550L, false);
+        out.addReject(SYM, 102L, 44L, 5L, 560L);
 
         final long logPosition = 9_000L;
         assertTrue(journal.emit(out, logPosition, 1234L));
@@ -85,10 +85,12 @@ class EventJournalTest {
         assertEquals(MatcherEventType.REDUCE, events.get(1).type);
         assertEquals(1, events.get(1).eventIndex);
         assertEquals(101L, events.get(1).makerOrderId);
+        assertEquals(550L, events.get(1).price);
 
         assertEquals(MatcherEventType.REJECT, events.get(2).type);
         assertEquals(2, events.get(2).eventIndex);
         assertEquals(5L, events.get(2).size);
+        assertEquals(560L, events.get(2).price);
     }
 
     @Test

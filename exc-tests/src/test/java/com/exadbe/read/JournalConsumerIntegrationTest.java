@@ -58,8 +58,8 @@ class JournalConsumerIntegrationTest {
             final CommandOutcome out = new CommandOutcome();
             out.reset(0L, 1L);
             out.addTrade(SYM, 100L, 11L, 22L, 500L, 3L, true, false, 0L, true, 600L);
-            out.addReduce(SYM, 101L, 33L, 4L, true, 600L);
-            out.addReject(SYM, 102L, 44L, 5L);
+            out.addReduce(SYM, 101L, 33L, 4L, true, 600L, 550L, false);
+            out.addReject(SYM, 102L, 44L, 5L, 560L);
 
             // First delivery: three unique committed events.
             journal.emit(out, LOG_POSITION, 42L);

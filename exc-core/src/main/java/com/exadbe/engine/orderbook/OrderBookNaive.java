@@ -53,7 +53,7 @@ public final class OrderBookNaive {
         }
         if (idMap.containsKey(orderId)) {
             // Duplicate id: matched what it could, but cannot rest; reject remainder.
-            out.addReject(symbolId, orderId, uid, size - filled);
+            out.addReject(symbolId, orderId, uid, size - filled, price);
             return filled;
         }
         final OrderNode node = pool.acquire();
@@ -75,7 +75,7 @@ public final class OrderBookNaive {
         final long filled = matchInstantly(ask, price, size, 0L, uid, reserveBidPrice, true, out);
         final long rejected = size - filled;
         if (rejected > 0L) {
-            out.addReject(symbolId, orderId, uid, rejected);
+            out.addReject(symbolId, orderId, uid, rejected, price);
         }
         return filled;
     }
@@ -91,7 +91,7 @@ public final class OrderBookNaive {
             final CommandOutcome out) {
         final long cost = budgetToFill(ask, size);
         if (cost == BUDGET_UNAVAILABLE || !budgetSatisfied(ask, cost, budget)) {
-            out.addReject(symbolId, orderId, uid, size);
+            out.addReject(symbolId, orderId, uid, size, budget);
             return 0L;
         }
         return matchInstantly(ask, 0L, size, 0L, uid, reserveBidPrice, false, out);
@@ -111,7 +111,7 @@ public final class OrderBookNaive {
         if (bucket.numOrders == 0) {
             side.remove(bucket);
         }
-        out.addReduce(symbolId, orderId, uid, reducedBy, !node.ask, node.reserveBidPrice);
+        out.addReduce(symbolId, orderId, uid, reducedBy, !node.ask, node.reserveBidPrice, node.price, true);
         pool.release(node);
         return CommandResultCode.SUCCESS;
     }
@@ -136,13 +136,13 @@ public final class OrderBookNaive {
             if (bucket.numOrders == 0) {
                 side.remove(bucket);
             }
-            out.addReduce(symbolId, orderId, uid, reduceBy, !node.ask, node.reserveBidPrice);
+            out.addReduce(symbolId, orderId, uid, reduceBy, !node.ask, node.reserveBidPrice, node.price, true);
             pool.release(node);
             return CommandResultCode.SUCCESS;
         }
         node.size -= reduceBy;
         bucket.totalVolume -= reduceBy;
-        out.addReduce(symbolId, orderId, uid, reduceBy, !node.ask, node.reserveBidPrice);
+        out.addReduce(symbolId, orderId, uid, reduceBy, !node.ask, node.reserveBidPrice, node.price, false);
         return CommandResultCode.SUCCESS;
     }
 

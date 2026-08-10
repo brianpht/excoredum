@@ -8,8 +8,17 @@ package com.exadbe.client;
 @FunctionalInterface
 public interface ReduceEventListener {
 
-    ReduceEventListener NONE = (commandIdHi, commandIdLo, eventIndex, symbolId, orderId, uid, reducedBy) -> {};
+    ReduceEventListener NONE =
+            (commandIdHi, commandIdLo, eventIndex, symbolId, orderId, uid, reducedBy, price, orderCompleted) -> {};
 
     void onReduce(
-            long commandIdHi, long commandIdLo, int eventIndex, int symbolId, long orderId, long uid, long reducedBy);
+            long commandIdHi,
+            long commandIdLo,
+            int eventIndex,
+            int symbolId,
+            long orderId,
+            long uid,
+            long reducedBy,
+            long price,
+            boolean orderCompleted);
 }

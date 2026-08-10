@@ -2,6 +2,7 @@ package com.exadbe.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.exadbe.core.CommandOutcome;
 import com.exadbe.core.CommandOutcome.EventKind;
@@ -60,8 +61,10 @@ class OrderBookConformanceTest {
         final long filled = book.matchIoc(2L, false, 100L, 15L, HIGH_RESERVE, TAKER, out);
 
         assertEquals(10L, filled);
-        assertEquals(EventKind.REJECT, out.event(out.eventCount() - 1).kind());
-        assertEquals(5L, out.event(out.eventCount() - 1).size());
+        final CommandOutcome.EventRecord reject = out.event(out.eventCount() - 1);
+        assertEquals(EventKind.REJECT, reject.kind());
+        assertEquals(5L, reject.size());
+        assertEquals(100L, reject.price(), "reject carries the active order's limit price");
         assertEquals(0, book.orderCount());
     }
 
@@ -76,6 +79,7 @@ class OrderBookConformanceTest {
         assertEquals(1, out.eventCount());
         assertEquals(EventKind.REJECT, out.event(0).kind());
         assertEquals(10L, out.event(0).size());
+        assertEquals(10_000L, out.event(0).price(), "reject carries the budget for FOK-BUDGET");
         assertEquals(1, book.orderCount());
     }
 
@@ -108,6 +112,8 @@ class OrderBookConformanceTest {
         assertEquals(1, out.eventCount());
         assertEquals(EventKind.REDUCE, out.event(0).kind());
         assertEquals(10L, out.event(0).size());
+        assertEquals(100L, out.event(0).price(), "reduce carries the resting price");
+        assertTrue(out.event(0).makerCompleted(), "a cancel completes the order");
         assertEquals(0, book.orderCount());
     }
 
@@ -121,6 +127,8 @@ class OrderBookConformanceTest {
         assertEquals(CommandResultCode.SUCCESS, code);
         assertEquals(EventKind.REDUCE, out.event(0).kind());
         assertEquals(4L, out.event(0).size());
+        assertEquals(100L, out.event(0).price(), "reduce carries the resting price");
+        assertFalse(out.event(0).makerCompleted(), "a partial reduce leaves the order resting");
         assertEquals(1, book.orderCount());
     }
 

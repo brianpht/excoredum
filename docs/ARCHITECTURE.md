@@ -123,6 +123,10 @@ excoredum/
 |       |-- TradeEventListener.java         Trade-event callback
 |       |-- ReduceEventListener.java        Reduce-event callback
 |       |-- RejectEventListener.java        Reject-event callback
+|       |-- OrderBookListener.java          L2 snapshot callback
+|       |-- OrderBookSnapshot.java          Reusable holder for one L2 snapshot
+|       |-- TradeGroupListener.java         Per-command grouped-fills callback
+|       |-- TradeGroup.java                 Reusable holder for one command's fills
 |       |-- PendingCommand.java             Pooled in-flight command bytes for verbatim resend
 |       +-- BackpressureException.java      Signals a full in-flight window
 |
@@ -258,8 +262,12 @@ Optional fields (`presence="optional"`) carry order and account operands that ar
 absent for other command types, and prepare the schema for backward-compatible
 evolution. Fee and user-status fields were added at schema version 2 with
 `sinceVersion`, so a version-1 snapshot still loads (missing fields default to
-zero fee / active). Enums: `OrderCommandType`, `OrderAction`, `OrderType`,
-`MatcherEventType`, `CommandResultCode`.
+zero fee / active). Schema version 3 added `CommandResult.eventCount` (the number
+of matcher-event frames that follow the result; zero on duplicate re-sends, L2
+not counted), `ReduceEvent.price` / `ReduceEvent.orderCompleted` (resting price;
+whether the order was fully removed), and `RejectEvent.price` (the active order
+price, or the budget for FOK-BUDGET). Enums: `OrderCommandType`, `OrderAction`,
+`OrderType`, `MatcherEventType`, `CommandResultCode`.
 
 ### exc-core - Deterministic State Machine
 
@@ -307,17 +315,21 @@ read replica.
 The client-side SDK. It depends only on the `exc-protocol` wire contract, never on
 `exc-core`. It adds leader-change handling, idempotent retry (reusing the original
 `commandId`), asynchronous request / response correlation, explicit backpressure
-signalling, and egress trade / reduce / reject event delivery on top of an Aeron
-cluster client.
+signalling, and full egress event delivery (trade / reduce / reject frames, L2
+snapshots, and per-command trade grouping) on top of an Aeron cluster client.
 
 | Component               | Responsibility                                                    |
 |-------------------------|-------------------------------------------------------------------|
-| `ExcClient`             | Async submit / poll: resend on leader change, correlate results by command id, decode trade / reduce / reject events |
+| `ExcClient`             | Async submit / poll: resend on leader change, correlate results by command id, decode every egress frame, group fills per command |
 | `ClientConfig`          | Immutable client configuration (endpoints, timeouts, retry, in-flight window) |
 | `ResultHandler`         | Callback invoked when a `CommandResult` correlates to a request    |
-| `TradeEventListener`    | Callback invoked when a `TradeEvent` is delivered on egress        |
+| `TradeEventListener`    | Callback invoked per fill when a `TradeEvent` is delivered on egress |
 | `ReduceEventListener`   | Callback invoked when a `ReduceEvent` is delivered on egress       |
 | `RejectEventListener`   | Callback invoked when a `RejectEvent` is delivered on egress       |
+| `OrderBookListener`     | Callback invoked with an `OrderBookSnapshot` when an `L2MarketData` frame arrives |
+| `OrderBookSnapshot`     | Reusable holder for one L2 snapshot (grow-only arrays; copy in the callback to keep) |
+| `TradeGroupListener`    | Callback invoked once per command when its fills are complete      |
+| `TradeGroup`            | Reusable holder for one command's fills; flushed on `CommandResult.eventCount` completion or a command boundary |
 | `PendingCommand`        | Pooled holder of an in-flight command's bytes for verbatim resend  |
 | `BackpressureException` | Signals a full in-flight window rather than silently dropping a command |
 
@@ -725,7 +737,8 @@ snapshot write / read time. The hot path only increments a counter.
 | `ExcClientIntegrationTest`           | Integration | Client submit / poll, command-id correlation            |
 | `ExcAccountsIntegrationTest`         | Integration | Account lifecycle result codes end to end               |
 | `ExcOrderBookIntegrationTest`        | Integration | Resting maker matched by taker, trade on egress         |
-| `ExcReduceRejectEventsIntegrationTest` | Integration | Cancel / reduce / IOC / FOK reduce and reject on egress |
+| `ExcReduceRejectEventsIntegrationTest` | Integration | Cancel / reduce / IOC / FOK reduce and reject on egress, with price and completion |
+| `ExcEgressEventsIntegrationTest`     | Integration | Taker sweep as one trade group; L2 snapshot on egress   |
 | `BenchHarnessSmokeTest`              | Integration | End-to-end latency harness boots and measures           |
 | `XcoreBenchSmokeTest`                | Integration | exchange-core replay cross-validates; pipeline boots    |
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth       |

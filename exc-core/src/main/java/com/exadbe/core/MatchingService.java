@@ -215,8 +215,10 @@ public final class MatchingService implements ClusteredService {
                 .resultCode(outcome.resultCode())
                 .uid(outcome.hasUid() ? outcome.uid() : CommandResultEncoder.uidNullValue())
                 .orderId(outcome.hasOrderId() ? outcome.orderId() : CommandResultEncoder.orderIdNullValue())
-                .filledSize(
-                        outcome.hasFilledSize() ? outcome.filledSize() : CommandResultEncoder.filledSizeNullValue());
+                .filledSize(outcome.hasFilledSize() ? outcome.filledSize() : CommandResultEncoder.filledSizeNullValue())
+                // Duplicates carry no events (they are not re-emitted), so the count
+                // stays the zero left by the dedup cache path.
+                .eventCount(outcome.eventCount());
 
         final int msgLength = MessageHeaderEncoder.ENCODED_LENGTH + resultEncoder.encodedLength();
         offerToSession(session, egressBuffer, msgLength);
@@ -254,7 +256,9 @@ public final class MatchingService implements ClusteredService {
                             .symbolId(e.symbolId())
                             .orderId(e.makerOrderId())
                             .uid(e.makerUid())
-                            .reducedBy(e.size());
+                            .reducedBy(e.size())
+                            .price(e.price())
+                            .orderCompleted((short) (e.makerCompleted() ? 1 : 0));
                     length = MessageHeaderEncoder.ENCODED_LENGTH + reduceEncoder.encodedLength();
                 }
                 default -> {
@@ -267,7 +271,8 @@ public final class MatchingService implements ClusteredService {
                             .symbolId(e.symbolId())
                             .orderId(e.makerOrderId())
                             .uid(e.makerUid())
-                            .rejectedSize(e.size());
+                            .rejectedSize(e.size())
+                            .price(e.price());
                     length = MessageHeaderEncoder.ENCODED_LENGTH + rejectEncoder.encodedLength();
                 }
             }

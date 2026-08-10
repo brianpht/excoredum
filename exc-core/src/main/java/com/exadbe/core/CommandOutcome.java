@@ -31,9 +31,11 @@ public final class CommandOutcome {
      *   <li>{@code TRADE}: {@code makerOrderId}, {@code makerUid},
      *       {@code takerUid}, {@code price}, {@code size}, {@code makerCompleted}.
      *   <li>{@code REDUCE}: {@code orderId}={@code makerOrderId},
-     *       {@code uid}={@code makerUid}, {@code size}=reduced-by.
+     *       {@code uid}={@code makerUid}, {@code size}=reduced-by,
+     *       {@code price}=resting price, {@code makerCompleted}=order-completed.
      *   <li>{@code REJECT}: {@code orderId}={@code makerOrderId},
-     *       {@code uid}={@code makerUid}, {@code size}=rejected-size.
+     *       {@code uid}={@code makerUid}, {@code size}=rejected-size,
+     *       {@code price}=active order price (budget for FOK-BUDGET).
      * </ul>
      */
     public static final class EventRecord {
@@ -208,7 +210,9 @@ public final class CommandOutcome {
             final long uid,
             final long reducedBy,
             final boolean bid,
-            final long reserveBidPrice) {
+            final long reserveBidPrice,
+            final long price,
+            final boolean orderCompleted) {
         final EventRecord e = nextEvent();
         e.kind = EventKind.REDUCE;
         e.symbolId = symbolId;
@@ -217,16 +221,20 @@ public final class CommandOutcome {
         e.size = reducedBy;
         e.makerBid = bid;
         e.makerReserveBidPrice = reserveBidPrice;
+        e.price = price;
+        e.makerCompleted = orderCompleted;
     }
 
-    /** Records rejected (unmatched) size. */
-    public void addReject(final int symbolId, final long orderId, final long uid, final long rejectedSize) {
+    /** Records rejected (unmatched) size at the active order's {@code price}. */
+    public void addReject(
+            final int symbolId, final long orderId, final long uid, final long rejectedSize, final long price) {
         final EventRecord e = nextEvent();
         e.kind = EventKind.REJECT;
         e.symbolId = symbolId;
         e.makerOrderId = orderId;
         e.makerUid = uid;
         e.size = rejectedSize;
+        e.price = price;
     }
 
     /** Number of matcher events recorded for the command just processed. */

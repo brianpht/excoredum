@@ -3,6 +3,7 @@ package com.exadbe.client;
 import com.exadbe.client.config.ClientConfig;
 import com.exadbe.protocol.CommandEnvelopeEncoder;
 import com.exadbe.protocol.CommandResultDecoder;
+import com.exadbe.protocol.L2MarketDataDecoder;
 import com.exadbe.protocol.MessageHeaderDecoder;
 import com.exadbe.protocol.MessageHeaderEncoder;
 import com.exadbe.protocol.OrderAction;
@@ -53,10 +54,22 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     private final TradeEventDecoder tradeDecoder = new TradeEventDecoder();
     private final ReduceEventDecoder reduceDecoder = new ReduceEventDecoder();
     private final RejectEventDecoder rejectDecoder = new RejectEventDecoder();
+    private final L2MarketDataDecoder l2Decoder = new L2MarketDataDecoder();
 
     private TradeEventListener tradeListener = TradeEventListener.NONE;
     private ReduceEventListener reduceListener = ReduceEventListener.NONE;
     private RejectEventListener rejectListener = RejectEventListener.NONE;
+    private OrderBookListener orderBookListener = OrderBookListener.NONE;
+    private TradeGroupListener tradeGroupListener = TradeGroupListener.NONE;
+
+    // Reusable event holders, filled in place on the poll thread.
+    private final OrderBookSnapshot snapshot = new OrderBookSnapshot();
+    private final TradeGroup tradeGroup = new TradeGroup();
+
+    // The event stream announced by the most recent CommandResult: -1 when the
+    // count is unknown (pre-v3 peer), otherwise frames still expected.
+    private long eventStreamIdLo;
+    private int eventStreamRemaining = -1;
 
     private final Long2ObjectHashMap<PendingCommand> pending;
     private final PendingCommand[] pool;
@@ -227,6 +240,16 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     /** Registers a listener for reject events; replaces any previous listener. */
     public void rejectListener(final RejectEventListener listener) {
         this.rejectListener = listener == null ? RejectEventListener.NONE : listener;
+    }
+
+    /** Registers a listener for L2 order-book snapshots; replaces any previous listener. */
+    public void orderBookListener(final OrderBookListener listener) {
+        this.orderBookListener = listener == null ? OrderBookListener.NONE : listener;
+    }
+
+    /** Registers a listener for per-command trade groups; replaces any previous listener. */
+    public void tradeGroupListener(final TradeGroupListener listener) {
+        this.tradeGroupListener = listener == null ? TradeGroupListener.NONE : listener;
     }
 
     /** Submits a GTC limit order. */
@@ -530,6 +553,21 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                     tradeDecoder.price(),
                     tradeDecoder.size(),
                     tradeDecoder.makerOrderCompleted() != 0);
+
+            final long idLo = tradeDecoder.commandIdLo();
+            if (tradeGroup.fillCount() > 0 && tradeGroup.commandIdLo() != idLo) {
+                flushTradeGroup();
+            }
+            if (tradeGroup.fillCount() == 0) {
+                tradeGroup.begin(tradeDecoder.commandIdHi(), idLo, tradeDecoder.symbolId(), tradeDecoder.takerUid());
+            }
+            tradeGroup.addFill(
+                    tradeDecoder.makerOrderId(),
+                    tradeDecoder.makerUid(),
+                    tradeDecoder.price(),
+                    tradeDecoder.size(),
+                    tradeDecoder.makerOrderCompleted() != 0);
+            countDownEventStream(idLo);
             return;
         }
         if (templateId == ReduceEventDecoder.TEMPLATE_ID) {
@@ -538,6 +576,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                     offset + MessageHeaderDecoder.ENCODED_LENGTH,
                     headerDecoder.blockLength(),
                     headerDecoder.version());
+            // A reduce never shares a command with trades, so any open group is stale.
+            flushTradeGroup();
             reduceListener.onReduce(
                     reduceDecoder.commandIdHi(),
                     reduceDecoder.commandIdLo(),
@@ -545,7 +585,10 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                     reduceDecoder.symbolId(),
                     reduceDecoder.orderId(),
                     reduceDecoder.uid(),
-                    reduceDecoder.reducedBy());
+                    reduceDecoder.reducedBy(),
+                    reduceDecoder.price(),
+                    reduceDecoder.orderCompleted() != 0);
+            countDownEventStream(reduceDecoder.commandIdLo());
             return;
         }
         if (templateId == RejectEventDecoder.TEMPLATE_ID) {
@@ -554,6 +597,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                     offset + MessageHeaderDecoder.ENCODED_LENGTH,
                     headerDecoder.blockLength(),
                     headerDecoder.version());
+            // Within one command the reject trails the fills, so the group is complete.
+            flushTradeGroup();
             rejectListener.onReject(
                     rejectDecoder.commandIdHi(),
                     rejectDecoder.commandIdLo(),
@@ -561,7 +606,29 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                     rejectDecoder.symbolId(),
                     rejectDecoder.orderId(),
                     rejectDecoder.uid(),
-                    rejectDecoder.rejectedSize());
+                    rejectDecoder.rejectedSize(),
+                    rejectDecoder.price());
+            countDownEventStream(rejectDecoder.commandIdLo());
+            return;
+        }
+        if (templateId == L2MarketDataDecoder.TEMPLATE_ID) {
+            l2Decoder.wrap(
+                    buffer,
+                    offset + MessageHeaderDecoder.ENCODED_LENGTH,
+                    headerDecoder.blockLength(),
+                    headerDecoder.version());
+            // The snapshot trails the command's matcher events.
+            flushTradeGroup();
+            snapshot.begin(l2Decoder.commandIdHi(), l2Decoder.commandIdLo(), l2Decoder.symbolId());
+            for (final L2MarketDataDecoder.AsksDecoder asks = l2Decoder.asks(); asks.hasNext(); ) {
+                asks.next();
+                snapshot.addAsk(asks.price(), asks.size(), asks.orders());
+            }
+            for (final L2MarketDataDecoder.BidsDecoder bids = l2Decoder.bids(); bids.hasNext(); ) {
+                bids.next();
+                snapshot.addBid(bids.price(), bids.size(), bids.orders());
+            }
+            orderBookListener.onOrderBook(snapshot);
             return;
         }
         if (templateId != CommandResultDecoder.TEMPLATE_ID) {
@@ -573,7 +640,12 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 headerDecoder.blockLength(),
                 headerDecoder.version());
 
+        // Results precede their own events, so any open group is from an older command.
+        flushTradeGroup();
         final long commandIdLo = resultDecoder.commandIdLo();
+        final int announced = resultDecoder.eventCount();
+        eventStreamIdLo = commandIdLo;
+        eventStreamRemaining = (announced == CommandResultDecoder.eventCountNullValue()) ? -1 : announced;
         final PendingCommand pc = pending.remove(commandIdLo);
         final boolean hasUid = resultDecoder.uid() != CommandResultDecoder.uidNullValue();
         final boolean hasOrderId = resultDecoder.orderId() != CommandResultDecoder.orderIdNullValue();
@@ -598,6 +670,24 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 hasOrderId,
                 resultDecoder.filledSize(),
                 hasFilledSize);
+    }
+
+    /** Delivers the open trade group (when non-empty) and clears it for reuse. */
+    private void flushTradeGroup() {
+        if (tradeGroup.fillCount() > 0) {
+            tradeGroupListener.onTradeGroup(tradeGroup);
+            tradeGroup.clear();
+        }
+    }
+
+    /** Tracks the announced event stream; the last expected frame flushes the group. */
+    private void countDownEventStream(final long idLo) {
+        if (eventStreamRemaining > 0 && idLo == eventStreamIdLo) {
+            eventStreamRemaining--;
+            if (eventStreamRemaining == 0) {
+                flushTradeGroup();
+            }
+        }
     }
 
     @Override
