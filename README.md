@@ -92,13 +92,33 @@ dependencies {
 
 ## Quick Start
 
+### Run the runnable example
+
+`exc-examples` boots an in-process single-node cluster and walks a small trading
+scenario through the client SDK, printing every egress surface as it happens -
+per-fill trades, per-command trade groups, a reduce, a reject, and an L2
+snapshot:
+
+```bash
+./gradlew :exc-examples:run
+```
+
+```text
+  [trade ] maker=1(uid 1) x taker uid 2: 4 @ 100 (maker completed)
+  [trade ] maker=3(uid 1) x taker uid 2: 1 @ 101
+  [group ] command=11: 2 fill(s), totalVolume=5, taker uid 2
+  [reduce] order=3 uid 1 reduced by 3 @ 101 (order completed)
+  [reject] order=5 uid 2 rejected 5 @ 100
+  [l2    ] asks: 102x2 | bids: empty
+```
+
 ### Drive a single-node cluster with the client SDK
 
 `exc-client` is the client-side SDK. It depends only on the `exc-protocol` wire
 contract (never on `exc-core`) and handles leader changes, idempotent retry,
-result correlation, and egress event delivery. This snippet boots an in-process
-single-node cluster, funds a maker and a taker, and crosses an order to produce a
-trade:
+result correlation, and full egress event delivery. This snippet boots an
+in-process single-node cluster, funds a maker and a taker, and crosses an order
+to produce a trade:
 
 ```java
 import com.exadbe.client.ExcClient;
@@ -120,6 +140,18 @@ try (ClusterNode node = new ClusterNode(ClusterConfig.singleNodeLocalhost(0, bas
         client.tradeListener((idHi, idLo, index, symbolId, makerOrderId, makerUid, takerUid, price, size, done) ->
             System.out.println("TRADE price=" + price + " size=" + size));
 
+        client.reduceListener((idHi, idLo, index, symbolId, orderId, uid, reducedBy, price, completed) ->
+            System.out.println("REDUCE order=" + orderId + " by=" + reducedBy + " @ " + price));
+
+        client.rejectListener((idHi, idLo, index, symbolId, orderId, uid, rejectedSize, price) ->
+            System.out.println("REJECT order=" + orderId + " size=" + rejectedSize));
+
+        client.tradeGroupListener(group -> // one callback per taker command, all its fills
+            System.out.println("GROUP fills=" + group.fillCount() + " totalVolume=" + group.totalVolume()));
+
+        client.orderBookListener(snapshot -> // L2 snapshot for an ORDER_BOOK_REQUEST
+            System.out.println("L2 asks=" + snapshot.askDepth() + " bids=" + snapshot.bidDepth()));
+
         client.addSymbol(sym, base, quote, 1L, 1L);   // baseScaleK = quoteScaleK = 1
         client.addUser(maker);
         client.adjustBalance(maker, base, 1_000L);      // maker funds base to sell
@@ -137,7 +169,13 @@ try (ClusterNode node = new ClusterNode(ClusterConfig.singleNodeLocalhost(0, bas
 ```
 
 Resubmitting the same `clientId` and `clientSeq` returns the cached result and
-does not re-apply the command.
+does not re-apply the command (and re-sends no events). Every `CommandResult`
+carries `eventCount`, the number of matcher-event frames that follow it, which
+the client uses to deliver each command's fills as one complete `TradeGroup`;
+the per-fill `tradeListener` fires independently of the group. `ReduceEvent`
+frames carry the resting price and whether the order was fully removed;
+`RejectEvent` frames carry the active order's price (the budget for FOK-BUDGET).
+See `exc-examples` for the complete runnable version.
 
 ### Drive the engine directly (no cluster)
 
@@ -288,7 +326,7 @@ flowchart TB
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram)     |
 | `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3 (replay parity, latency, JMH) |
 | `exc-tests`    | Unit, property, integration, cluster, fault tests and fixtures            |
-| `exc-examples` | Placeholder for runnable examples                                        |
+| `exc-examples` | Runnable examples: in-process cluster driven through the client SDK       |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the component map, wire and
 snapshot formats, data flows, determinism rules, and order-book semantics.
@@ -351,6 +389,8 @@ Performance targets (defaults; tune per service):
 | `ExcClientIntegrationTest`         | Integration | Client submit / poll, command-id correlation            |
 | `ExcAccountsIntegrationTest`       | Integration | Account lifecycle result codes end to end               |
 | `ExcOrderBookIntegrationTest`      | Integration | Resting maker matched by taker, trade on egress         |
+| `ExcReduceRejectEventsIntegrationTest` | Integration | Cancel / reduce / IOC / FOK reduce and reject on egress |
+| `ExcEgressEventsIntegrationTest`   | Integration | Taker sweep as one trade group; L2 snapshot on egress   |
 | `BenchHarnessSmokeTest`            | Integration | End-to-end latency harness boots and measures           |
 | `ReadReplicaIntegrationTest`       | Integration | Replica reproduces users, balances, resting depth       |
 | `JournalClusterIntegrationTest`    | Integration | A committed trade reaches the recorded journal stream   |

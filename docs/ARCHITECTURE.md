@@ -163,7 +163,9 @@ excoredum/
 |   +-- src/jmh/java/com/exadbe/xcorebench/
 |       +-- OrderBookComparisonBenchmark.java  JMH: 3 impls x place/cancel, IOC match, replay chunk
 |
-|-- exc-examples/                   Placeholder for runnable examples
+|-- exc-examples/                   Runnable examples (in-process cluster + client SDK)
+|   +-- src/main/java/com/exadbe/examples/
+|       +-- QuickStartExample.java      Boots a node, funds users, crosses orders, shows all egress events
 |
 +-- exc-tests/                      Unit, property, integration, cluster, fault tests
     |-- src/testFixtures/java/com/exadbe/testkit/InMemorySnapshot.java   Snapshot to/from an in-memory buffer
