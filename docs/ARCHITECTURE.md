@@ -16,6 +16,7 @@
     - [exc-launcher - Cluster Bootstrap](#exc-launcher---cluster-bootstrap)
     - [exc-client - Client SDK](#exc-client---client-sdk)
     - [exc-read - Read Replica (CQRS)](#exc-read---read-replica-cqrs)
+    - [exc-gateway-rest - REST API Gateway](#exc-gateway-rest---rest-api-gateway)
     - [exc-bench - Latency Harness](#exc-bench---latency-harness)
     - [exc-xcore-bench - exchange-core Comparison](#exc-xcore-bench---exchange-core-comparison)
     - [exc-tests - Verification and Fixtures](#exc-tests---verification-and-fixtures)
@@ -141,6 +142,17 @@ excoredum/
 |       |-- ReplicationHealth.java          Health and applied position published for readers
 |       |-- config/ReadReplicaConfig.java   Archive control channel, stream id, local host
 |       +-- ReadServiceLauncher.java        Entry point: follow a member archive
+|
+|-- exc-gateway-rest/               REST API gateway (Netty, CQRS bridge)
+|   +-- src/main/java/com/exadbe/gateway/
+|       |-- RestGatewayLauncher.java        main(): parse args, launch, block until terminated
+|       |-- RestGateway.java                Lifecycle: replica + client + agent + HTTP server
+|       |-- config/GatewayConfig.java       Immutable config (port, endpoints, timeouts, capacities)
+|       |-- codec/                          JsonReader / JsonWriter (boundary JSON), DecimalCodec (fixed-scale decimal <-> long)
+|       |-- transport/                      HttpServer (Netty pipeline), RouterHandler, pooled GatewayRequest slots, lock-free queues
+|       |-- core/GatewayAgent.java          Single-writer thread: polls client + replica, dispatch, correlation, deadlines
+|       |-- core/GatewayState.java          Asset / symbol registry + per-user order profiles (agent-owned)
+|       +-- api/ApiErrorCodes.java          Gateway error codes carried in the response envelope
 |
 |-- exc-bench/                      End-to-end latency harness
 |   +-- src/main/java/com/exadbe/bench/
@@ -322,7 +334,7 @@ snapshots, and per-command trade grouping) on top of an Aeron cluster client.
 
 | Component               | Responsibility                                                    |
 |-------------------------|-------------------------------------------------------------------|
-| `ExcClient`             | Async submit / poll: resend on leader change, correlate results by command id, decode every egress frame, group fills per command |
+| `ExcClient`             | Async submit / poll: resend on leader change, correlate results by command id, decode every egress frame, group fills per command, idle keepalives, session recovery |
 | `ClientConfig`          | Immutable client configuration (endpoints, timeouts, retry, in-flight window) |
 | `ResultHandler`         | Callback invoked when a `CommandResult` correlates to a request    |
 | `TradeEventListener`    | Callback invoked per fill when a `TradeEvent` is delivered on egress |
@@ -338,6 +350,19 @@ snapshots, and per-command trade grouping) on top of an Aeron cluster client.
 Typed helpers cover the full command set: `addSymbol`, `addUser`,
 `adjustBalance`, `suspendUser`, `resumeUser`, `placeGtc`, `placeIoc`,
 `placeFokBudget`, `cancelOrder`, `moveOrder`, `reduceOrder`, `requestOrderBook`.
+
+**Session liveness.** The cluster closes a client session that sends no ingress
+for its session timeout (10 s by default), after which every offer fails and
+commands silently stop applying. `ExcClient` therefore submits a NOP keepalive
+when idle for `keepaliveIntervalNs` (2 s by default, zero disables), and if the
+session is lost anyway (cluster restart, egress CLOSED / ERROR event) it
+reconnects on a later poll and retransmits everything pending. Keepalives are
+filtered out of the result handler and latency histogram. Long-lived boundary
+clients must also use a client identity whose `clientSeq` never replays the
+cluster's dedup window: a restarted client that reuses a `clientId` with
+`clientSeq` starting at zero gets stale cached results instead of fresh applies.
+`exc-gateway-rest` derives a per-process unique `clientId` by default for this
+reason.
 
 ### exc-read - Read Replica (CQRS)
 
@@ -366,7 +391,7 @@ against a snapshot.
 
 | Component           | Responsibility                                                       |
 |---------------------|----------------------------------------------------------------------|
-| `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log; balance / count / report queries |
+| `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log; balance / count / report / L2 order-book queries |
 | `LiveLogSubscriber` | Subscribes the consensus recording, parses cluster framing, applies commands to the engine |
 | `ReportGenerator`   | Assembles single-user, total-currency-balance, and state-hash reports over the replica engine |
 | `SingleUserReport` / `TotalCurrencyBalance` | Read-side result holders for the report queries      |
@@ -377,6 +402,58 @@ against a snapshot.
 | `ReadStreams`       | Consensus log and replay stream id constants                         |
 | `ReadReplicaConfig` | Archive control channel, control stream id, local host               |
 | `ReadServiceLauncher`| Entry point: follow a member archive                                |
+
+### exc-gateway-rest - REST API Gateway
+
+An HTTP/JSON edge for the cluster, ported in spirit from exchange-core's
+`exchange-gateway-rest` onto this project's transport: Netty instead of Spring,
+the client SDK instead of an in-process engine, and integer-only money math
+instead of BigDecimal. It is a boundary service: JSON, strings, and decimal
+conversion live here and never cross into the deterministic core.
+
+Two strictly separated paths:
+
+- **Writes** go through `ExcClient` (idempotent retry, leader-change resend).
+  Each HTTP request mints or reuses a command, correlates the cluster's
+  `CommandResult` by command id, and answers with the core result code in a
+  `RestGenericResponse`-shaped envelope. A gateway deadline answers 504 without
+  cancelling the command: the client keeps retrying it idempotently, so a
+  timeout means the response was lost, not the command.
+- **Reads** come from an embedded `ExcReadReplica` (order book L2, user state,
+  balances) and the gateway-local registry (assets, symbols, exchange info).
+  Reads are eventually consistent with bounded staleness and never load the
+  consensus path.
+
+Threading follows the single-writer principle end to end. Netty event loops
+only decode HTTP and enqueue pooled request slots over two lock-free
+`ManyToOneConcurrentArrayQueue`s; one gateway agent thread owns the client, the
+replica, and all gateway state (registries, user profiles, the in-flight
+correlation map), sweeps request deadlines, and writes every response through
+Netty's thread-safe channel writes. No locks, no shared mutable POJOs.
+
+Endpoints mirror the reference shape: `syncAdminApi/v1` (users, balance
+adjustments, assets, symbols) and `syncTradeApi/v1` (order book, place / move /
+cancel, user state, user history, ping / time / info). Spot only: margin
+operands are rejected at symbol registration. Order ids are minted by the
+gateway (`gatewayId` in the high bits, monotonic sequence) because the core
+requires client-assigned ids.
+
+Known v1 limits, matching the reference's semantics: the asset / symbol
+registry is in-memory (re-register after a gateway restart), and user history
+only tracks orders placed through the same gateway instance. Real-time push
+(WebSocket ticks / order updates, sourced from the journal) is a later phase.
+
+| Component          | Responsibility                                                          |
+|--------------------|-------------------------------------------------------------------------|
+| `RestGateway`      | Lifecycle: replica + client + agent thread + HTTP server                |
+| `GatewayConfig`    | Immutable configuration (port, endpoints, timeouts, capacities)         |
+| `HttpServer`       | Netty pipeline: codec, aggregator, router                               |
+| `RouterHandler`    | Route matching, path/query/body parsing into pooled slots, edge rejections |
+| `GatewayRequest`   | Pooled request slot handed across the lock-free queues                  |
+| `GatewayAgent`     | Single-writer loop: poll client + replica, dispatch, correlate, deadlines |
+| `GatewayState`     | Asset / symbol registry and user profiles (agent-owned)                 |
+| `JsonReader` / `JsonWriter` / `DecimalCodec` | Boundary JSON and fixed-scale decimal conversion |
+| `ApiErrorCodes`    | Gateway error codes for the response envelope                           |
 
 ### exc-bench - Latency Harness
 
@@ -736,14 +813,19 @@ snapshot write / read time. The hot path only increments a counter.
 | `SnapshotRoundTripTest`              | Unit        | Byte-identical snapshot round trip and checksum         |
 | `SnapshotIntegrityTest`              | Unit        | Truncation and corruption are rejected                  |
 | `HotPathHardeningTest`               | Unit        | Node pooling, bounded event buffer, off-heap counters   |
+| `DecimalCodecTest`                   | Unit        | Fixed-scale decimal parse / format round trips, errors  |
+| `JsonCodecTest`                      | Unit        | Gateway JSON writer / reader round trips, malformed input |
+| `GatewayStateTest`                   | Unit        | Registry uniqueness, symbol lifecycle, profiles         |
 | `ExcClientIntegrationTest`           | Integration | Client submit / poll, command-id correlation            |
+| `ExcClientKeepaliveIntegrationTest`  | Integration | Idle client survives cluster session timeout via NOP keepalives |
 | `ExcAccountsIntegrationTest`         | Integration | Account lifecycle result codes end to end               |
 | `ExcOrderBookIntegrationTest`        | Integration | Resting maker matched by taker, trade on egress         |
 | `ExcReduceRejectEventsIntegrationTest` | Integration | Cancel / reduce / IOC / FOK reduce and reject on egress, with price and completion |
 | `ExcEgressEventsIntegrationTest`     | Integration | Taker sweep as one trade group; L2 snapshot on egress   |
 | `BenchHarnessSmokeTest`              | Integration | End-to-end latency harness boots and measures           |
 | `XcoreBenchSmokeTest`                | Integration | exchange-core replay cross-validates; pipeline boots    |
-| `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth       |
+| `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth, L2   |
+| `RestGatewayIntegrationTest`         | Integration | REST flow vs in-process cluster: admin, orders, reads   |
 | `EventJournalRecorderIntegrationTest`| Integration | Recorder drains the ring onto an Aeron stream           |
 | `JournalClusterIntegrationTest`      | Integration | A committed trade reaches the recorded journal stream   |
 | `JournalConsumerIntegrationTest`     | Integration | Re-delivered events are deduped to exactly-once         |

@@ -3,6 +3,7 @@ package com.exadbe.read.report;
 import java.util.ArrayList;
 import java.util.List;
 import org.agrona.collections.Long2LongHashMap;
+import org.agrona.collections.LongLongConsumer;
 
 /**
  * A point-in-time view of one user's account: per-currency balances and every
@@ -53,6 +54,11 @@ public final class SingleUserReport {
     public long balance(final int currency) {
         final long value = balances.get(currency);
         return value == MISSING ? 0L : value;
+    }
+
+    /** Visits every held currency as {@code (currencyId, balance)}; allocation-free. */
+    public void forEachBalance(final LongLongConsumer visitor) {
+        balances.forEachLong(visitor);
     }
 
     /** All resting orders owned by the user, in deterministic engine order. */

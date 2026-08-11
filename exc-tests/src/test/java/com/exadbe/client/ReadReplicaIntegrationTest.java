@@ -78,6 +78,14 @@ class ReadReplicaIntegrationTest {
                 assertEquals(1, replica.orderCount(), "the maker remainder must rest on the replica book");
                 assertEquals(4L, replica.balance(TAKER, BASE), "taker bought 4 base units");
                 assertEquals(400L, replica.balance(MAKER, QUOTE), "maker sold 4 base at price 100");
+
+                final com.exadbe.engine.orderbook.L2View l2 = new com.exadbe.engine.orderbook.L2View(32);
+                assertTrue(replica.orderBook(SYM, l2), "replica serves L2 for the replicated symbol");
+                assertEquals(1, l2.askDepth(), "the maker remainder rests as one ask level");
+                assertEquals(0, l2.bidDepth());
+                assertEquals(100L, l2.askPrice(0));
+                assertEquals(6L, l2.askVolume(0));
+                assertFalse(replica.orderBook(999, l2), "unknown symbol returns false");
                 assertTrue(replica.isHealthy());
                 assertTrue(replica.appliedPosition() > 0L);
 

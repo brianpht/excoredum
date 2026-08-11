@@ -22,6 +22,9 @@ final class PendingCommand {
     int retries;
     boolean inUse;
 
+    /** Marks an internally generated keepalive, hidden from the result handler. */
+    boolean keepalive;
+
     PendingCommand(final int poolIndex) {
         this.poolIndex = poolIndex;
     }
@@ -34,5 +37,6 @@ final class PendingCommand {
         deadlineNanos = 0L;
         retries = 0;
         inUse = false;
+        keepalive = false;
     }
 }

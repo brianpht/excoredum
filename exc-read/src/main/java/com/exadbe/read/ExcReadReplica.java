@@ -3,6 +3,8 @@ package com.exadbe.read;
 import com.exadbe.config.CoreConfig;
 import com.exadbe.core.CommandOutcome;
 import com.exadbe.engine.MatchingEngine;
+import com.exadbe.engine.orderbook.L2View;
+import com.exadbe.engine.orderbook.OrderBookNaive;
 import com.exadbe.read.config.ReadReplicaConfig;
 import com.exadbe.read.report.ReportGenerator;
 import com.exadbe.read.report.SingleUserReport;
@@ -137,6 +139,20 @@ public final class ExcReadReplica implements AutoCloseable {
 
     public int orderCount() {
         return engine.orderCount();
+    }
+
+    /**
+     * Fills {@code view} with an L2 snapshot of {@code symbolId} from the
+     * replicated book, bounded by {@code view.maxLevels()}. Returns false when
+     * the symbol is not (yet) replicated, leaving the view untouched.
+     */
+    public boolean orderBook(final int symbolId, final L2View view) {
+        final OrderBookNaive book = engine.book(symbolId);
+        if (book == null) {
+            return false;
+        }
+        book.fillL2(view);
+        return true;
     }
 
     /** Balances and resting orders for {@code uid}, from the replicated state. */

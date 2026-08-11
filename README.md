@@ -208,6 +208,21 @@ System.out.println(outcome.resultCode()); // e.g. SUCCESS
 ./gradlew :exc-read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
 ```
 
+### Run the REST gateway
+
+```bash
+# Against a single-node localhost cluster (ingress 20100, member archive 20104)
+./gradlew :exc-gateway-rest:run
+
+# Custom HTTP port, cluster ingress endpoints, and member archive to follow
+./gradlew :exc-gateway-rest:run --args="--port=8080 --ingress=0=localhost:20100 \
+    --archive=aeron:udp?endpoint=localhost:20104 --clientId=1 --gatewayId=1"
+```
+
+The gateway bridges HTTP/JSON to the cluster: writes go through the client SDK
+(idempotent retry, leader-change resend), reads come from an embedded read
+replica and are eventually consistent. See `exc-gateway-rest` in the module map.
+
 ## How It Works
 
 excoredum is a replicated state machine. Commands flow through Aeron Cluster and
@@ -323,6 +338,7 @@ flowchart TB
 | `exc-launcher` | Aeron bootstrap: Media Driver, Archive, Consensus, Container, journaler agent |
 | `exc-client`   | Client-side SDK: leader-change handling, idempotent retry, correlation, events |
 | `exc-read`     | CQRS read side and journal consumers: log follower, replay, dedup, HA failover |
+| `exc-gateway-rest` | REST/JSON gateway (Netty): writes via client SDK, reads via embedded replica |
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram)     |
 | `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3 (replay parity, latency, JMH) |
 | `exc-tests`    | Unit, property, integration, cluster, fault tests and fixtures            |
@@ -386,13 +402,18 @@ Performance targets (defaults; tune per service):
 | `SnapshotRoundTripTest`            | Unit        | Byte-identical snapshot round trip and checksum         |
 | `SnapshotIntegrityTest`            | Unit        | Truncation and corruption are rejected                  |
 | `HotPathHardeningTest`             | Unit        | Node pooling, bounded event buffer, off-heap counters   |
+| `DecimalCodecTest`                 | Unit        | Fixed-scale decimal parse / format round trips, errors  |
+| `JsonCodecTest`                    | Unit        | Gateway JSON writer / reader round trips, malformed input |
+| `GatewayStateTest`                 | Unit        | Registry uniqueness, symbol lifecycle, profiles         |
 | `ExcClientIntegrationTest`         | Integration | Client submit / poll, command-id correlation            |
+| `ExcClientKeepaliveIntegrationTest` | Integration | Idle client survives session timeout via NOP keepalives |
 | `ExcAccountsIntegrationTest`       | Integration | Account lifecycle result codes end to end               |
 | `ExcOrderBookIntegrationTest`      | Integration | Resting maker matched by taker, trade on egress         |
 | `ExcReduceRejectEventsIntegrationTest` | Integration | Cancel / reduce / IOC / FOK reduce and reject on egress |
 | `ExcEgressEventsIntegrationTest`   | Integration | Taker sweep as one trade group; L2 snapshot on egress   |
 | `BenchHarnessSmokeTest`            | Integration | End-to-end latency harness boots and measures           |
-| `ReadReplicaIntegrationTest`       | Integration | Replica reproduces users, balances, resting depth       |
+| `ReadReplicaIntegrationTest`       | Integration | Replica reproduces users, balances, resting depth, L2   |
+| `RestGatewayIntegrationTest`       | Integration | REST flow vs in-process cluster: admin, orders, reads   |
 | `JournalClusterIntegrationTest`    | Integration | A committed trade reaches the recorded journal stream   |
 | `JournalReplayIntegrationTest`     | Integration | Archive replay decodes trades; repeated replay dedups   |
 | `SnapshotWarmRestartIntegrationTest` | Cluster   | Warm restart recovers state from a native snapshot      |

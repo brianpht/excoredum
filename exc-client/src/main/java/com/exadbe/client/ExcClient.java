@@ -12,11 +12,14 @@ import com.exadbe.protocol.OrderType;
 import com.exadbe.protocol.ReduceEventDecoder;
 import com.exadbe.protocol.RejectEventDecoder;
 import com.exadbe.protocol.TradeEventDecoder;
+import io.aeron.Publication;
 import io.aeron.cluster.client.AeronCluster;
 import io.aeron.cluster.client.EgressListener;
+import io.aeron.cluster.codecs.EventCode;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
 import io.aeron.logbuffer.Header;
+import java.util.concurrent.TimeUnit;
 import org.HdrHistogram.Histogram;
 import org.agrona.DirectBuffer;
 import org.agrona.collections.Long2ObjectHashMap;
@@ -44,7 +47,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
 
     private final ClientConfig config;
     private final ResultHandler handler;
-    private final AeronCluster cluster;
+    private AeronCluster cluster;
+    private final String aeronDir;
     private final MediaDriver ownMediaDriver;
 
     private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
@@ -85,9 +89,19 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     private long completed;
     private long expired;
     private long backpressureEvents;
+    private long keepalives;
+    private int reconnects;
     private int leaderChanges;
     private int leaderMemberId = -1;
     private boolean retransmitAll;
+
+    // Session liveness: the cluster closes idle sessions after its session
+    // timeout (10 s default), so an idle client submits a NOP keepalive. When
+    // the session is lost anyway (cluster restart, egress CLOSED / ERROR), the
+    // client reconnects on the next polls and retransmits everything pending.
+    private long nextKeepaliveNanos;
+    private boolean sessionLost;
+    private long nextReconnectNanos;
 
     public ExcClient(final ClientConfig config, final ResultHandler handler) {
         this.config = config;
@@ -104,30 +118,37 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         this.freeTop = pool.length;
 
         MediaDriver embedded = null;
-        String aeronDir = config.aeronDirectoryName();
-        if (aeronDir == null) {
+        String dir = config.aeronDirectoryName();
+        if (dir == null) {
             embedded = MediaDriver.launchEmbedded(new MediaDriver.Context()
                     .threadingMode(ThreadingMode.SHARED)
                     .dirDeleteOnStart(true)
                     .dirDeleteOnShutdown(true));
-            aeronDir = embedded.aeronDirectoryName();
+            dir = embedded.aeronDirectoryName();
         }
         this.ownMediaDriver = embedded;
+        this.aeronDir = dir;
 
         try {
-            this.cluster = AeronCluster.connect(new AeronCluster.Context()
-                    .egressListener(this)
-                    .aeronDirectoryName(aeronDir)
-                    .ingressChannel("aeron:udp")
-                    .egressChannel(config.egressChannel())
-                    .messageTimeoutNs(config.messageTimeoutNs())
-                    .ingressEndpoints(config.ingressEndpoints()));
+            this.cluster = AeronCluster.connect(clusterContext(config.messageTimeoutNs()));
         } catch (final RuntimeException e) {
             if (embedded != null) {
                 embedded.close();
             }
             throw e;
         }
+        this.nextKeepaliveNanos = System.nanoTime() + config.keepaliveIntervalNs();
+    }
+
+    // Reconnect reuses the same driver and endpoints as the initial connect.
+    private AeronCluster.Context clusterContext(final long messageTimeoutNs) {
+        return new AeronCluster.Context()
+                .egressListener(this)
+                .aeronDirectoryName(aeronDir)
+                .ingressChannel("aeron:udp")
+                .egressChannel(config.egressChannel())
+                .messageTimeoutNs(messageTimeoutNs)
+                .ingressEndpoints(config.ingressEndpoints());
     }
 
     /**
@@ -474,13 +495,18 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     }
 
     /**
-     * Drives egress delivery and time-based retransmission. Call in a loop.
+     * Drives egress delivery, time-based retransmission, idle keepalives, and
+     * session recovery. Call in a loop.
      *
      * @return an opaque work count (positive when progress was made).
      */
     public int poll() {
-        int work = cluster.pollEgress();
         final long now = System.nanoTime();
+        if (sessionLost) {
+            reconnect(now);
+            return 0;
+        }
+        int work = cluster.pollEgress();
 
         // Scan the preallocated pool rather than the map's value iterator so a
         // poll neither allocates nor risks concurrent modification when a result
@@ -504,21 +530,75 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             work++;
         }
         retransmitAll = false;
+
+        if (config.keepaliveIntervalNs() > 0 && freeTop > 0 && (now - nextKeepaliveNanos) >= 0) {
+            sendKeepalive(now);
+            work++;
+        }
         return work;
+    }
+
+    private void sendKeepalive(final long now) {
+        final long commandIdLo = submit(OrderCommandType.NOP, 0L);
+        final PendingCommand pc = pending.get(commandIdLo);
+        if (pc != null) {
+            pc.keepalive = true;
+        }
+        nextKeepaliveNanos = now + config.keepaliveIntervalNs();
+    }
+
+    private void reconnect(final long now) {
+        if ((now - nextReconnectNanos) < 0) {
+            return;
+        }
+        try {
+            cluster.close();
+        } catch (final RuntimeException ignored) {
+            // Best-effort teardown of the lost session.
+        }
+        try {
+            cluster = AeronCluster.connect(clusterContext(TimeUnit.SECONDS.toNanos(5)));
+            sessionLost = false;
+            retransmitAll = true;
+            reconnects++;
+            nextKeepaliveNanos = System.nanoTime() + config.keepaliveIntervalNs();
+        } catch (final RuntimeException e) {
+            nextReconnectNanos = now + TimeUnit.SECONDS.toNanos(1);
+        }
     }
 
     private void expire(final PendingCommand pc) {
         pending.remove(pc.commandIdLo);
-        handler.onExpired(pc.commandIdHi, pc.commandIdLo);
+        if (!pc.keepalive) {
+            handler.onExpired(pc.commandIdHi, pc.commandIdLo);
+        }
         expired++;
         release(pc);
     }
 
+    private long lastOfferResult;
+
     private void offer(final PendingCommand pc) {
+        if (sessionLost) {
+            backpressureEvents++;
+            return;
+        }
         final long result = cluster.offer(pc.buffer, 0, pc.length);
+        lastOfferResult = result;
         if (result < 0) {
             backpressureEvents++;
+            if (result == Publication.CLOSED) {
+                sessionLost = true;
+            }
+        } else {
+            // Any ingress traffic resets the cluster's session timer.
+            nextKeepaliveNanos = System.nanoTime() + config.keepaliveIntervalNs();
         }
+    }
+
+    /** The raw result of the most recent ingress offer (diagnostics). */
+    public long lastOfferResult() {
+        return lastOfferResult;
     }
 
     private void release(final PendingCommand pc) {
@@ -652,11 +732,18 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         final boolean hasFilledSize = resultDecoder.filledSize() != CommandResultDecoder.filledSizeNullValue();
 
         if (pc != null) {
-            final long elapsedNs = System.nanoTime() - pc.submitNanos;
-            // Clamp so a result arriving after a long outage cannot throw out of
-            // the poll loop (Histogram rejects values above highestTrackableValue).
-            latencyHistogram.recordValue(Math.min(elapsedNs, latencyHistogram.getHighestTrackableValue()));
+            final boolean keepalive = pc.keepalive;
+            if (!keepalive) {
+                final long elapsedNs = System.nanoTime() - pc.submitNanos;
+                // Clamp so a result arriving after a long outage cannot throw out of
+                // the poll loop (Histogram rejects values above highestTrackableValue).
+                latencyHistogram.recordValue(Math.min(elapsedNs, latencyHistogram.getHighestTrackableValue()));
+            }
             release(pc);
+            if (keepalive) {
+                keepalives++;
+                return;
+            }
             completed++;
         }
 
@@ -691,6 +778,19 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     }
 
     @Override
+    public void onSessionEvent(
+            final long clusterSessionId,
+            final long leadershipTermId,
+            final long eventCorrelationId,
+            final int leaderMemberId,
+            final EventCode eventCode,
+            final String detail) {
+        if (eventCode == EventCode.CLOSED || eventCode == EventCode.ERROR) {
+            sessionLost = true;
+        }
+    }
+
+    @Override
     public void onNewLeader(
             final long clusterSessionId,
             final long leadershipTermId,
@@ -720,6 +820,16 @@ public final class ExcClient implements EgressListener, AutoCloseable {
 
     public long backpressureEvents() {
         return backpressureEvents;
+    }
+
+    /** Idle NOP keepalives submitted to hold the cluster session open. */
+    public long keepalives() {
+        return keepalives;
+    }
+
+    /** Sessions re-established after a loss (cluster restart, CLOSED / ERROR event). */
+    public int reconnects() {
+        return reconnects;
     }
 
     public int leaderChanges() {

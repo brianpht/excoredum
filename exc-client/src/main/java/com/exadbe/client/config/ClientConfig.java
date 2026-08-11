@@ -19,6 +19,7 @@ public final class ClientConfig {
     private final long retryBackoffNs;
     private final int maxRetries;
     private final int maxInFlight;
+    private final long keepaliveIntervalNs;
 
     private ClientConfig(final Builder builder) {
         this.clientId = builder.clientId;
@@ -29,6 +30,7 @@ public final class ClientConfig {
         this.retryBackoffNs = builder.retryBackoffNs;
         this.maxRetries = builder.maxRetries;
         this.maxInFlight = builder.maxInFlight;
+        this.keepaliveIntervalNs = builder.keepaliveIntervalNs;
     }
 
     public static Builder builder(final long clientId, final String ingressEndpoints) {
@@ -67,6 +69,15 @@ public final class ClientConfig {
         return maxInFlight;
     }
 
+    /**
+     * Idle period after which the client submits a NOP keepalive to hold its
+     * cluster session open; the cluster closes idle sessions after its session
+     * timeout (10 s by default). Zero disables keepalives.
+     */
+    public long keepaliveIntervalNs() {
+        return keepaliveIntervalNs;
+    }
+
     /** Fluent builder with sensible defaults for local and production use. */
     public static final class Builder {
         private final long clientId;
@@ -77,6 +88,7 @@ public final class ClientConfig {
         private long retryBackoffNs = TimeUnit.MILLISECONDS.toNanos(250);
         private int maxRetries;
         private int maxInFlight = 1024;
+        private long keepaliveIntervalNs = TimeUnit.SECONDS.toNanos(2);
 
         private Builder(final long clientId, final String ingressEndpoints) {
             this.clientId = clientId;
@@ -113,6 +125,12 @@ public final class ClientConfig {
 
         public Builder maxInFlight(final int value) {
             this.maxInFlight = value;
+            return this;
+        }
+
+        /** Idle interval between NOP keepalives; {@code 0} disables keepalives. */
+        public Builder keepaliveIntervalNs(final long value) {
+            this.keepaliveIntervalNs = value;
             return this;
         }
 
