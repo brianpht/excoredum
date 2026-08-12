@@ -262,6 +262,9 @@ Subscriptions are per connection and bounded by `GatewayConfig`
 dropped for consumers whose channel is not writable (slow consumer). See
 `exc-gateway-rest` in the module map and `docs/ARCHITECTURE.md` for details.
 
+The complete HTTP + WebSocket API surface, with curl and JavaScript examples,
+is documented in [docs/GATEWAY-API.md](docs/GATEWAY-API.md).
+
 ## How It Works
 
 excoredum is a replicated state machine. Commands flow through Aeron Cluster and
