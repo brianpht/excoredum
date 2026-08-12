@@ -143,7 +143,7 @@ excoredum/
 |       |-- config/ReadReplicaConfig.java   Archive control channel, stream id, local host
 |       +-- ReadServiceLauncher.java        Entry point: follow a member archive
 |
-|-- exc-gateway-rest/               REST API gateway (Netty, CQRS bridge)
+|-- exc-gateway-rest/               REST + WebSocket gateway (Netty, CQRS bridge)
 |   +-- src/main/java/com/exadbe/gateway/
 |       |-- RestGatewayLauncher.java        main(): parse args, launch, block until terminated
 |       |-- RestGateway.java                Lifecycle: replica + client + agent + HTTP server
@@ -440,18 +440,67 @@ requires client-assigned ids.
 
 Known v1 limits, matching the reference's semantics: the asset / symbol
 registry is in-memory (re-register after a gateway restart), and user history
-only tracks orders placed through the same gateway instance. Real-time push
-(WebSocket ticks / order updates, sourced from the journal) is a later phase.
+only tracks orders placed through the same gateway instance.
+
+### exc-gateway-rest - WebSocket real-time channel
+
+The HTTP port also serves a WebSocket real-time channel on `ws://host:port/ticks-websocket`
+(no SockJS, no STOMP framing - plain JSON text frames, unlike the reference
+implementation's STOMP broker). It replaces the reference's `/topic/ticks/{symbol}`
+and `/topic/orders/uid/{uid}` topics with explicit subscribe operations:
+
+```text
+client -> server   {"op":"subscribe","channel":"ticks","symbol":"BTCUSD"}
+                   {"op":"subscribe","channel":"orders","uid":2}
+                   {"op":"unsubscribe","channel":"ticks","symbol":"BTCUSD"}
+                   {"op":"unsubscribe","channel":"orders","uid":2}
+                   {"op":"orderBook","symbol":"BTCUSD","depth":10}
+server -> client   {"type":"ack","op":"subscribe","channel":"ticks","symbol":"BTCUSD"}
+                   {"type":"error","code":1007,"description":"symbol not found: NOPE"}
+                   {"type":"tick","symbol":"BTCUSD","price":"100.00","volume":4,"timestamp":<leader-ts>}
+                   {"type":"orderUpdate","uid":2,"orderId":...,"symbol":"BTCUSD","price":"100.00",
+                    "size":10,"filled":4,"state":"ACTIVE","userCookie":0,"action":"BID","orderType":"GTC"}
+                   {"type":"orderBook","symbol":"BTCUSD","askPrices":[100.00],"askVolumes":[5],
+                    "bidPrices":[...],"bidVolumes":[...]}
+```
+
+Data sources follow the two-path split:
+
+- **Ticks are journal-sourced**: the gateway registers a `ReplicaCommandListener`
+  on its embedded `ExcReadReplica`, which fires per applied command with the
+  leader-assigned timestamp and the `CommandOutcome` (trade/reduce/reject
+  events). Trade events become tick frames for every subscriber of that symbol.
+  Fan-out is gated on `ExcReadReplica.isCaughtUp()` so a subscriber never
+  receives the history burst replayed while the replica catches up at startup.
+  Ticks therefore cover the whole market, not just this gateway's own trades.
+- **Order updates are egress-sourced**: they reuse the existing per-user order
+  tracking (orders placed through this gateway) and push a frame on every
+  trade / reduce / reject / move / cancel that mutates a tracked order. This is
+  the same scope limitation as user history.
+- **Order book snapshots** answer a request frame from the replica's L2 view,
+  byte-identical in shape to the REST orderbook endpoint.
+
+Threading follows the same single-writer rule as HTTP: Netty event loops only
+parse the flat JSON operation object and enqueue pooled `WsEvent` slots over
+two lock-free `ManyToOneConcurrentArrayQueue`s; the agent owns the
+`WsSubscriptions` registry and the `RealtimePublisher` fan-out (one
+`JsonWriter` reused per frame, copied out per write). Tick frames are dropped
+for consumers whose channel is not writable (slow consumer). Error codes reuse
+`ApiErrorCodes`; WS-specific codes start at 2000.
 
 | Component          | Responsibility                                                          |
 |--------------------|-------------------------------------------------------------------------|
 | `RestGateway`      | Lifecycle: replica + client + agent thread + HTTP server                |
 | `GatewayConfig`    | Immutable configuration (port, endpoints, timeouts, capacities)         |
-| `HttpServer`       | Netty pipeline: codec, aggregator, router                               |
+| `HttpServer`       | Netty pipeline: codec, aggregator, WS upgrade, router                   |
 | `RouterHandler`    | Route matching, path/query/body parsing into pooled slots, edge rejections |
+| `WebSocketHandler` | WS text frame parsing into pooled `WsEvent` slots, disconnect detection |
+| `WsEvent`          | Pooled WS operation slot (subscribe / unsubscribe / orderbook / disconnect) |
 | `GatewayRequest`   | Pooled request slot handed across the lock-free queues                  |
-| `GatewayAgent`     | Single-writer loop: poll client + replica, dispatch, correlate, deadlines |
+| `GatewayAgent`     | Single-writer loop: poll client + replica, dispatch, correlate, deadlines, WS fan-out |
 | `GatewayState`     | Asset / symbol registry and user profiles (agent-owned)                 |
+| `WsSubscriptions`  | WS subscriber index (symbol / uid to channels) with connection bounds   |
+| `RealtimePublisher`| Frame serialization and fan-out to subscribed channels                  |
 | `JsonReader` / `JsonWriter` / `DecimalCodec` | Boundary JSON and fixed-scale decimal conversion |
 | `ApiErrorCodes`    | Gateway error codes for the response envelope                           |
 
@@ -816,6 +865,7 @@ snapshot write / read time. The hot path only increments a counter.
 | `DecimalCodecTest`                   | Unit        | Fixed-scale decimal parse / format round trips, errors  |
 | `JsonCodecTest`                      | Unit        | Gateway JSON writer / reader round trips, malformed input |
 | `GatewayStateTest`                   | Unit        | Registry uniqueness, symbol lifecycle, profiles         |
+| `WsProtocolTest`                     | Unit        | WS subscription registry bounds and outbound JSON frame shapes |
 | `ExcClientIntegrationTest`           | Integration | Client submit / poll, command-id correlation            |
 | `ExcClientKeepaliveIntegrationTest`  | Integration | Idle client survives cluster session timeout via NOP keepalives |
 | `ExcAccountsIntegrationTest`         | Integration | Account lifecycle result codes end to end               |
@@ -826,6 +876,7 @@ snapshot write / read time. The hot path only increments a counter.
 | `XcoreBenchSmokeTest`                | Integration | exchange-core replay cross-validates; pipeline boots    |
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth, L2   |
 | `RestGatewayIntegrationTest`         | Integration | REST flow vs in-process cluster: admin, orders, reads   |
+| `WebSocketGatewayIntegrationTest`    | Integration | WS real-time: ticks, order updates, order book, unsubscribe, errors |
 | `EventJournalRecorderIntegrationTest`| Integration | Recorder drains the ring onto an Aeron stream           |
 | `JournalClusterIntegrationTest`      | Integration | A committed trade reaches the recorded journal stream   |
 | `JournalConsumerIntegrationTest`     | Integration | Re-delivered events are deduped to exactly-once         |

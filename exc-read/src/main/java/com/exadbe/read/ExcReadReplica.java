@@ -41,6 +41,7 @@ public final class ExcReadReplica implements AutoCloseable {
     private final String localHost;
     private final ReportGenerator reports;
 
+    private ReplicaCommandListener commandListener = ReplicaCommandListener.NONE;
     private LiveLogSubscriber liveLog;
     private long appliedPosition;
     private long nextConnectMs;
@@ -103,13 +104,32 @@ public final class ExcReadReplica implements AutoCloseable {
             return;
         }
         final LiveLogSubscriber subscriber =
-                new LiveLogSubscriber(archive, engine, outcome, appliedPosition, localHost);
+                new LiveLogSubscriber(archive, engine, outcome, commandListener, appliedPosition, localHost);
         if (subscriber.connect()) {
             liveLog = subscriber;
         } else {
             subscriber.close();
             nextConnectMs = System.currentTimeMillis() + RECONNECT_BACKOFF_MS;
         }
+    }
+
+    /**
+     * Registers a callback fired for every command applied from the followed
+     * log, with the leader-assigned timestamp and the command outcome. Must be
+     * set before the replica starts polling; the gateway agent uses it to push
+     * real-time market events over WebSocket.
+     */
+    public void setCommandListener(final ReplicaCommandListener listener) {
+        this.commandListener = listener == null ? ReplicaCommandListener.NONE : listener;
+    }
+
+    /**
+     * Whether the replica has replayed past the recording position observed at
+     * connect and is following live, so command callbacks carry recent events
+     * rather than history. False while disconnected or during initial replay.
+     */
+    public boolean isCaughtUp() {
+        return liveLog != null && liveLog.isCaughtUp();
     }
 
     /** The cluster-global log position consumed so far. */

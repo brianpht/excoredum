@@ -21,6 +21,11 @@ public final class GatewayConfig {
     private final int maxInFlight;
     private final int maxContentLength;
     private final int requestSlots;
+    private final String websocketPath;
+    private final int maxWebSocketConnections;
+    private final int maxSubscriptionsPerConnection;
+    private final int maxWebSocketFrameLength;
+    private final int wsInboundSlots;
 
     private GatewayConfig(final Builder builder) {
         this.port = builder.port;
@@ -35,6 +40,11 @@ public final class GatewayConfig {
         this.maxInFlight = builder.maxInFlight;
         this.maxContentLength = builder.maxContentLength;
         this.requestSlots = builder.requestSlots;
+        this.websocketPath = builder.websocketPath;
+        this.maxWebSocketConnections = builder.maxWebSocketConnections;
+        this.maxSubscriptionsPerConnection = builder.maxSubscriptionsPerConnection;
+        this.maxWebSocketFrameLength = builder.maxWebSocketFrameLength;
+        this.wsInboundSlots = builder.wsInboundSlots;
     }
 
     public static Builder builder(
@@ -100,6 +110,28 @@ public final class GatewayConfig {
         return requestSlots;
     }
 
+    /** WebSocket upgrade path for the real-time market data channel. */
+    public String websocketPath() {
+        return websocketPath;
+    }
+
+    public int maxWebSocketConnections() {
+        return maxWebSocketConnections;
+    }
+
+    public int maxSubscriptionsPerConnection() {
+        return maxSubscriptionsPerConnection;
+    }
+
+    public int maxWebSocketFrameLength() {
+        return maxWebSocketFrameLength;
+    }
+
+    /** Pooled WebSocket event slot count; a power of two backing the lock-free inbound queue. */
+    public int wsInboundSlots() {
+        return wsInboundSlots;
+    }
+
     /** Fluent builder with defaults for local and production use. */
     public static final class Builder {
         private final long clientId;
@@ -114,6 +146,11 @@ public final class GatewayConfig {
         private int maxInFlight = 1024;
         private int maxContentLength = 64 * 1024;
         private int requestSlots = 1024;
+        private String websocketPath = "/ticks-websocket";
+        private int maxWebSocketConnections = 256;
+        private int maxSubscriptionsPerConnection = 32;
+        private int maxWebSocketFrameLength = 64 * 1024;
+        private int wsInboundSlots = 1024;
 
         private Builder(
                 final long clientId,
@@ -167,6 +204,31 @@ public final class GatewayConfig {
             return this;
         }
 
+        public Builder websocketPath(final String value) {
+            this.websocketPath = value;
+            return this;
+        }
+
+        public Builder maxWebSocketConnections(final int value) {
+            this.maxWebSocketConnections = value;
+            return this;
+        }
+
+        public Builder maxSubscriptionsPerConnection(final int value) {
+            this.maxSubscriptionsPerConnection = value;
+            return this;
+        }
+
+        public Builder maxWebSocketFrameLength(final int value) {
+            this.maxWebSocketFrameLength = value;
+            return this;
+        }
+
+        public Builder wsInboundSlots(final int value) {
+            this.wsInboundSlots = value;
+            return this;
+        }
+
         public GatewayConfig build() {
             if (port < 0 || port > 65535) {
                 throw new IllegalArgumentException("port out of range: " + port);
@@ -185,6 +247,21 @@ public final class GatewayConfig {
             }
             if (maxContentLength <= 0) {
                 throw new IllegalArgumentException("maxContentLength must be positive");
+            }
+            if (websocketPath == null || websocketPath.isEmpty() || websocketPath.charAt(0) != '/') {
+                throw new IllegalArgumentException("websocketPath must start with '/': " + websocketPath);
+            }
+            if (maxWebSocketConnections <= 0) {
+                throw new IllegalArgumentException("maxWebSocketConnections must be positive");
+            }
+            if (maxSubscriptionsPerConnection <= 0) {
+                throw new IllegalArgumentException("maxSubscriptionsPerConnection must be positive");
+            }
+            if (maxWebSocketFrameLength <= 0) {
+                throw new IllegalArgumentException("maxWebSocketFrameLength must be positive");
+            }
+            if (wsInboundSlots <= 0 || (wsInboundSlots & (wsInboundSlots - 1)) != 0) {
+                throw new IllegalArgumentException("wsInboundSlots must be a power of two: " + wsInboundSlots);
             }
             return new GatewayConfig(this);
         }

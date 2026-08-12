@@ -20,5 +20,5 @@ dependencies {
     implementation(project(":exc-client"))
     implementation(project(":exc-read"))
     implementation(project(":exc-core"))
-    implementation(libs.netty.codec.http)
+    api(libs.netty.codec.http)
 }

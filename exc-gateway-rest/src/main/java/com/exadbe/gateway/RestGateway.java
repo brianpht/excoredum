@@ -8,6 +8,7 @@ import com.exadbe.gateway.core.GatewayAgent;
 import com.exadbe.gateway.core.GatewayState;
 import com.exadbe.gateway.transport.GatewayRequest;
 import com.exadbe.gateway.transport.HttpServer;
+import com.exadbe.gateway.transport.WsEvent;
 import com.exadbe.read.ExcReadReplica;
 import com.exadbe.read.config.ReadReplicaConfig;
 import java.util.concurrent.TimeUnit;
@@ -59,6 +60,13 @@ public final class RestGateway implements AutoCloseable {
         for (int i = 0; i < config.requestSlots(); i++) {
             free.offer(new GatewayRequest());
         }
+        final ManyToOneConcurrentArrayQueue<WsEvent> wsInbound =
+                new ManyToOneConcurrentArrayQueue<>(config.wsInboundSlots());
+        final ManyToOneConcurrentArrayQueue<WsEvent> wsFree =
+                new ManyToOneConcurrentArrayQueue<>(config.wsInboundSlots());
+        for (int i = 0; i < config.wsInboundSlots(); i++) {
+            wsFree.offer(new WsEvent());
+        }
 
         final ReadReplicaConfig replicaConfig =
                 ReadReplicaConfig.localhost(config.replicaAeronDirectoryName(), config.archiveControlChannel());
@@ -67,7 +75,8 @@ public final class RestGateway implements AutoCloseable {
         HttpServer httpServer = null;
         try {
             final GatewayState state = new GatewayState(REGISTRY_CAPACITY);
-            final GatewayAgent agent = new GatewayAgent(config, replica, state, inbound, free);
+            final GatewayAgent agent = new GatewayAgent(config, replica, state, inbound, free, wsInbound, wsFree);
+            replica.setCommandListener(agent::onReplicaCommand);
             final ClientConfig clientConfig = ClientConfig.builder(config.clientId(), config.ingressEndpoints())
                     .aeronDirectoryName(config.clientAeronDirectoryName())
                     .egressChannel(config.egressChannel())
@@ -75,8 +84,16 @@ public final class RestGateway implements AutoCloseable {
                     .build();
             client = new ExcClient(clientConfig, agent);
             agent.bind(client);
-            httpServer =
-                    new HttpServer(config.port(), inbound, free, config.requestTimeoutNs(), config.maxContentLength());
+            httpServer = new HttpServer(
+                    config.port(),
+                    inbound,
+                    free,
+                    config.requestTimeoutNs(),
+                    config.maxContentLength(),
+                    wsInbound,
+                    wsFree,
+                    config.websocketPath(),
+                    config.maxWebSocketFrameLength());
             httpServer.start();
             final Thread agentThread = new Thread(agent, "gateway-agent");
             agentThread.start();

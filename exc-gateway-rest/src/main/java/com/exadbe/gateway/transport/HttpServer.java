@@ -8,14 +8,19 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolConfig;
+import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import java.net.InetSocketAddress;
 import java.util.concurrent.TimeUnit;
 import org.agrona.concurrent.ManyToOneConcurrentArrayQueue;
 
 /**
- * Netty HTTP front end. Event loops only decode HTTP, route, and enqueue pooled
- * request slots; the gateway agent owns every downstream decision. Binding to
- * port {@code 0} picks a free port, readable via {@link #boundPort()}.
+ * Netty HTTP + WebSocket front end. Event loops only decode HTTP, route, and
+ * enqueue pooled request slots; the gateway agent owns every downstream
+ * decision. HTTP requests are answered on the REST routes; upgrades on the
+ * configured WebSocket path switch the pipeline to the real-time market data
+ * channel ({@link WebSocketHandler}). Binding to port {@code 0} picks a free
+ * port, readable via {@link #boundPort()}.
  */
 public final class HttpServer implements AutoCloseable {
 
@@ -24,6 +29,10 @@ public final class HttpServer implements AutoCloseable {
     private final ManyToOneConcurrentArrayQueue<GatewayRequest> free;
     private final long requestTimeoutNs;
     private final int maxContentLength;
+    private final ManyToOneConcurrentArrayQueue<WsEvent> wsInbound;
+    private final ManyToOneConcurrentArrayQueue<WsEvent> wsFree;
+    private final String websocketPath;
+    private final int maxWebSocketFrameLength;
 
     private NioEventLoopGroup boss;
     private NioEventLoopGroup workers;
@@ -34,12 +43,20 @@ public final class HttpServer implements AutoCloseable {
             final ManyToOneConcurrentArrayQueue<GatewayRequest> inbound,
             final ManyToOneConcurrentArrayQueue<GatewayRequest> free,
             final long requestTimeoutNs,
-            final int maxContentLength) {
+            final int maxContentLength,
+            final ManyToOneConcurrentArrayQueue<WsEvent> wsInbound,
+            final ManyToOneConcurrentArrayQueue<WsEvent> wsFree,
+            final String websocketPath,
+            final int maxWebSocketFrameLength) {
         this.port = port;
         this.inbound = inbound;
         this.free = free;
         this.requestTimeoutNs = requestTimeoutNs;
         this.maxContentLength = maxContentLength;
+        this.wsInbound = wsInbound;
+        this.wsFree = wsFree;
+        this.websocketPath = websocketPath;
+        this.maxWebSocketFrameLength = maxWebSocketFrameLength;
     }
 
     public void start() throws InterruptedException {
@@ -54,7 +71,12 @@ public final class HttpServer implements AutoCloseable {
                         ch.pipeline()
                                 .addLast(new HttpServerCodec())
                                 .addLast(new HttpObjectAggregator(maxContentLength))
-                                .addLast(new RouterHandler(inbound, free, requestTimeoutNs));
+                                .addLast(new WebSocketServerProtocolHandler(WebSocketServerProtocolConfig.newBuilder()
+                                        .websocketPath(websocketPath)
+                                        .maxFramePayloadLength(maxWebSocketFrameLength)
+                                        .build()))
+                                .addLast(new RouterHandler(inbound, free, requestTimeoutNs))
+                                .addLast(new WebSocketHandler(wsInbound, wsFree));
                     }
                 });
         channel = bootstrap.bind(port).sync().channel();

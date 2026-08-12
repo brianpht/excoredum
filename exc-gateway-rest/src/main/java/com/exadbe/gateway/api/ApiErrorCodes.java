@@ -18,7 +18,10 @@ public enum ApiErrorCodes {
     UNKNOWN_USER_404(1010, "unknown user"),
     INVALID_BODY(1011, "invalid request body"),
     INVALID_SIZE(1012, "invalid size"),
-    UNKNOWN_ROUTE(1013, "unknown route");
+    UNKNOWN_ROUTE(1013, "unknown route"),
+    WS_INVALID_OP(2000, "invalid websocket operation"),
+    WS_UNKNOWN_CHANNEL(2001, "unknown websocket channel"),
+    WS_LIMIT_EXCEEDED(2002, "websocket subscription limit exceeded");
 
     public final int gatewayErrorCode;
     public final String errorDescription;

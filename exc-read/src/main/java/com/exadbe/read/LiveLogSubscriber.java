@@ -33,6 +33,7 @@ final class LiveLogSubscriber implements AutoCloseable {
     private final AeronArchive archive;
     private final MatchingEngine engine;
     private final CommandOutcome outcome;
+    private final ReplicaCommandListener listener;
     private final long startPosition;
     private final String localHost;
     private final io.aeron.cluster.codecs.MessageHeaderDecoder consensusHeader =
@@ -45,25 +46,31 @@ final class LiveLogSubscriber implements AutoCloseable {
     private Subscription subscription;
     private long lastPosition;
     private boolean hadImage;
+    private long recordingId = -1L;
+    private long recordingEndPosition = -1L;
 
     LiveLogSubscriber(
             final AeronArchive archive,
             final MatchingEngine engine,
             final CommandOutcome outcome,
+            final ReplicaCommandListener listener,
             final long startPosition,
             final String localHost) {
         this.archive = archive;
         this.engine = engine;
         this.outcome = outcome;
+        this.listener = listener == null ? ReplicaCommandListener.NONE : listener;
         this.startPosition = startPosition;
         this.localHost = localHost;
     }
 
     boolean connect() {
-        final long recordingId = findConsensusRecording();
-        if (recordingId < 0) {
+        final long foundRecordingId = findConsensusRecording();
+        if (foundRecordingId < 0) {
             return false;
         }
+        this.recordingId = foundRecordingId;
+        this.recordingEndPosition = queryRecordingEndPosition(foundRecordingId);
         final Subscription sub = archive.context()
                 .aeron()
                 .addSubscription("aeron:udp?endpoint=" + localHost + ":0", ReadStreams.LIVE_LOG_REPLAY);
@@ -74,7 +81,7 @@ final class LiveLogSubscriber implements AutoCloseable {
         }
         final String replayChannel = "aeron:udp?endpoint=" + endpoint;
         archive.startReplay(
-                recordingId, startPosition, AeronArchive.NULL_LENGTH, replayChannel, ReadStreams.LIVE_LOG_REPLAY);
+                foundRecordingId, startPosition, AeronArchive.NULL_LENGTH, replayChannel, ReadStreams.LIVE_LOG_REPLAY);
         this.subscription = sub;
         this.lastPosition = startPosition;
         return true;
@@ -84,10 +91,30 @@ final class LiveLogSubscriber implements AutoCloseable {
         if (subscription == null) {
             return 0;
         }
+        if (!isCaughtUp()) {
+            // Refreshes the catch-up goal while the initial replay is running;
+            // the recording grows as new commands are committed.
+            this.recordingEndPosition = queryRecordingEndPosition(recordingId);
+        }
         if (subscription.imageCount() > 0) {
             hadImage = true;
         }
         return subscription.poll(fragmentHandler, fragmentLimit);
+    }
+
+    /**
+     * Whether the replay has passed the recording position observed at (and
+     * refreshed since) connect, i.e. following live rather than replaying
+     * history. Also true once a bounded replay of a stopped recording finished
+     * (its image closed); fail-closed while the position cannot be read.
+     */
+    boolean isCaughtUp() {
+        return isReplayEnded() || (recordingEndPosition >= 0L && lastPosition >= recordingEndPosition);
+    }
+
+    private long queryRecordingEndPosition(final long id) {
+        final long position = archive.getRecordingPosition(id);
+        return position >= 0L ? position : recordingEndPosition;
     }
 
     /** Whether the bounded replay caught up to an idle recording and its image closed. */
@@ -139,6 +166,7 @@ final class LiveLogSubscriber implements AutoCloseable {
                 excHeader.blockLength(),
                 excHeader.version());
         engine.process(envelopeDecoder, timestamp, outcome);
+        listener.onCommand(timestamp, envelopeDecoder, outcome);
     }
 
     private static String awaitResolvedEndpoint(final Subscription subscription) {

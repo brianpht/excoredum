@@ -4,6 +4,7 @@ import com.exadbe.client.BackpressureException;
 import com.exadbe.client.ExcClient;
 import com.exadbe.client.ResultHandler;
 import com.exadbe.config.CoreConfig;
+import com.exadbe.core.CommandOutcome;
 import com.exadbe.engine.orderbook.L2View;
 import com.exadbe.gateway.api.ApiErrorCodes;
 import com.exadbe.gateway.codec.DecimalCodec;
@@ -11,6 +12,8 @@ import com.exadbe.gateway.codec.JsonWriter;
 import com.exadbe.gateway.config.GatewayConfig;
 import com.exadbe.gateway.transport.GatewayRequest;
 import com.exadbe.gateway.transport.HttpResponses;
+import com.exadbe.gateway.transport.WsEvent;
+import com.exadbe.protocol.CommandEnvelopeDecoder;
 import com.exadbe.protocol.CommandResultCode;
 import com.exadbe.read.ExcReadReplica;
 import com.exadbe.read.report.SingleUserReport;
@@ -39,6 +42,7 @@ import org.agrona.concurrent.ManyToOneConcurrentArrayQueue;
 public final class GatewayAgent implements Runnable, ResultHandler {
 
     private static final int INBOUND_BATCH = 64;
+    private static final int WS_INBOUND_BATCH = 64;
     private static final int MAX_TRACKED_TAKER_ORDERS = 4096;
     private static final String SYMBOL_TYPE_SPOT = "CURRENCY_EXCHANGE_PAIR";
 
@@ -46,6 +50,9 @@ public final class GatewayAgent implements Runnable, ResultHandler {
     private final GatewayState state;
     private final ManyToOneConcurrentArrayQueue<GatewayRequest> inbound;
     private final ManyToOneConcurrentArrayQueue<GatewayRequest> free;
+    private final ManyToOneConcurrentArrayQueue<WsEvent> wsInbound;
+    private final ManyToOneConcurrentArrayQueue<WsEvent> wsFree;
+    private final RealtimePublisher realtime;
     private final Long2ObjectHashMap<GatewayRequest> inFlight;
     private final Long2ObjectHashMap<GatewayOrder> takerOrderByCommand = new Long2ObjectHashMap<>(256, 0.65f);
     private final IdleStrategy idleStrategy = new BackoffIdleStrategy();
@@ -65,11 +72,17 @@ public final class GatewayAgent implements Runnable, ResultHandler {
             final ExcReadReplica replica,
             final GatewayState state,
             final ManyToOneConcurrentArrayQueue<GatewayRequest> inbound,
-            final ManyToOneConcurrentArrayQueue<GatewayRequest> free) {
+            final ManyToOneConcurrentArrayQueue<GatewayRequest> free,
+            final ManyToOneConcurrentArrayQueue<WsEvent> wsInbound,
+            final ManyToOneConcurrentArrayQueue<WsEvent> wsFree) {
         this.replica = replica;
         this.state = state;
         this.inbound = inbound;
         this.free = free;
+        this.wsInbound = wsInbound;
+        this.wsFree = wsFree;
+        this.realtime = new RealtimePublisher(
+                state, new WsSubscriptions(config.maxWebSocketConnections(), config.maxSubscriptionsPerConnection()));
         this.inFlight = new Long2ObjectHashMap<>(Math.max(16, config.maxInFlight() * 2), 0.65f);
         this.orderIdPrefix = (long) config.gatewayId() << 48;
     }
@@ -89,6 +102,7 @@ public final class GatewayAgent implements Runnable, ResultHandler {
             work += client.poll();
             work += replica.poll();
             work += drainInbound();
+            work += drainWsEvents();
             work += sweepExpired();
             idleStrategy.idle(work);
         }
@@ -115,6 +129,119 @@ public final class GatewayAgent implements Runnable, ResultHandler {
             }
         }
         return count;
+    }
+
+    private int drainWsEvents() {
+        int count = 0;
+        for (int i = 0; i < WS_INBOUND_BATCH; i++) {
+            final WsEvent event = wsInbound.poll();
+            if (event == null) {
+                break;
+            }
+            count++;
+            dispatchWs(event);
+        }
+        return count;
+    }
+
+    private void dispatchWs(final WsEvent event) {
+        switch (event.kind) {
+            case WsEvent.SUBSCRIBE_TICKS:
+                handleSubscribeTicks(event);
+                break;
+            case WsEvent.UNSUBSCRIBE_TICKS:
+                handleUnsubscribeTicks(event);
+                break;
+            case WsEvent.SUBSCRIBE_ORDERS:
+                handleSubscribeOrders(event);
+                break;
+            case WsEvent.UNSUBSCRIBE_ORDERS:
+                handleUnsubscribeOrders(event);
+                break;
+            case WsEvent.ORDER_BOOK_REQUEST:
+                handleWsOrderBook(event);
+                break;
+            case WsEvent.DISCONNECT:
+                realtime.disconnect(event.ctx);
+                break;
+            default:
+                sendWsError(event, ApiErrorCodes.WS_INVALID_OP, null);
+                break;
+        }
+        event.reset();
+        wsFree.offer(event);
+    }
+
+    private void handleSubscribeTicks(final WsEvent event) {
+        final GatewaySymbolSpec spec = state.getSymbolSpec(event.symbolCode);
+        if (spec == null || spec.status() != GatewaySymbolSpec.STATUS_ACTIVE) {
+            sendWsError(event, ApiErrorCodes.UNKNOWN_SYMBOL_404, event.symbolCode);
+            return;
+        }
+        final int result = realtime.subscribeTicks(event.ctx, spec.symbolId());
+        if (result == WsSubscriptions.OK) {
+            realtime.ack(event.ctx, "subscribe", "ticks", spec.symbolCode(), WsEvent.ABSENT);
+        } else {
+            sendWsError(event, ApiErrorCodes.WS_LIMIT_EXCEEDED, null);
+        }
+    }
+
+    private void handleUnsubscribeTicks(final WsEvent event) {
+        final GatewaySymbolSpec spec = state.getSymbolSpec(event.symbolCode);
+        if (spec != null) {
+            realtime.unsubscribeTicks(event.ctx, spec.symbolId());
+        }
+    }
+
+    private void handleSubscribeOrders(final WsEvent event) {
+        if (event.uid == WsEvent.ABSENT) {
+            sendWsError(event, ApiErrorCodes.WS_INVALID_OP, "uid is required");
+            return;
+        }
+        final int result = realtime.subscribeOrders(event.ctx, event.uid);
+        if (result == WsSubscriptions.OK) {
+            realtime.ack(event.ctx, "subscribe", "orders", null, event.uid);
+        } else {
+            sendWsError(event, ApiErrorCodes.WS_LIMIT_EXCEEDED, null);
+        }
+    }
+
+    private void handleUnsubscribeOrders(final WsEvent event) {
+        if (event.uid != WsEvent.ABSENT) {
+            realtime.unsubscribeOrders(event.ctx, event.uid);
+        }
+    }
+
+    private void handleWsOrderBook(final WsEvent event) {
+        final GatewaySymbolSpec spec = state.getSymbolSpec(event.symbolCode);
+        if (spec == null || spec.status() != GatewaySymbolSpec.STATUS_ACTIVE) {
+            sendWsError(event, ApiErrorCodes.UNKNOWN_SYMBOL_404, event.symbolCode);
+            return;
+        }
+        if (!replica.orderBook(spec.symbolId(), l2View)) {
+            sendWsError(event, ApiErrorCodes.UNKNOWN_SYMBOL_404, "replica has not replicated this symbol yet");
+            return;
+        }
+        final int depth = event.depth <= 0 ? l2View.maxLevels() : Math.min(event.depth, l2View.maxLevels());
+        realtime.pushOrderBook(event.ctx, spec, l2View, depth);
+    }
+
+    private void sendWsError(final WsEvent event, final ApiErrorCodes code, final String detail) {
+        realtime.error(event.ctx, code.gatewayErrorCode, code.errorDescription + (detail == null ? "" : ": " + detail));
+    }
+
+    /** Journal-sourced real-time feed: pushes trade ticks to subscribed sockets. */
+    public void onReplicaCommand(
+            final long timestamp, final CommandEnvelopeDecoder envelope, final CommandOutcome outcome) {
+        if (!replica.isCaughtUp()) {
+            return;
+        }
+        for (int i = 0; i < outcome.eventCount(); i++) {
+            final CommandOutcome.EventRecord event = outcome.event(i);
+            if (event.kind() == CommandOutcome.EventKind.TRADE) {
+                realtime.pushTick(event.symbolId(), event.price(), event.size(), timestamp);
+            }
+        }
     }
 
     private void dispatch(final GatewayRequest req) {
@@ -230,31 +357,10 @@ public final class GatewayAgent implements Runnable, ResultHandler {
             return;
         }
         final int depth = req.depth <= 0 ? l2View.maxLevels() : Math.min(req.depth, l2View.maxLevels());
-        final int quoteScale = spec.quoteCurrency().scale();
         beginEnvelope(0, 0, "OK");
-        json.beginObject()
-                .name("symbol")
-                .valueString(spec.symbolCode())
-                .name("askPrices")
-                .beginArray();
-        final int asks = Math.min(l2View.askDepth(), depth);
-        for (int i = 0; i < asks; i++) {
-            json.valueDecimal(l2View.askPrice(i), quoteScale);
-        }
-        json.endArray().name("askVolumes").beginArray();
-        for (int i = 0; i < asks; i++) {
-            json.valueLong(l2View.askVolume(i));
-        }
-        json.endArray().name("bidPrices").beginArray();
-        final int bids = Math.min(l2View.bidDepth(), depth);
-        for (int i = 0; i < bids; i++) {
-            json.valueDecimal(l2View.bidPrice(i), quoteScale);
-        }
-        json.endArray().name("bidVolumes").beginArray();
-        for (int i = 0; i < bids; i++) {
-            json.valueLong(l2View.bidVolume(i));
-        }
-        json.endArray().endObject().endObject();
+        json.beginObject();
+        RealtimePublisher.writeOrderBookData(json, spec, l2View, depth);
+        json.endObject().endObject();
         send(req, HttpResponseStatus.OK);
         release(req);
     }
@@ -791,6 +897,7 @@ public final class GatewayAgent implements Runnable, ResultHandler {
                 final GatewayOrder order = profile == null ? null : profile.order(req.orderId);
                 if (order != null) {
                     order.price(req.price);
+                    realtime.pushOrderUpdate(req.uid, order);
                 }
                 break;
             }
@@ -803,6 +910,7 @@ public final class GatewayAgent implements Runnable, ResultHandler {
                 if (order != null) {
                     order.state(GatewayOrder.STATE_CANCELLED);
                     takerOrderByCommand.remove(order.commandIdLo());
+                    realtime.pushOrderUpdate(req.uid, order);
                 }
                 break;
             }
@@ -934,11 +1042,13 @@ public final class GatewayAgent implements Runnable, ResultHandler {
                     order.state(GatewayOrder.STATE_COMPLETED);
                     takerOrderByCommand.remove(order.commandIdLo());
                 }
+                realtime.pushOrderUpdate(makerUid, order);
             }
         }
         final GatewayOrder takerOrder = takerOrderByCommand.get(commandIdLo);
         if (takerOrder != null) {
             takerOrder.addDeal(true, price, size);
+            realtime.pushOrderUpdate(takerUid, takerOrder);
         }
     }
 
@@ -968,6 +1078,7 @@ public final class GatewayAgent implements Runnable, ResultHandler {
         } else {
             order.size(order.size() - reducedBy);
         }
+        realtime.pushOrderUpdate(uid, order);
     }
 
     private void onReject(
@@ -989,6 +1100,7 @@ public final class GatewayAgent implements Runnable, ResultHandler {
         }
         order.state(GatewayOrder.STATE_REJECTED);
         takerOrderByCommand.remove(order.commandIdLo());
+        realtime.pushOrderUpdate(uid, order);
     }
 
     private void trackTaker(final long commandIdLo, final GatewayOrder order) {

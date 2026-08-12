@@ -51,7 +51,13 @@ highly-available domain event journal on the Aeron Archive.
   backward-compatible schema evolution via optional fields.
 - **CQRS Read Replica**: `exc-read` runs a non-voting node that follows a cluster
   member's Aeron Archive and reproduces engine state for eventually-consistent
-  reads, without joining Raft or affecting quorum.
+  reads (L2 order-book snapshots, balances, user reports), without joining Raft
+  or affecting quorum.
+- **Real-Time Market Data via WebSocket**: `exc-gateway-rest` serves a WebSocket
+  channel on `ws://host:port/ticks-websocket` with plain JSON text frames (no
+  STOMP / SockJS framing): trade ticks for the whole market sourced from the
+  journal, order updates for users of the gateway, and L2 order-book snapshots
+  on demand.
 - **HA Domain Event Journal**: every node records a durable, semantic stream of
   trade / reduce / reject events to the Aeron Archive off the consensus thread;
   consumers replay it and dedup on `(logPosition, eventIndex)` for exactly-once
@@ -221,7 +227,40 @@ System.out.println(outcome.resultCode()); // e.g. SUCCESS
 
 The gateway bridges HTTP/JSON to the cluster: writes go through the client SDK
 (idempotent retry, leader-change resend), reads come from an embedded read
-replica and are eventually consistent. See `exc-gateway-rest` in the module map.
+replica and are eventually consistent.
+
+#### WebSocket real-time channel
+
+The same port also serves a WebSocket channel at `ws://host:port/ticks-websocket`.
+The wire format is plain JSON text frames - no STOMP or SockJS framing. Clients
+subscribe with flat operation objects:
+
+```json
+{"op":"subscribe","channel":"ticks","symbol":"BTCUSD"}
+{"op":"subscribe","channel":"orders","uid":2}
+{"op":"orderBook","symbol":"BTCUSD","depth":10}
+{"op":"unsubscribe","channel":"ticks","symbol":"BTCUSD"}
+{"op":"unsubscribe","channel":"orders","uid":2}
+```
+
+and receive JSON frames pushed by the gateway:
+
+- `{"type":"tick","symbol":"BTCUSD","price":"100.00","volume":4,"timestamp":...}`
+  - one frame per trade, journal-sourced through the embedded replica, so the
+    whole market is covered, not just this gateway's own orders;
+- `{"type":"orderUpdate","uid":2,"orderId":...,"symbol":"BTCUSD","price":"100.00",
+  "size":10,"filled":4,"state":"ACTIVE","userCookie":0,"action":"BID","orderType":"GTC"}`
+  - order state changes for users trading through this gateway;
+- `{"type":"orderBook","symbol":"BTCUSD","askPrices":[...],"askVolumes":[...],
+  "bidPrices":[...],"bidVolumes":[...]}` - an L2 snapshot on demand, shaped like
+  the REST order-book endpoint;
+- `{"type":"ack","op":"subscribe",...}` / `{"type":"error","code":1007,...}`
+  - confirmation and error frames (codes reuse the REST `ApiErrorCodes`).
+
+Subscriptions are per connection and bounded by `GatewayConfig`
+(`maxWebSocketConnections`, `maxSubscriptionsPerConnection`); tick frames are
+dropped for consumers whose channel is not writable (slow consumer). See
+`exc-gateway-rest` in the module map and `docs/ARCHITECTURE.md` for details.
 
 ## How It Works
 
@@ -338,7 +377,7 @@ flowchart TB
 | `exc-launcher` | Aeron bootstrap: Media Driver, Archive, Consensus, Container, journaler agent |
 | `exc-client`   | Client-side SDK: leader-change handling, idempotent retry, correlation, events |
 | `exc-read`     | CQRS read side and journal consumers: log follower, replay, dedup, HA failover |
-| `exc-gateway-rest` | REST/JSON gateway (Netty): writes via client SDK, reads via embedded replica |
+| `exc-gateway-rest` | REST/JSON + WebSocket real-time gateway (Netty): writes via client SDK, reads via embedded replica |
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram)     |
 | `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3 (replay parity, latency, JMH) |
 | `exc-tests`    | Unit, property, integration, cluster, fault tests and fixtures            |
@@ -405,6 +444,7 @@ Performance targets (defaults; tune per service):
 | `DecimalCodecTest`                 | Unit        | Fixed-scale decimal parse / format round trips, errors  |
 | `JsonCodecTest`                    | Unit        | Gateway JSON writer / reader round trips, malformed input |
 | `GatewayStateTest`                 | Unit        | Registry uniqueness, symbol lifecycle, profiles         |
+| `WsProtocolTest`                   | Unit        | WS subscription registry bounds and outbound JSON frame shapes |
 | `ExcClientIntegrationTest`         | Integration | Client submit / poll, command-id correlation            |
 | `ExcClientKeepaliveIntegrationTest` | Integration | Idle client survives session timeout via NOP keepalives |
 | `ExcAccountsIntegrationTest`       | Integration | Account lifecycle result codes end to end               |
@@ -412,9 +452,13 @@ Performance targets (defaults; tune per service):
 | `ExcReduceRejectEventsIntegrationTest` | Integration | Cancel / reduce / IOC / FOK reduce and reject on egress |
 | `ExcEgressEventsIntegrationTest`   | Integration | Taker sweep as one trade group; L2 snapshot on egress   |
 | `BenchHarnessSmokeTest`            | Integration | End-to-end latency harness boots and measures           |
+| `XcoreBenchSmokeTest`              | Integration | exchange-core replay cross-validates; pipeline boots    |
 | `ReadReplicaIntegrationTest`       | Integration | Replica reproduces users, balances, resting depth, L2   |
 | `RestGatewayIntegrationTest`       | Integration | REST flow vs in-process cluster: admin, orders, reads   |
+| `WebSocketGatewayIntegrationTest`  | Integration | WS real-time: ticks, order updates, order book, unsubscribe, errors |
+| `EventJournalRecorderIntegrationTest` | Integration | Recorder drains the ring onto an Aeron stream        |
 | `JournalClusterIntegrationTest`    | Integration | A committed trade reaches the recorded journal stream   |
+| `JournalConsumerIntegrationTest`   | Integration | Re-delivered events are deduped to exactly-once         |
 | `JournalReplayIntegrationTest`     | Integration | Archive replay decodes trades; repeated replay dedups   |
 | `SnapshotWarmRestartIntegrationTest` | Cluster   | Warm restart recovers state from a native snapshot      |
 | `LeaderKillFailoverTest`           | Fault       | Three-node leader kill; exactly-once, no loss or dup    |
