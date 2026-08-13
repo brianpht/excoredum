@@ -3,6 +3,7 @@ package com.exadbe.read;
 import com.exadbe.core.CommandOutcome;
 import com.exadbe.engine.MatchingEngine;
 import com.exadbe.protocol.CommandEnvelopeDecoder;
+import com.exadbe.read.order.OrderLedger;
 import io.aeron.Subscription;
 import io.aeron.archive.client.AeronArchive;
 import io.aeron.archive.client.RecordingDescriptorConsumer;
@@ -33,6 +34,7 @@ final class LiveLogSubscriber implements AutoCloseable {
     private final AeronArchive archive;
     private final MatchingEngine engine;
     private final CommandOutcome outcome;
+    private final OrderLedger ledger;
     private final ReplicaCommandListener listener;
     private final long startPosition;
     private final String localHost;
@@ -53,12 +55,14 @@ final class LiveLogSubscriber implements AutoCloseable {
             final AeronArchive archive,
             final MatchingEngine engine,
             final CommandOutcome outcome,
+            final OrderLedger ledger,
             final ReplicaCommandListener listener,
             final long startPosition,
             final String localHost) {
         this.archive = archive;
         this.engine = engine;
         this.outcome = outcome;
+        this.ledger = ledger;
         this.listener = listener == null ? ReplicaCommandListener.NONE : listener;
         this.startPosition = startPosition;
         this.localHost = localHost;
@@ -166,6 +170,7 @@ final class LiveLogSubscriber implements AutoCloseable {
                 excHeader.blockLength(),
                 excHeader.version());
         engine.process(envelopeDecoder, timestamp, outcome);
+        ledger.applyCommand(timestamp, envelopeDecoder, outcome);
         listener.onCommand(timestamp, envelopeDecoder, outcome);
     }
 

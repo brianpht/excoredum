@@ -82,10 +82,10 @@ class ExcOrderBookIntegrationTest {
             awaitResult(client, client.addUser(TAKER), lastCommandIdLo);
             awaitResult(client, client.adjustBalance(TAKER, QUOTE, 1_000_000L), lastCommandIdLo);
 
-            awaitResult(client, client.placeGtc(SYM, 1L, true, 100L, 10L, 0L, MAKER), lastCommandIdLo);
+            awaitResult(client, client.placeGtc(SYM, 1L, true, 100L, 10L, 0L, MAKER, 0), lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
 
-            awaitResult(client, client.placeGtc(SYM, 2L, false, 105L, 6L, 105L, TAKER), lastCommandIdLo);
+            awaitResult(client, client.placeGtc(SYM, 2L, false, 105L, 6L, 105L, TAKER, 0), lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
             assertEquals(6L, lastFilled[0]);
 

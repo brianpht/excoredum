@@ -117,13 +117,13 @@ public final class QuickStartExample {
 
             // -- match: a resting ask crossed by a taker bid --
             System.out.println("maker rests ask 10 @ 100; taker buys 6 -> one trade, one group");
-            await(client, client.placeGtc(SYM, 1L, true, 100L, 10L, 0L, MAKER), lastCommandIdLo);
-            await(client, client.placeGtc(SYM, 2L, false, 105L, 6L, 105L, TAKER), lastCommandIdLo);
+            await(client, client.placeGtc(SYM, 1L, true, 100L, 10L, 0L, MAKER, 0), lastCommandIdLo);
+            await(client, client.placeGtc(SYM, 2L, false, 105L, 6L, 105L, TAKER, 0), lastCommandIdLo);
 
             // -- sweep: one taker command crossing two price levels --
             System.out.println("maker rests ask 4 @ 101; taker buys 5 -> two fills in one group");
-            await(client, client.placeGtc(SYM, 3L, true, 101L, 4L, 0L, MAKER), lastCommandIdLo);
-            await(client, client.placeGtc(SYM, 4L, false, 101L, 5L, 105L, TAKER), lastCommandIdLo);
+            await(client, client.placeGtc(SYM, 3L, true, 101L, 4L, 0L, MAKER, 0), lastCommandIdLo);
+            await(client, client.placeGtc(SYM, 4L, false, 101L, 5L, 105L, TAKER, 0), lastCommandIdLo);
 
             // -- lifecycle: cancel the maker's remainder --
             System.out.println("maker cancels order 3 -> reduce event with price and completion");
@@ -131,11 +131,11 @@ public final class QuickStartExample {
 
             // -- no liquidity: a FOK-BUDGET bid against an empty book --
             System.out.println("taker FOK-BUDGET buy -> wholesale reject event");
-            await(client, client.placeFokBudget(SYM, 5L, false, 100L, 5L, TAKER), lastCommandIdLo);
+            await(client, client.placeFokBudget(SYM, 5L, false, 100L, 5L, TAKER, 0), lastCommandIdLo);
 
             // -- market data: rest a level and request the L2 snapshot --
             System.out.println("maker rests ask 2 @ 102; order-book request -> L2 snapshot");
-            await(client, client.placeGtc(SYM, 6L, true, 102L, 2L, 0L, MAKER), lastCommandIdLo);
+            await(client, client.placeGtc(SYM, 6L, true, 102L, 2L, 0L, MAKER, 0), lastCommandIdLo);
             await(client, client.requestOrderBook(SYM, TAKER), lastCommandIdLo);
 
             // Drain until every expected event has been observed on the egress.

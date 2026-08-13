@@ -6,6 +6,9 @@ import com.exadbe.engine.MatchingEngine;
 import com.exadbe.engine.orderbook.L2View;
 import com.exadbe.engine.orderbook.OrderBookNaive;
 import com.exadbe.read.config.ReadReplicaConfig;
+import com.exadbe.read.order.MarketTrade;
+import com.exadbe.read.order.OrderLedger;
+import com.exadbe.read.order.OrderRecord;
 import com.exadbe.read.report.ReportGenerator;
 import com.exadbe.read.report.SingleUserReport;
 import com.exadbe.read.report.TotalCurrencyBalance;
@@ -14,6 +17,7 @@ import io.aeron.Aeron;
 import io.aeron.archive.client.AeronArchive;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
+import java.util.List;
 
 /**
  * A non-voting read replica that follows a cluster member's committed consensus
@@ -37,6 +41,7 @@ public final class ExcReadReplica implements AutoCloseable {
     private final AeronArchive archive;
     private final MatchingEngine engine;
     private final CommandOutcome outcome;
+    private final OrderLedger ledger = new OrderLedger();
     private final ReplicationHealth health = new ReplicationHealth();
     private final String localHost;
     private final ReportGenerator reports;
@@ -104,7 +109,7 @@ public final class ExcReadReplica implements AutoCloseable {
             return;
         }
         final LiveLogSubscriber subscriber =
-                new LiveLogSubscriber(archive, engine, outcome, commandListener, appliedPosition, localHost);
+                new LiveLogSubscriber(archive, engine, outcome, ledger, commandListener, appliedPosition, localHost);
         if (subscriber.connect()) {
             liveLog = subscriber;
         } else {
@@ -178,6 +183,31 @@ public final class ExcReadReplica implements AutoCloseable {
     /** Balances and resting orders for {@code uid}, from the replicated state. */
     public SingleUserReport singleUserReport(final long uid) {
         return reports.singleUser(uid);
+    }
+
+    /** Every tracked order of {@code uid} in placement order, from the replicated log. */
+    public List<OrderRecord> orderHistory(final long uid) {
+        return ledger.orderHistory(uid);
+    }
+
+    /** The still-resting orders of {@code uid}, from the replicated log. */
+    public List<OrderRecord> activeOrders(final long uid) {
+        return ledger.activeOrders(uid);
+    }
+
+    /** The tracked record for {@code orderId}, or {@code null} when unknown. */
+    public OrderRecord order(final long orderId) {
+        return ledger.order(orderId);
+    }
+
+    /** The most recent {@code limit} trades involving {@code uid} as maker or taker. */
+    public List<MarketTrade> userTrades(final long uid, final int limit) {
+        return ledger.userTrades(uid, limit);
+    }
+
+    /** The most recent {@code limit} trades of {@code symbolId}. */
+    public List<MarketTrade> marketTrades(final int symbolId, final int limit) {
+        return ledger.marketTrades(symbolId, limit);
     }
 
     /** Per-currency total of all balances plus funds reserved by resting orders. */

@@ -86,19 +86,19 @@ public final class ExcBenchHarness {
                     lastIdLo);
 
             // One deep resting ask the takers nibble at without depleting.
-            await(client, client.placeGtc(SYMBOL, 1L, true, PRICE, makerSize, 0L, MAKER), lastIdLo);
+            await(client, client.placeGtc(SYMBOL, 1L, true, PRICE, makerSize, 0L, MAKER, 0), lastIdLo);
             require(lastCode[0], "resting maker");
 
             long orderId = 2L;
             for (int i = 0; i < warmupOps; i++) {
-                await(client, client.placeGtc(SYMBOL, orderId++, false, PRICE, 1L, PRICE, TAKER), lastIdLo);
+                await(client, client.placeGtc(SYMBOL, orderId++, false, PRICE, 1L, PRICE, TAKER, 0), lastIdLo);
             }
 
             final Histogram histogram = new Histogram(1L, 60_000_000_000L, 3);
             final long began = System.nanoTime();
             for (int i = 0; i < measureOps; i++) {
                 final long t0 = System.nanoTime();
-                await(client, client.placeGtc(SYMBOL, orderId++, false, PRICE, 1L, PRICE, TAKER), lastIdLo);
+                await(client, client.placeGtc(SYMBOL, orderId++, false, PRICE, 1L, PRICE, TAKER, 0), lastIdLo);
                 histogram.recordValue(System.nanoTime() - t0);
             }
             final long elapsedNanos = System.nanoTime() - began;

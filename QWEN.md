@@ -53,8 +53,7 @@ data flows, determinism rules, and order-book semantics.
 | `exc-core`     | Deterministic matching engine, order book, risk/fees, dedup, snapshot, telemetry, journal. This is the hot path. |
 | `exc-launcher` | Aeron bootstrap: Media Driver, Archive, Consensus, Container, journaler agent. `main` class: `com.exadbe.launcher.ClusterLauncher`. |
 | `exc-client`   | Client SDK (depends only on `exc-protocol`): leader-change handling, idempotent retry, correlation, egress events. |
-| `exc-read`     | CQRS read replica and HA journal consumers (replay + dedup + failover), plus balance report generation. |
-| `exc-gateway-rest` | REST/JSON gateway on Netty: writes via `exc-client`, reads via an embedded `exc-read` replica (eventually consistent). Boundary service - JSON lives here, never in the core. |
+| `exc-read`     | CQRS read replica and HA journal consumers (replay + dedup + failover), balance report generation, per-user order history ledger and market trade tape rebuilt from the log. |
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram).  |
 | `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3: replay parity, engine/pipeline latency, e2e, JMH. Exempt from determinism rules. |
 | `exc-tests`    | Unit, property, integration, cluster, and fault suites + test fixtures.  |
@@ -68,7 +67,7 @@ data flows, determinism rules, and order-book semantics.
 
 Aeron/Agrona need `--add-opens java.base/jdk.internal.misc=ALL-UNNAMED` and
 `--add-opens java.base/sun.nio.ch=ALL-UNNAMED`; the root build applies these
-to all Test tasks, and the launcher / read / gateway / bench application
+to all Test tasks, and the launcher / read / bench application
 configs set them automatically.
 
 ### Running services
@@ -85,9 +84,6 @@ configs set them automatically.
 
 # CQRS read replica following a member's archive
 ./gradlew exc-read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
-
-# REST gateway (writes via client SDK, reads via embedded replica)
-./gradlew exc-gateway-rest:run --args="--port=8080 --ingress=0=localhost:20100 --archive=aeron:udp?endpoint=localhost:20104"
 ```
 
 ### Testing

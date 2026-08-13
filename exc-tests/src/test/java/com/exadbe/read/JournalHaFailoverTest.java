@@ -66,14 +66,14 @@ class JournalHaFailoverTest {
                 submit(client, () -> client.adjustBalance(MAKER, BASE, 10_000L));
                 submit(client, () -> client.addUser(TAKER));
                 submit(client, () -> client.adjustBalance(TAKER, QUOTE, 10_000_000L));
-                submit(client, () -> client.placeGtc(SYM, 1L, true, 100L, 100L, 0L, MAKER));
+                submit(client, () -> client.placeGtc(SYM, 1L, true, 100L, 100L, 0L, MAKER, 0));
                 expected += 6;
                 drainUntil(client, results, expected);
 
                 // Each small taker bid fully fills against the resting ask: one trade per bid.
                 for (int i = 0; i < TRADES_BEFORE; i++) {
                     final long orderId = 10L + i;
-                    submit(client, () -> client.placeGtc(SYM, orderId, false, 100L, 1L, 100L, TAKER));
+                    submit(client, () -> client.placeGtc(SYM, orderId, false, 100L, 1L, 100L, TAKER, 0));
                 }
                 expected += TRADES_BEFORE;
                 drainUntil(client, results, expected);
@@ -85,7 +85,7 @@ class JournalHaFailoverTest {
 
                 for (int i = 0; i < TRADES_AFTER; i++) {
                     final long orderId = 20L + i;
-                    submit(client, () -> client.placeGtc(SYM, orderId, false, 100L, 1L, 100L, TAKER));
+                    submit(client, () -> client.placeGtc(SYM, orderId, false, 100L, 1L, 100L, TAKER, 0));
                 }
                 expected += TRADES_AFTER;
                 drainUntil(client, results, expected);

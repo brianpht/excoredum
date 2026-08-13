@@ -54,8 +54,8 @@ class JournalReplayIntegrationTest {
                 await(client, client.adjustBalance(MAKER, BASE, 1_000L), lastIdLo);
                 await(client, client.addUser(TAKER), lastIdLo);
                 await(client, client.adjustBalance(TAKER, QUOTE, 1_000_000L), lastIdLo);
-                await(client, client.placeGtc(SYM, 1L, true, 100L, 10L, 0L, MAKER), lastIdLo);
-                await(client, client.placeGtc(SYM, 2L, false, 105L, 4L, 105L, TAKER), lastIdLo);
+                await(client, client.placeGtc(SYM, 1L, true, 100L, 10L, 0L, MAKER, 0), lastIdLo);
+                await(client, client.placeGtc(SYM, 2L, false, 105L, 4L, 105L, TAKER, 0), lastIdLo);
                 assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
             }
 

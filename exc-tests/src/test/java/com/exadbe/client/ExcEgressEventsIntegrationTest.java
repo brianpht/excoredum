@@ -138,12 +138,12 @@ class ExcEgressEventsIntegrationTest {
             awaitResult(client, client.adjustBalance(TAKER, QUOTE, 1_000_000L), lastCommandIdLo);
 
             // Two resting asks at distinct levels; one taker bid sweeps both.
-            awaitResult(client, client.placeGtc(SYM, 10L, true, 100L, 3L, 0L, MAKER), lastCommandIdLo);
+            awaitResult(client, client.placeGtc(SYM, 10L, true, 100L, 3L, 0L, MAKER, 0), lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
-            awaitResult(client, client.placeGtc(SYM, 11L, true, 101L, 4L, 0L, MAKER), lastCommandIdLo);
+            awaitResult(client, client.placeGtc(SYM, 11L, true, 101L, 4L, 0L, MAKER, 0), lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
 
-            final long sweepId = client.placeGtc(SYM, 12L, false, 101L, 5L, 105L, TAKER);
+            final long sweepId = client.placeGtc(SYM, 12L, false, 101L, 5L, 105L, TAKER, 0);
             awaitResult(client, sweepId, lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
             assertEquals(5L, lastFilled[0]);
@@ -164,7 +164,7 @@ class ExcEgressEventsIntegrationTest {
             assertEquals(0L, groupMaker1[3], "the second maker keeps its remainder");
 
             // Rest one bid, then ask for the book: the L2 frame trails the result.
-            awaitResult(client, client.placeGtc(SYM, 13L, false, 99L, 7L, 99L, MAKER), lastCommandIdLo);
+            awaitResult(client, client.placeGtc(SYM, 13L, false, 99L, 7L, 99L, MAKER, 0), lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
 
             final long l2Id = client.requestOrderBook(SYM, TAKER);

@@ -281,7 +281,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             final long price,
             final long size,
             final long reserveBidPrice,
-            final long uid) {
+            final long uid,
+            final int userCookie) {
         return submitOrder(
                 OrderCommandType.PLACE_ORDER,
                 symbolId,
@@ -291,7 +292,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 OrderType.GTC,
                 price,
                 reserveBidPrice,
-                size);
+                size,
+                userCookie);
     }
 
     /** Submits an IOC limit order. */
@@ -301,7 +303,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             final boolean ask,
             final long price,
             final long size,
-            final long uid) {
+            final long uid,
+            final int userCookie) {
         return submitOrder(
                 OrderCommandType.PLACE_ORDER,
                 symbolId,
@@ -311,7 +314,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 OrderType.IOC,
                 price,
                 CommandEnvelopeEncoder.reserveBidPriceNullValue(),
-                size);
+                size,
+                userCookie);
     }
 
     /** Submits a fill-or-kill budget order ({@code budget} is the total price limit). */
@@ -321,7 +325,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             final boolean ask,
             final long budget,
             final long size,
-            final long uid) {
+            final long uid,
+            final int userCookie) {
         return submitOrder(
                 OrderCommandType.PLACE_ORDER,
                 symbolId,
@@ -331,7 +336,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 OrderType.FOK_BUDGET,
                 budget,
                 CommandEnvelopeEncoder.reserveBidPriceNullValue(),
-                size);
+                size,
+                userCookie);
     }
 
     /** Cancels a resting order. */
@@ -345,7 +351,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 OrderType.NULL_VAL,
                 CommandEnvelopeEncoder.priceNullValue(),
                 CommandEnvelopeEncoder.reserveBidPriceNullValue(),
-                CommandEnvelopeEncoder.sizeNullValue());
+                CommandEnvelopeEncoder.sizeNullValue(),
+                CommandEnvelopeEncoder.userCookieNullValue());
     }
 
     /** Moves a resting order to {@code newPrice}. */
@@ -359,7 +366,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 OrderType.NULL_VAL,
                 newPrice,
                 CommandEnvelopeEncoder.reserveBidPriceNullValue(),
-                CommandEnvelopeEncoder.sizeNullValue());
+                CommandEnvelopeEncoder.sizeNullValue(),
+                CommandEnvelopeEncoder.userCookieNullValue());
     }
 
     /** Reduces a resting order by {@code size}. */
@@ -373,7 +381,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 OrderType.NULL_VAL,
                 CommandEnvelopeEncoder.priceNullValue(),
                 CommandEnvelopeEncoder.reserveBidPriceNullValue(),
-                size);
+                size,
+                CommandEnvelopeEncoder.userCookieNullValue());
     }
 
     /** Requests an L2 order-book snapshot for {@code symbolId}. */
@@ -387,7 +396,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 OrderType.NULL_VAL,
                 CommandEnvelopeEncoder.priceNullValue(),
                 CommandEnvelopeEncoder.reserveBidPriceNullValue(),
-                CommandEnvelopeEncoder.sizeNullValue());
+                CommandEnvelopeEncoder.sizeNullValue(),
+                CommandEnvelopeEncoder.userCookieNullValue());
     }
 
     private long encodeAndSubmit(
@@ -447,7 +457,8 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             final OrderType orderType,
             final long price,
             final long reserveBidPrice,
-            final long size) {
+            final long size,
+            final int userCookie) {
         if (freeTop == 0) {
             backpressureEvents++;
             throw new BackpressureException("in-flight window full: " + config.maxInFlight());
@@ -474,7 +485,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 .size(size)
                 .action(action)
                 .orderType(orderType)
-                .userCookie(CommandEnvelopeEncoder.userCookieNullValue())
+                .userCookie(userCookie)
                 .currency(CommandEnvelopeEncoder.currencyNullValue())
                 .balanceAmount(CommandEnvelopeEncoder.balanceAmountNullValue())
                 .baseCurrency(CommandEnvelopeEncoder.baseCurrencyNullValue())

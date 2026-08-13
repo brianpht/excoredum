@@ -121,7 +121,7 @@ class ExcReduceRejectEventsIntegrationTest {
             awaitResult(client, client.adjustBalance(TAKER, QUOTE, 1_000_000L), lastCommandIdLo);
 
             // Cancel of a resting order emits one reduce event for the full remainder.
-            awaitResult(client, client.placeGtc(SYM, 10L, true, 100L, 10L, 0L, MAKER), lastCommandIdLo);
+            awaitResult(client, client.placeGtc(SYM, 10L, true, 100L, 10L, 0L, MAKER, 0), lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
             final long cancelId = client.cancelOrder(SYM, 10L, MAKER);
             awaitResult(client, cancelId, lastCommandIdLo);
@@ -135,7 +135,7 @@ class ExcReduceRejectEventsIntegrationTest {
             assertEquals(cancelId, reduceCommandIdLo.get());
 
             // REDUCE_ORDER shrinks the resting order; the remainder stays reducible.
-            awaitResult(client, client.placeGtc(SYM, 11L, true, 101L, 10L, 0L, MAKER), lastCommandIdLo);
+            awaitResult(client, client.placeGtc(SYM, 11L, true, 101L, 10L, 0L, MAKER, 0), lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
             final long partialReduceId = client.reduceOrder(SYM, 11L, 3L, MAKER);
             awaitResult(client, partialReduceId, lastCommandIdLo);
@@ -158,9 +158,9 @@ class ExcReduceRejectEventsIntegrationTest {
             assertEquals(finalCancelId, reduceCommandIdLo.get());
 
             // IOC ask crossing a resting bid: the unmatched remainder is rejected.
-            awaitResult(client, client.placeGtc(SYM, 12L, false, 99L, 4L, 105L, MAKER), lastCommandIdLo);
+            awaitResult(client, client.placeGtc(SYM, 12L, false, 99L, 4L, 105L, MAKER, 0), lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
-            final long iocId = client.placeIoc(SYM, 13L, true, 95L, 10L, TAKER);
+            final long iocId = client.placeIoc(SYM, 13L, true, 95L, 10L, TAKER, 0);
             awaitResult(client, iocId, lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
             assertEquals(4L, lastFilled[0]);
@@ -173,7 +173,7 @@ class ExcReduceRejectEventsIntegrationTest {
             assertEquals(iocId, rejectCommandIdLo.get());
 
             // FOK-BUDGET against an empty book is rejected wholesale.
-            final long fokId = client.placeFokBudget(SYM, 14L, false, 1_000L, 5L, TAKER);
+            final long fokId = client.placeFokBudget(SYM, 14L, false, 1_000L, 5L, TAKER, 0);
             awaitResult(client, fokId, lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
             assertEquals(0L, lastFilled[0]);
