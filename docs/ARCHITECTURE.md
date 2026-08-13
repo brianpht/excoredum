@@ -133,7 +133,11 @@ excoredum/
 |-- exc-read/                       Read replica (CQRS query side)
 |   +-- src/main/java/com/exadbe/read/
 |       |-- ExcReadReplica.java             Poll-driven follower: own driver + archive client + engine
-|       |-- LiveLogSubscriber.java          Replays the consensus log, applies commands to the engine
+|       |-- LiveLogSubscriber.java          Replays the consensus log, applies commands to the engine and the ledger
+|       |-- order/
+|       |   |-- OrderLedger.java            Per-user order lifecycle history + bounded market trade tape
+|       |   |-- OrderRecord.java            One order's lifecycle record (state, fills, timestamps)
+|       |   +-- Fill.java / MarketTrade.java  Read-side fill and trade result holders
 |       |-- JournalConsumer.java            Decodes a journal stream, dedups to exactly-once
 |       |-- JournalReplayReader.java        Replays a member's recorded journal from the Archive
 |       |-- HaJournalConsumer.java          Live journal follower with multi-archive failover
@@ -217,7 +221,9 @@ flowchart TB
         RR["ExcReadReplica"]
         LLS["LiveLogSubscriber\n(stream 100)"]
         ME2["MatchingEngine"]
+        LED["OrderLedger"]
         LLS -->|" engine.process() "| ME2
+        LLS -->|" applyCommand() "| LED
         RR --> LLS
     end
 
@@ -461,6 +467,7 @@ idempotency possible without the engine knowing any real user identity.
 | `price`, `size`      | Order price and quantity (integer, fixed scale)                |
 | `reserveBidPrice`    | Max price a bid reserves against (direct-exchange hold)        |
 | `action`, `orderType`| ASK / BID, and GTC / IOC / FOK_BUDGET                          |
+| `userCookie`         | Client-owned order metadata (int32), recorded by the read-side order ledger |
 | `currency`, `balanceAmount` | Operands for BALANCE_ADJUSTMENT                          |
 | `baseCurrency`, `quoteCurrency`, `baseScaleK`, `quoteScaleK`, `takerFee`, `makerFee` | Operands for ADD_SYMBOL |
 
@@ -630,12 +637,15 @@ sequenceDiagram
     participant AR as Member Archive
     participant LLS as LiveLogSubscriber
     participant ME as MatchingEngine (replica)
+    participant LED as OrderLedger
     participant Q as Query caller
 
     LLS ->> AR: replay consensus log recording (stream 100) from position
     AR -->> LLS: log fragments (cluster framing + CommandEnvelope)
     LLS ->> ME: process(decoder, leader timestamp, outcome)
+    LLS ->> LED: applyCommand(timestamp, envelope, outcome)
     Q ->> ME: balance / userExists / orderCount (same thread as poll)
+    Q ->> LED: orderHistory / userTrades / marketTrades (same thread as poll)
     ME -->> Q: eventually-consistent read
 ```
 

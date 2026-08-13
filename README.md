@@ -68,8 +68,8 @@ highly-available domain event journal on the Aeron Archive.
 
 > Requires JDK 21 and Linux. Aeron/Agrona need the JVM flags
 > `--add-opens java.base/jdk.internal.misc=ALL-UNNAMED` and
-> `--add-opens java.base/sun.nio.ch=ALL-UNNAMED` (the launcher and read modules
-> set these automatically).
+> `--add-opens java.base/sun.nio.ch=ALL-UNNAMED` (the launcher, read, bench,
+> examples, and xcore-bench application configs set these automatically).
 
 ## Requirements
 
@@ -164,8 +164,8 @@ try (ClusterNode node = new ClusterNode(ClusterConfig.singleNodeLocalhost(0, bas
         client.addUser(taker);
         client.adjustBalance(taker, quote, 1_000_000L); // taker funds quote to buy
 
-        client.placeGtc(sym, 1L, /* ask */ true, 100L, 10L, 0L, maker);   // resting ask @100 x10
-        client.placeGtc(sym, 2L, /* bid */ false, 105L, 6L, 105L, taker); // crosses, fills 6 @100
+        client.placeGtc(sym, 1L, /* ask */ true, 100L, 10L, 0L, maker, /* userCookie */ 0);   // resting ask @100 x10
+        client.placeGtc(sym, 2L, /* bid */ false, 105L, 6L, 105L, taker, /* userCookie */ 0); // crosses, fills 6 @100
 
         for (int i = 0; i < 100_000 && client.pendingCount() > 0; i++) {
             client.poll(); // drives egress delivery, event decode, and idempotent retransmission
@@ -313,7 +313,7 @@ flowchart TB
     MS -->|" CommandResult + trade/L2 events (SBE) egress "| GW
 
     subgraph READ["Read Replica (exc-read)"]
-        RR["ExcReadReplica\nLiveLogSubscriber -> MatchingEngine"]
+        RR["ExcReadReplica\nLiveLogSubscriber -> MatchingEngine + OrderLedger"]
     end
     subgraph JCON["Journal Consumer (exc-read)"]
         HJC["HaJournalConsumer\nreplay + dedup + failover"]

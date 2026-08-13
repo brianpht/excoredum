@@ -57,7 +57,7 @@ data flows, determinism rules, and order-book semantics.
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram).  |
 | `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3: replay parity, engine/pipeline latency, e2e, JMH. Exempt from determinism rules. |
 | `exc-tests`    | Unit, property, integration, cluster, and fault suites + test fixtures.  |
-| `exc-examples` | Placeholder for runnable examples.                                        |
+| `exc-examples` | Runnable examples: in-process cluster driven through the client SDK (`QuickStartExample`). |
 
 ## Building and Running
 
