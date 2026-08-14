@@ -1,12 +1,12 @@
 package com.exadbe.bench;
 
-import com.exadbe.client.ExcClient;
-import com.exadbe.client.ResultHandler;
-import com.exadbe.client.config.ClientConfig;
 import com.exadbe.config.CoreConfig;
 import com.exadbe.launcher.ClusterConfig;
 import com.exadbe.launcher.ClusterNode;
 import com.exadbe.protocol.CommandResultCode;
+import com.exadbe.write.client.ExcClient;
+import com.exadbe.write.client.ResultHandler;
+import com.exadbe.write.client.config.ClientConfig;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.HdrHistogram.Histogram;

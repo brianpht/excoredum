@@ -56,7 +56,7 @@ highly-available domain event journal on the Aeron Archive.
 - **Read-Side Query SDK**: `exc-read-client` lets internal services query a read
   replica over the wire (`userExists`, `balance`, L2 order book, user reports,
   order history, trade tape, conservation totals) with request-id correlation
-  and idempotent retry, decoupled from `exc-core` exactly like `exc-client`.
+  and idempotent retry, decoupled from `exc-core` exactly like `exc-write-client`.
 - **Order History and Trade Tape**: the read replica rebuilds a per-user order
   lifecycle ledger (state, fills, order type, `userCookie`) and a bounded market
   trade tape directly from the replicated log - covering every order placed by
@@ -91,12 +91,13 @@ git clone <repo-url> excoredum && cd excoredum
 ```
 
 To embed the engine in another Gradle build, depend on the core module (or on
-`exc-client` for the client-side SDK, which links only the wire contract):
+`exc-write-client` for the write-side client SDK, which links only the wire
+contract):
 
 ```kotlin
 dependencies {
     implementation(project(":exc-core"))    // deterministic matching engine
-    implementation(project(":exc-client"))  // client-side SDK (protocol only)
+    implementation(project(":exc-write-client"))  // write-side client SDK (protocol only)
 }
 ```
 
@@ -124,15 +125,15 @@ snapshot:
 
 ### Drive a single-node cluster with the client SDK
 
-`exc-client` is the client-side SDK. It depends only on the `exc-protocol` wire
+`exc-write-client` is the write-side client SDK. It depends only on the `exc-protocol` wire
 contract (never on `exc-core`) and handles leader changes, idempotent retry,
 result correlation, and full egress event delivery. This snippet boots an
 in-process single-node cluster, funds a maker and a taker, and crosses an order
 to produce a trade:
 
 ```java
-import com.exadbe.client.ExcClient;
-import com.exadbe.client.config.ClientConfig;
+import com.exadbe.write.client.ExcClient;
+import com.exadbe.write.client.config.ClientConfig;
 import com.exadbe.config.CoreConfig;
 import com.exadbe.launcher.ClusterConfig;
 import com.exadbe.launcher.ClusterNode;
@@ -345,7 +346,7 @@ flowchart TB
         JR -->|" journal (stream 200) "| AR
     end
 
-    GW["Client (exc-client)"] -->|" CommandEnvelope (SBE) ingress "| CM
+    GW["Client (exc-write-client)"] -->|" CommandEnvelope (SBE) ingress "| CM
     MS -->|" CommandResult + trade/L2 events (SBE) egress "| GW
 
     subgraph READ["Read Replica (exc-read)"]
@@ -363,9 +364,9 @@ flowchart TB
 | `exc-protocol` | SBE schema and generated flyweight codecs (wire, egress events, snapshot) |
 | `exc-core`     | Deterministic matching engine, order book, risk, dedup, snapshot, telemetry |
 | `exc-launcher` | Aeron bootstrap: Media Driver, Archive, Consensus, Container, journaler agent |
-| `exc-client`   | Client-side SDK: leader-change handling, idempotent retry, correlation, events |
+| `exc-write-client` | Write-side client SDK: leader-change handling, idempotent retry, correlation, events |
 | `exc-read`     | CQRS read side and journal consumers: log follower, replay, dedup, HA failover, order-history ledger and trade tape |
-| `exc-read-client` | Read-side SDK: blocking queries over plain Aeron request/response streams (protocol only, like `exc-client`) |
+| `exc-read-client` | Read-side SDK: blocking queries over plain Aeron request/response streams (protocol only, like `exc-write-client`) |
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram)     |
 | `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3 (replay parity, latency, JMH) |
 | `exc-tests`    | Unit, property, integration, cluster, fault tests and fixtures            |

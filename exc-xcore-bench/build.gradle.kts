@@ -30,7 +30,7 @@ application {
 dependencies {
     implementation(project(":exc-core"))
     implementation(project(":exc-launcher"))
-    implementation(project(":exc-client"))
+    implementation(project(":exc-write-client"))
     implementation(project(":exc-protocol"))
     implementation(project(":exc-bench"))
     implementation(libs.exchange.core2)

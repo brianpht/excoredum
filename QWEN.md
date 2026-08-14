@@ -52,9 +52,9 @@ data flows, determinism rules, and order-book semantics.
 | `exc-protocol` | SBE schema (`src/main/resources/messages.xml`) + generated flyweight codecs. Wire contract only; never depends on `exc-core`. |
 | `exc-core`     | Deterministic matching engine, order book, risk/fees, dedup, snapshot, telemetry, journal. This is the hot path. |
 | `exc-launcher` | Aeron bootstrap: Media Driver, Archive, Consensus, Container, journaler agent. `main` class: `com.exadbe.launcher.ClusterLauncher`. |
-| `exc-client`   | Client SDK (depends only on `exc-protocol`): leader-change handling, idempotent retry, correlation, egress events. |
+| `exc-write-client` | Write-side client SDK (depends only on `exc-protocol`): leader-change handling, idempotent retry, correlation, egress events. |
 | `exc-read`     | CQRS read replica and HA journal consumers (replay + dedup + failover), balance report generation, per-user order history ledger and market trade tape rebuilt from the log. |
-| `exc-read-client` | Read-side SDK: sync wrappers + async `submit`/`poll`/listener over plain Aeron request/response streams (request-id correlation, idempotent retry, bounded in-flight window). Depends only on `exc-protocol`, like `exc-client`. |
+| `exc-read-client` | Read-side SDK: sync wrappers + async `submit`/`poll`/listener over plain Aeron request/response streams (request-id correlation, idempotent retry, bounded in-flight window). Depends only on `exc-protocol`, like `exc-write-client`. |
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram).  |
 | `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3: replay parity, engine/pipeline latency, e2e, JMH. Exempt from determinism rules. |
 | `exc-tests`    | Unit, property, integration, cluster, and fault suites + test fixtures.  |
@@ -194,7 +194,7 @@ branch entropy are rejected. On the hot path:
 - Replay/determinism tests: recorded input must produce byte-identical output.
 - Any change touching the hot path needs JMH before/after numbers.
 - JaCoCo coverage is aggregated in `exc-tests` (its suites exercise
-  `exc-core`, `exc-client`, `exc-launcher`, `exc-read`).
+  `exc-core`, `exc-write-client`, `exc-launcher`, `exc-read`).
 
 ### Performance budget (defaults; p99.99 is the contract, not the mean)
 

@@ -9,7 +9,7 @@ dependencyResolutionManagement {
 include("exc-protocol")
 include("exc-core")
 include("exc-launcher")
-include("exc-client")
+include("exc-write-client")
 include("exc-read")
 include("exc-read-client")
 include("exc-tests")

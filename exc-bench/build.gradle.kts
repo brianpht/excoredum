@@ -16,7 +16,7 @@ application {
 
 dependencies {
     implementation(project(":exc-launcher"))
-    implementation(project(":exc-client"))
+    implementation(project(":exc-write-client"))
     implementation(project(":exc-core"))
     implementation(project(":exc-protocol"))
     implementation(libs.bundles.aeron)

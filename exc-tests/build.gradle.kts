@@ -11,7 +11,7 @@ plugins {
 dependencies {
     testImplementation(project(":exc-core"))
     testImplementation(project(":exc-launcher"))
-    testImplementation(project(":exc-client"))
+    testImplementation(project(":exc-write-client"))
     testImplementation(project(":exc-read"))
     testImplementation(project(":exc-read-client"))
     testImplementation(project(":exc-bench"))
@@ -99,7 +99,7 @@ tasks.withType<JavaCompile>().configureEach {
 // Coverage: the suite lives here but exercises the production modules, so
 // attribute coverage of their main sources to this module's report.
 tasks.named<JacocoReport>("jacocoTestReport") {
-    val coveredProjects = listOf(":exc-core", ":exc-client", ":exc-launcher", ":exc-read", ":exc-read-client")
+    val coveredProjects = listOf(":exc-core", ":exc-write-client", ":exc-launcher", ":exc-read", ":exc-read-client")
     dependsOn("test", "integrationTest")
     executionData(fileTree(layout.buildDirectory).include("jacoco/test.exec", "jacoco/integrationTest.exec"))
     coveredProjects.forEach { path ->

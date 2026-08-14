@@ -1,11 +1,11 @@
 package com.exadbe.examples;
 
-import com.exadbe.client.ExcClient;
-import com.exadbe.client.config.ClientConfig;
 import com.exadbe.config.CoreConfig;
 import com.exadbe.launcher.ClusterConfig;
 import com.exadbe.launcher.ClusterNode;
 import com.exadbe.protocol.CommandResultCode;
+import com.exadbe.write.client.ExcClient;
+import com.exadbe.write.client.config.ClientConfig;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;

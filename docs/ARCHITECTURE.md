@@ -14,7 +14,7 @@
     - [exc-protocol - Wire and Snapshot Codecs](#exc-protocol---wire-and-snapshot-codecs)
     - [exc-core - Deterministic State Machine](#exc-core---deterministic-state-machine)
     - [exc-launcher - Cluster Bootstrap](#exc-launcher---cluster-bootstrap)
-    - [exc-client - Client SDK](#exc-client---client-sdk)
+    - [exc-write-client - Write-side Client SDK](#exc-write-client---write-side-client-sdk)
     - [exc-read - Read Replica (CQRS)](#exc-read---read-replica-cqrs)
     - [exc-bench - Latency Harness](#exc-bench---latency-harness)
     - [exc-xcore-bench - exchange-core Comparison](#exc-xcore-bench---exchange-core-comparison)
@@ -115,8 +115,8 @@ excoredum/
 |       |-- EventJournalRecorder.java       Agent: drains the journal ring to a recorded Aeron stream
 |       +-- ClusterLauncher.java            main(): start one node, block until terminated
 |
-|-- exc-client/                     Client SDK (depends only on exc-protocol)
-|   +-- src/main/java/com/exadbe/client/
+|-- exc-write-client/                 Write-side client SDK (depends only on exc-protocol)
+|   +-- src/main/java/com/exadbe/write/client/
 |       |-- ExcClient.java                  Async submit / poll, leader-change resend, correlation, event decode
 |       |-- config/ClientConfig.java        Immutable client configuration (builder)
 |       |-- ResultHandler.java              Result callback correlated by command id
@@ -182,7 +182,7 @@ excoredum/
 
 ```mermaid
 flowchart TB
-    subgraph CLIENTSIDE["Client (exc-client)"]
+    subgraph CLIENTSIDE["Client (exc-write-client)"]
         CLIENT["ExcClient\nidempotent retry, correlation"]
     end
 
@@ -329,9 +329,9 @@ read replica.
 | `EventJournalRecorder` | Agent draining the service's journal ring to a recorded Aeron stream, off the consensus thread |
 | `ClusterLauncher`| Entry point: start a node (single-node or `--config` properties) and block until terminated |
 
-### exc-client - Client SDK
+### exc-write-client - Write-side Client SDK
 
-The client-side SDK. It depends only on the `exc-protocol` wire contract, never on
+The write-side client SDK. It depends only on the `exc-protocol` wire contract, never on
 `exc-core`. It adds leader-change handling, idempotent retry (reusing the original
 `commandId`), asynchronous request / response correlation, explicit backpressure
 signalling, and full egress event delivery (trade / reduce / reject frames, L2
@@ -439,7 +439,7 @@ wires the responder into the same poll loop as the replica.
 
 ### exc-read-client - Read-Side SDK
 
-The read-side SDK, deliberately decoupled like `exc-client`: it depends only on
+The read-side SDK, deliberately decoupled like `exc-write-client`: it depends only on
 `exc-protocol` (never `exc-core` or `exc-read`). `ReadClient` opens a plain Aeron
 publication to a read replica's query request stream and an ephemeral response
 subscription, and encodes `QueryRequest` frames with a per-call `requestId`.
@@ -889,4 +889,4 @@ wires `clusterTest` and `faultTest` into the default `check`.
 
 Toolchain: JDK 21 LTS. Aeron 1.48, Agrona 2.2, SBE 1.35. The dependency chain for
 changes: a schema change in `exc-protocol` regenerates codecs used by `exc-core`,
-`exc-launcher`, `exc-client`, and `exc-read`, so all layers rebuild together.
+`exc-launcher`, `exc-write-client`, and `exc-read`, so all layers rebuild together.
