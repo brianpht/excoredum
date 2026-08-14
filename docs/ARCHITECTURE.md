@@ -16,8 +16,10 @@
     - [exc-launcher - Cluster Bootstrap](#exc-launcher---cluster-bootstrap)
     - [exc-write-client - Write-side Client SDK](#exc-write-client---write-side-client-sdk)
     - [exc-read - Read Replica (CQRS)](#exc-read---read-replica-cqrs)
+    - [exc-read-client - Read-Side SDK](#exc-read-client---read-side-sdk)
     - [exc-bench - Latency Harness](#exc-bench---latency-harness)
     - [exc-xcore-bench - exchange-core Comparison](#exc-xcore-bench---exchange-core-comparison)
+    - [exc-examples - Runnable Examples](#exc-examples---runnable-examples)
     - [exc-tests - Verification and Fixtures](#exc-tests---verification-and-fixtures)
 - [Wire Format](#wire-format)
 - [Order Book Semantics](#order-book-semantics)
@@ -61,9 +63,10 @@ envelope; the only time source is the leader-assigned timestamp.
 This delivery covers the direct-exchange (spot) risk mode with maker / taker fees,
 order types GTC / IOC / FOK-BUDGET, order operations PLACE / CANCEL / MOVE /
 REDUCE, account operations ADD_USER / BALANCE_ADJUSTMENT / ADD_SYMBOL /
-SUSPEND_USER / RESUME_USER, the RESET / NOP admin commands, and a
-highly-available domain event journal on the Aeron Archive. Margin trading and
-symbol / user sharding are out of scope for now.
+SUSPEND_USER / RESUME_USER, the RESET / NOP admin commands, a network query
+protocol for read replicas (`QueryRequest` / `QueryResponse`, schema version 4),
+and a highly-available domain event journal on the Aeron Archive. Margin trading
+and symbol / user sharding are out of scope for now.
 
 ---
 
@@ -71,13 +74,14 @@ symbol / user sharding are out of scope for now.
 
 ```
 excoredum/
-|-- settings.gradle.kts             Gradle multi-module (9 modules)
+|-- settings.gradle.kts             Gradle multi-module (10 modules)
 |-- build.gradle.kts                Shared conventions: JDK 21, spotless, checkstyle, -Werror
 |-- gradle/libs.versions.toml       Version catalog (Aeron, Agrona, SBE, JMH, HdrHistogram, ...)
 |-- config/checkstyle/checkstyle.xml        Baseline style rules for all modules
 |
 |-- exc-protocol/                   SBE schema + generated flyweight codecs
-|   +-- src/main/resources/messages.xml     CommandEnvelope, CommandResult, egress events, JournalEvent, snapshot records
+|   |-- src/main/resources/messages.xml     CommandEnvelope, CommandResult, egress events, JournalEvent, query + snapshot records
+|   +-- src/main/java/com/exadbe/protocol/QueryStreams.java  Default query channels / stream ids (request 300, response 301)
 |
 |-- exc-core/                       Deterministic state machine (this is the hot path)
 |   |-- config/checkstyle/determinism.xml   Bans clocks, randomness, unordered maps, streams, floats
@@ -138,6 +142,11 @@ excoredum/
 |       |   |-- OrderLedger.java            Per-user order lifecycle history + bounded market trade tape
 |       |   |-- OrderRecord.java            One order's lifecycle record (state, fills, timestamps)
 |       |   +-- Fill.java / MarketTrade.java  Read-side fill and trade result holders
+|       |-- report/
+|       |   |-- ReportGenerator.java        Single-user, conservation-total, and state-hash reports
+|       |   +-- SingleUserReport.java / TotalCurrencyBalance.java  Report result holders
+|       |-- QueryResponder.java             Serves QueryRequest frames on the replica's poll thread
+|       |-- ReplicaCommandListener.java     Per-command callback for real-time market event push
 |       |-- JournalConsumer.java            Decodes a journal stream, dedups to exactly-once
 |       |-- JournalReplayReader.java        Replays a member's recorded journal from the Archive
 |       |-- HaJournalConsumer.java          Live journal follower with multi-archive failover
@@ -145,6 +154,16 @@ excoredum/
 |       |-- ReplicationHealth.java          Health and applied position published for readers
 |       |-- config/ReadReplicaConfig.java   Archive control channel, stream id, local host
 |       +-- ReadServiceLauncher.java        Entry point: follow a member archive
+|
+|-- exc-read-client/               Read-side SDK (depends only on exc-protocol)
+|   +-- src/main/java/com/exadbe/read/client/
+|       |-- ReadClient.java                Sync wrappers + async submit / poll / listener core
+|       |-- QueryListener.java             Async result callbacks (one per query type)
+|       |-- config/ReadClientConfig.java   Request / response channels, timing, in-flight window
+|       |-- BalanceResult.java / L2Snapshot.java / UserReport.java    Query result holders
+|       |-- OrderRecordResult.java / MarketTradeResult.java / TotalBalanceResult.java
+|       |-- OrderState.java                Order lifecycle state names
+|       +-- BackpressureException.java / QueryTimeoutException.java / QueryException.java
 |
 |-- exc-bench/                      End-to-end latency harness
 |   +-- src/main/java/com/exadbe/bench/
@@ -269,6 +288,8 @@ Little-endian, fixed field order.
 | `RejectEvent`      | 22          | Unmatched size rejected (IOC / FOK / duplicate id)   |
 | `L2MarketData`     | 30          | L2 order-book snapshot for an order-book request      |
 | `JournalEvent`     | 40          | One durable domain event (audit / AI journal stream) |
+| `QueryRequest`     | 60          | Read-side query (since schema version 4)            |
+| `QueryResponse`    | 61          | Read-side query result (since schema version 4)     |
 | `SnapshotHeader`   | 100         | First snapshot record: log position and counts       |
 | `SymbolSpecRecord` | 101         | One symbol spec (ascending symbolId)                 |
 | `UserRecord`       | 102         | One account existence marker (ascending uid)         |
@@ -285,8 +306,11 @@ zero fee / active). Schema version 3 added `CommandResult.eventCount` (the numbe
 of matcher-event frames that follow the result; zero on duplicate re-sends, L2
 not counted), `ReduceEvent.price` / `ReduceEvent.orderCompleted` (resting price;
 whether the order was fully removed), and `RejectEvent.price` (the active order
-price, or the budget for FOK-BUDGET). Enums: `OrderCommandType`, `OrderAction`,
-`OrderType`, `MatcherEventType`, `CommandResultCode`.
+price, or the budget for FOK-BUDGET). Schema version 4 added the read-side query
+protocol: `QueryRequest` (id 60) and `QueryResponse` (id 61) with the `QueryType`
+and `QueryStatusCode` enums, plus `QueryResponse.history.placedTimestamp`.
+Enums: `OrderCommandType`, `OrderAction`, `OrderType`, `MatcherEventType`,
+`CommandResultCode`, `QueryType`, `QueryStatusCode`.
 
 ### exc-core - Deterministic State Machine
 
@@ -324,10 +348,10 @@ read replica.
 
 | Component        | Responsibility                                                        |
 |------------------|-----------------------------------------------------------------------|
-| `ClusterConfig`  | Endpoints and directories; `singleNodeLocalhost`, `multiNodeLocalhost`, `fromProperties` |
+| `ClusterConfig`  | Endpoints and directories; `singleNodeLocalhost`, `multiNodeLocalhost`, `fromMembers`, `fromProperties` |
 | `ClusterNode`    | Launches Media Driver + Archive + Consensus Module + Container; allocates the off-heap `CountersManager`; starts recording the domain journal and runs the journaler agent |
 | `EventJournalRecorder` | Agent draining the service's journal ring to a recorded Aeron stream, off the consensus thread |
-| `ClusterLauncher`| Entry point: start a node (single-node or `--config` properties) and block until terminated |
+| `ClusterLauncher`| Entry point: start a node (single-node or `--config` / `-Dexc.config` properties) and block until terminated |
 
 ### exc-write-client - Write-side Client SDK
 
@@ -340,8 +364,8 @@ snapshots, and per-command trade grouping) on top of an Aeron cluster client.
 | Component               | Responsibility                                                    |
 |-------------------------|-------------------------------------------------------------------|
 | `ExcClient`             | Async submit / poll: resend on leader change, correlate results by command id, decode every egress frame, group fills per command, idle keepalives, session recovery |
-| `ClientConfig`          | Immutable client configuration (endpoints, timeouts, retry, in-flight window) |
-| `ResultHandler`         | Callback invoked when a `CommandResult` correlates to a request    |
+| `ClientConfig`          | Immutable client configuration (endpoints, timeouts, retry, in-flight window); defaults: 30 s message timeout, 250 ms retry backoff, `maxRetries` 0 (retry indefinitely), 1024 in flight, 2 s keepalive |
+| `ResultHandler`         | Callback invoked when a `CommandResult` correlates to a request; `onExpired` fires when the retry budget is exhausted so no command is silently dropped |
 | `TradeEventListener`    | Callback invoked per fill when a `TradeEvent` is delivered on egress |
 | `ReduceEventListener`   | Callback invoked when a `ReduceEvent` is delivered on egress       |
 | `RejectEventListener`   | Callback invoked when a `RejectEvent` is delivered on egress       |
@@ -416,14 +440,29 @@ The replica also serves a network query protocol for internal services.
 on the same single polling thread, publishing a `QueryResponse` (default stream
 301) to the client's ephemeral response subscription named in the request. Every
 response carries the `appliedPosition` the replica had reached, so consumers can
-judge staleness; a response that would overflow the preallocated reply buffer is
-truncated with status `TRUNCATED` rather than corrupting it. The `ReadServiceLauncher`
-wires the responder into the same poll loop as the replica.
+judge staleness; an answer that would overflow the preallocated 256 KiB reply
+buffer is truncated with status `TRUNCATED` rather than corrupting it, unknown
+users / symbols / orders answer `NOT_FOUND`, and response publications are
+cached (LRU, up to 64). The `ReadServiceLauncher` wires the responder into the
+same poll loop as the replica.
+
+Two poll-thread APIs expose replication progress and command visibility to
+embedding services: `isCaughtUp()` distinguishes live following from historical
+replay (false while disconnected or replaying), and `setCommandListener`
+registers a `ReplicaCommandListener` that fires once per applied command (for
+example, to push real-time market events to gateway agents). The envelope and
+outcome passed to the listener are reused and only valid during the call.
+
+Replay and source stream ids are distinct: the consensus log is recorded on
+stream 100 and replayed on the ephemeral stream 43; the domain journal is
+recorded on stream 200 (`aeron:ipc`) and replayed by `JournalReplayReader` on
+stream 44 and by `HaJournalConsumer` on stream 45.
 
 | Component           | Responsibility                                                       |
 |---------------------|----------------------------------------------------------------------|
-| `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log; balance / count / report / L2 / order-history queries |
+| `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log; balance / count / report / L2 / order-history queries; `isCaughtUp()` and `setCommandListener(...)` |
 | `LiveLogSubscriber` | Subscribes the consensus recording, parses cluster framing, applies commands to the engine and the ledger |
+| `ReplicaCommandListener` | Per-command callback fired on the poll thread for every applied command (envelope / outcome reused) |
 | `QueryResponder`    | Serves `QueryRequest` frames on the replica's poll thread; publishes `QueryResponse` to each client's subscription |
 | `OrderLedger`       | Per-user order lifecycle history, per-order fills, and a bounded market trade tape, rebuilt from the log |
 | `OrderRecord` / `Fill` / `MarketTrade` | Read-side result holders for the order-history queries       |
@@ -495,6 +534,14 @@ vs the exchange-core disruptor pipeline, and through the full cluster vs the
 pipeline. See [BENCHMARKING-XCORE.md](BENCHMARKING-XCORE.md) for methodology and
 fairness notes.
 
+### exc-examples - Runnable Examples
+
+`QuickStartExample` boots an in-process single-node cluster (`ClusterNode` +
+`ClusterConfig.singleNodeLocalhost` + `CoreConfig.defaults()`) and walks a small
+trading scenario through the `ExcClient` SDK, printing every egress surface as
+it happens: per-fill trades, per-command trade groups, a reduce, a reject, and
+an L2 snapshot. Run with `./gradlew :exc-examples:run`.
+
 ### exc-tests - Verification and Fixtures
 
 Unit, property, integration, cluster, and fault tests plus a `testFixtures`
@@ -505,7 +552,8 @@ state through an in-memory record stream for snapshot round-trip tests.
 Suites are grouped by JUnit tag and Gradle task: `test` (unit / property, no tag),
 `integrationTest` (tag `integration`), `clusterTest` (tag `cluster`), `faultTest`
 (tag `fault`), and `soakTest` (tag `soak`). The default `check` gate runs `test`,
-`integrationTest`, `clusterTest`, and `faultTest`.
+`integrationTest`, `clusterTest`, and `faultTest`. The `soakTest` task exists but
+currently has no soak-tagged suites.
 
 ---
 
@@ -531,16 +579,43 @@ idempotency possible without the engine knowing any real user identity.
 | `baseCurrency`, `quoteCurrency`, `baseScaleK`, `quoteScaleK`, `takerFee`, `makerFee` | Operands for ADD_SYMBOL |
 
 The reply is a `CommandResult` carrying the original `commandId`, a
-`CommandResultCode`, and optional `uid` / `orderId` / `filledSize`. A freshly
-matched order additionally emits `TradeEvent`, `ReduceEvent`, and `RejectEvent`
-frames on egress; an `ORDER_BOOK_REQUEST` emits an `L2MarketData` frame.
+`CommandResultCode`, optional `uid` / `orderId` / `filledSize`, and `eventCount`
+- the number of matcher-event frames that follow on the same session (zero for
+duplicate re-sends; L2 is not counted). A freshly matched order additionally
+emits `TradeEvent`, `ReduceEvent`, and `RejectEvent` frames on egress; an
+`ORDER_BOOK_REQUEST` emits an `L2MarketData` frame.
 
-Result codes include `SUCCESS`, `MATCHING_UNKNOWN_ORDER_ID`,
-`MATCHING_REDUCE_FAILED_WRONG_SIZE`, `MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT`,
-`RISK_NSF`, `RISK_INVALID_RESERVE_PRICE`, `RISK_ASK_PRICE_LOWER_THAN_FEE`,
-`INVALID_SYMBOL`, `OVERFLOW`, `INVALID_AMOUNT`, `UNSUPPORTED_COMMAND`,
-`USER_ALREADY_EXISTS`, `USER_NOT_FOUND`, `USER_SUSPENDED`,
-`USER_ALREADY_SUSPENDED`, and `USER_NOT_SUSPENDED`.
+The read-side query protocol (schema version 4) adds `QueryRequest` and
+`QueryResponse`: a request names a `QueryType` (BALANCE, L2_ORDER_BOOK,
+SINGLE_USER_REPORT, ORDER_HISTORY, ACTIVE_ORDERS, ORDER_BY_ID, USER_TRADES,
+MARKET_TRADES, TOTAL_CURRENCY_BALANCE, STATE_HASH, USER_EXISTS) plus per-type
+operands and the client's response stream; a response carries the replica's
+`appliedPosition` and a `QueryStatusCode` (SUCCESS / NOT_FOUND / UNSUPPORTED /
+TRUNCATED).
+
+`CommandResultCode` values:
+
+| Code | Meaning |
+|------|---------|
+| `SUCCESS` | Command applied |
+| `DUPLICATE` | Command already applied; cached result returned, nothing re-applied |
+| `MATCHING_UNKNOWN_ORDER_ID` | Cancel / move / reduce on an unknown or foreign order |
+| `MATCHING_REDUCE_FAILED_WRONG_SIZE` | Reduce size not positive or exceeding remaining |
+| `MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT` | Bid moved above its reserved price |
+| `RISK_NSF` | Insufficient balance for the hold |
+| `RISK_INVALID_RESERVE_PRICE` | Bid reserve price below the order price |
+| `RISK_ASK_PRICE_LOWER_THAN_FEE` | Ask price cannot cover the taker fee |
+| `INVALID_SYMBOL` | Unknown symbol |
+| `OVERFLOW` | 64-bit arithmetic overflow |
+| `INVALID_AMOUNT` | Defined in the schema; not produced by the current engine |
+| `UNSUPPORTED_COMMAND` | Unknown command type |
+| `USER_ALREADY_EXISTS` | Account already present (including the reserved fee account) |
+| `USER_NOT_FOUND` | Unknown account |
+| `USER_SUSPENDED` | Suspended account blocked from placing orders |
+| `USER_ALREADY_SUSPENDED` / `USER_NOT_SUSPENDED` | Suspend / resume state mismatch |
+
+`NEW` and `VALID_FOR_MATCHING` remain defined in the schema but are not produced
+by the current engine.
 
 ---
 
@@ -618,7 +693,10 @@ It is decoupled from the hot path and highly available.
   delivered exactly once.
 - **Consumers** - `JournalReplayReader` replays a member's recorded journal from
   the Archive; `HaJournalConsumer` follows one member live and fails over to
-  another when its source dies, merging archives through a shared dedup.
+  another when its source dies, merging archives through a shared dedup. A
+  consumer receives each event through
+  `JournalConsumer.Listener.onEvent(logPosition, eventIndex, type, symbolId,
+  makerOrderId, makerUid, takerUid, price, size, makerCompleted)`.
 
 ```mermaid
 flowchart LR
@@ -787,12 +865,13 @@ recovery rather than serving broken state.
 
 ## Configuration
 
-`CoreConfig` holds preallocated capacities validated at construction; power-of-two
-where they index a ring. Defaults suit a large single node; tests use smaller
-values.
+`CoreConfig` holds preallocated capacities sized at construction; ring capacities
+are validated as power-of-two where they index a ring. Defaults suit a large
+single node; tests use smaller values.
 
 | Setting               | Default | Purpose                                     |
 |-----------------------|---------|---------------------------------------------|
+| `symbolCapacity`      | 2^10    | Preallocated symbol-spec slots              |
 | `accountCapacity`     | 2^16    | Preallocated account-map slots              |
 | `dedupClientCapacity` | 2^12    | Preallocated dedup clients                  |
 | `dedupWindow`         | 2^10    | Most recent commands retained per client    |
@@ -818,8 +897,9 @@ off-heap `CountersManager` (allocated by `ClusterNode`) so external threads can
 read counter values with release ordering, never touching the hot path.
 
 Counters: commands processed, duplicates, backpressure, unsupported commands,
-snapshots taken / loaded, event-buffer overflows, order-pool exhaustions. Gauges:
-snapshot write / read time. The hot path only increments a counter.
+snapshots taken / loaded, event-buffer overflows, order-pool and price-bucket-pool
+exhaustions. Gauges: snapshot write / read time. The hot path only increments a
+counter.
 
 ---
 
@@ -836,7 +916,9 @@ snapshot write / read time. The hot path only increments a counter.
 | `SnapshotRoundTripTest`              | Unit        | Byte-identical snapshot round trip and checksum         |
 | `SnapshotIntegrityTest`              | Unit        | Truncation and corruption are rejected                  |
 | `HotPathHardeningTest`               | Unit        | Node pooling, bounded event buffer, off-heap counters   |
+| `ReportGeneratorTest`                | Unit        | Read-side reports: single-user, conservation totals, state hash |
 | `OrderLedgerTest`                    | Unit        | Ledger lifecycle, fills, dedup skip, eviction, userCookie |
+| `QueryCodecRoundTripTest`            | Unit        | Query request / response codecs round-trip every group and scalar |
 | `ExcClientIntegrationTest`           | Integration | Client submit / poll, command-id correlation            |
 | `ExcClientKeepaliveIntegrationTest`  | Integration | Idle client survives cluster session timeout via NOP keepalives |
 | `ExcAccountsIntegrationTest`         | Integration | Account lifecycle result codes end to end               |
@@ -847,6 +929,7 @@ snapshot write / read time. The hot path only increments a counter.
 | `XcoreBenchSmokeTest`                | Integration | exchange-core replay cross-validates; pipeline boots    |
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth, L2   |
 | `ReadReplicaOrderHistoryIntegrationTest` | Integration | Replica rebuilds order history, fills, and trades from the log; survives replica restart |
+| `ReadQueryIntegrationTest`           | Integration | Read-side SDK queries balances, L2, reports, history, trades, and totals over the query protocol |
 | `EventJournalRecorderIntegrationTest`| Integration | Recorder drains the ring onto an Aeron stream           |
 | `JournalClusterIntegrationTest`      | Integration | A committed trade reaches the recorded journal stream   |
 | `JournalConsumerIntegrationTest`     | Integration | Re-delivered events are deduped to exactly-once         |

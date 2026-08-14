@@ -209,7 +209,11 @@ System.out.println(outcome.resultCode()); // e.g. SUCCESS
 # Node 1 of a multi-node cluster, preserving prior state across restarts
 ./gradlew :exc-launcher:run -Dexc.nodeId=1 -Dexc.cleanStart=false
 
+# Node with an explicit base directory
+./gradlew :exc-launcher:run -Dexc.nodeId=1 -Dexc.baseDir=build/exc-node-1
+
 # From a deployment properties file (must define exc.clusterMembers)
+# --config=<file> and its -Dexc.config=<file> alias are equivalent
 ./gradlew :exc-launcher:run --args="--config=production.properties"
 ```
 
@@ -283,11 +287,12 @@ is therefore unit and replay testable in isolation.
 
 ## Configuration
 
-Capacities are preallocated and validated in `CoreConfig`; power-of-two where
-they index a ring:
+Capacities are preallocated in `CoreConfig`; ring capacities are validated as
+power-of-two where they index a ring:
 
 | Setting                 | Default | Purpose                                   |
 |-------------------------|---------|-------------------------------------------|
+| `symbolCapacity`        | 2^10    | Preallocated symbol-spec slots            |
 | `accountCapacity`       | 2^16    | Preallocated account-map slots            |
 | `dedupClientCapacity`   | 2^12    | Preallocated dedup clients                |
 | `dedupWindow`           | 2^10    | Most recent commands retained per client  |
@@ -300,8 +305,17 @@ they index a ring:
 
 `ClusterConfig` describes node id, cluster members, directories, and channels:
 `singleNodeLocalhost` for local runs and integration tests, `multiNodeLocalhost`
-for an in-process multi-node cluster, and `fromProperties` to load a node from a
-deployment properties file (`exc.clusterMembers`, `exc.baseDir`, `exc.host`).
+for an in-process multi-node cluster, `fromMembers` for an explicit member
+string, and `fromProperties` to load a node from a deployment properties file
+(`exc.clusterMembers`, `exc.baseDir`, `exc.host`). `ingressEndpoints(nodeCount)`
+renders the `id=host:port,...` endpoint list the write client needs.
+
+Client SDK defaults: `ClientConfig` (write client) uses a 30 s `messageTimeoutNs`,
+250 ms `retryBackoffNs`, unlimited retries (`maxRetries` 0 = retry indefinitely),
+a 1024-command in-flight window, and a 2 s idle keepalive. `ReadClientConfig`
+(read client) targets the default query channel `aeron:udp?endpoint=localhost:44000`
+on stream 300 with responses on stream 301, a 5 s `messageTimeoutNs`, 250 ms
+retry backoff, up to 5 retries, and a 1024-query in-flight window.
 
 ## Observability
 
@@ -309,8 +323,9 @@ Core counters are mirrored to a standalone off-heap `CountersManager` allocated 
 `ClusterNode`, so an operator can read them from another thread without touching
 the single-writer hot path. Counters include commands processed, duplicates,
 backpressure, unsupported commands, snapshots taken / loaded, event-buffer
-overflows, and order-pool exhaustions; gauges record snapshot write / read time.
-The hot path only increments a counter - no string formatting, no allocation.
+overflows, and order / price-bucket pool exhaustions; gauges record snapshot
+write / read time. The hot path only increments a counter - no string formatting,
+no allocation.
 
 ## Architecture
 
@@ -361,8 +376,8 @@ flowchart TB
 
 | Module         | Responsibility                                                            |
 |----------------|---------------------------------------------------------------------------|
-| `exc-protocol` | SBE schema and generated flyweight codecs (wire, egress events, snapshot) |
-| `exc-core`     | Deterministic matching engine, order book, risk, dedup, snapshot, telemetry |
+| `exc-protocol` | SBE schema and generated flyweight codecs (wire, egress events, query protocol, snapshot) |
+| `exc-core`     | Deterministic matching engine, order book, risk, dedup, snapshot, telemetry, journal |
 | `exc-launcher` | Aeron bootstrap: Media Driver, Archive, Consensus, Container, journaler agent |
 | `exc-write-client` | Write-side client SDK: leader-change handling, idempotent retry, correlation, events |
 | `exc-read`     | CQRS read side and journal consumers: log follower, replay, dedup, HA failover, order-history ledger and trade tape |
@@ -381,12 +396,12 @@ Indicative micro-benchmark results on x86_64 Linux, JDK 21 (JMH quick run):
 
 | Operation                         | Time     | Notes                                 |
 |-----------------------------------|----------|---------------------------------------|
-| Envelope decode                   | ~1.9 ns  | SBE flyweight wrap plus field reads   |
-| Envelope encode                   | ~3.8 ns  | SBE flyweight write                   |
-| IOC match (1 fill vs deep book)   | ~6.3 ns  | price-time matching loop              |
-| Resting place + cancel            | ~22.9 ns | pooled book insert and remove         |
-| Full dispatch (place + cancel)    | ~86 ns   | dedup, symbol/user checks, risk, book |
-| Journal emit (4 events + drain)   | ~46 ns   | off-heap ring, zero-alloc producer    |
+| Envelope decode                   | ~2.0 ns  | SBE flyweight wrap plus field reads   |
+| Envelope encode                   | ~3.7 ns  | SBE flyweight write                   |
+| IOC match (1 fill vs deep book)   | ~6.2 ns  | price-time matching loop              |
+| Resting place + cancel            | ~22.8 ns | pooled book insert and remove         |
+| Full dispatch (place + cancel)    | ~84 ns   | dedup, symbol/user checks, risk, book |
+| Journal emit (4 events + drain)   | ~41.6 ns | off-heap ring, zero-alloc producer    |
 
 Run with the GC profiler to confirm zero steady-state allocation:
 
@@ -413,7 +428,7 @@ Performance targets (defaults; tune per service):
 # Multi-node and fault-injection suites (also wired into the default check gate)
 ./gradlew clusterTest   # warm restart from a native snapshot
 ./gradlew faultTest     # kill the leader mid-flight, verify exactly-once failover
-./gradlew soakTest      # sustained load (opt-in)
+./gradlew soakTest      # opt-in soak task (no soak-tagged suites yet)
 
 # Full local gate: format, lint, compile with warnings-as-errors, all tests
 ./gradlew spotlessApply checkstyleMain checkstyleTest compileJava test integrationTest
@@ -430,6 +445,7 @@ Performance targets (defaults; tune per service):
 | `SnapshotRoundTripTest`            | Unit        | Byte-identical snapshot round trip and checksum         |
 | `SnapshotIntegrityTest`            | Unit        | Truncation and corruption are rejected                  |
 | `HotPathHardeningTest`             | Unit        | Node pooling, bounded event buffer, off-heap counters   |
+| `ReportGeneratorTest`              | Unit        | Read-side reports: single-user, conservation totals, state hash |
 | `OrderLedgerTest`                  | Unit        | Ledger lifecycle, fills, dedup skip, eviction, userCookie |
 | `ExcClientIntegrationTest`         | Integration | Client submit / poll, command-id correlation            |
 | `ExcClientKeepaliveIntegrationTest` | Integration | Idle client survives session timeout via NOP keepalives |
@@ -475,10 +491,52 @@ engines produce identical trades and L2), single-thread engine dispatch vs the
 exchange-core disruptor pipeline, cluster end-to-end vs pipeline end-to-end,
 and a JMH comparison of all three order-book implementations.
 
+Measured on x86_64 Linux, JDK 21 (untuned shared hardware; read the fairness
+notes below before quoting them). The workload scale mirrors the upstream
+benchmark - exchange-core's own latency tests run 3,000,000 inbound messages
+per measured cycle (`TestDataParameters.singlePair*`), so `book` replays 3M
+commands, `engine` measures 1M ops after 200K warmup, and `e2e` measures 200K
+ops after 20K warmup:
+
+| Mode        | excoredum side                                             | exchange-core side (0.5.3)                          |
+|-------------|------------------------------------------------------------|-----------------------------------------------------|
+| `book` 3M   | `OrderBookNaive`: avg 7.9 MT/s (0.1 us/cmd, best 8.4)      | `OrderBookNaiveImpl`: avg 4.3 MT/s (0.2 us/cmd)     |
+|             |                                                            | `OrderBookDirectImpl`: avg 15.2 MT/s (0.1 us/cmd, best 16.4) |
+| `engine` 1M | `MatchingEngine.process`: 11.2 M ops/s, p50/p99/p99.9 0.1 us | disruptor pipeline: 171 K ops/s, p50 1.5 us, p99 34.6 us |
+| `e2e` 200K  | single-node Aeron Cluster + `ExcClient`: 2.9 K ops/s, p50 327 us, p99 569 us | pipeline (no consensus): 145 K ops/s, p50 1.6 us, p99 36.0 us |
+
+The default smoke-scale runs (100K commands / 20K ops) produce noisier figures
+- the book and pipeline implementations only reach their steady state after
+warm-up at the 3M scale - so sub-100K runs should be treated as smoke tests,
+not measurements. The harness reports through p99.9; exchange-core's README
+publishes through 99.99 and worst, so the deepest tails are not directly
+comparable.
+
+The `book` replay cross-validates both exchange-core implementations against
+the excoredum reference - event counters and full-depth L2 must match exactly,
+so the comparison doubles as a parity test for the port. `engine` / `e2e`
+compare different system shapes: the excoredum side pays for per-command SBE
+decode and dedup at `engine`, and for Raft commit plus archive recording at
+`e2e`, while the exchange-core pipeline allocates an `ApiPlaceOrder` builder
+and a completion future per command; the gap is the price of strong
+consistency, reported deliberately.
+
+The same three books under JMH (`:exc-xcore-bench:jmh -PquickBench`, one fork,
+1 s iterations):
+
+| Shape                        | `EXC_NAIVE` | `XCORE_NAIVE` | `XCORE_DIRECT` |
+|------------------------------|-------------|---------------|----------------|
+| place + cancel               | 20.4 ns     | 86.0 ns       | 32.9 ns        |
+| IOC match (deep book)        | 6.2 ns      | 57.8 ns       | 29.0 ns        |
+| replay chunk (2048 commands) | 298 us      | 438 us        | 162 us         |
+
 ```bash
-./gradlew :exc-xcore-bench:run --args="--mode=book --commands=100000"
-./gradlew :exc-xcore-bench:run --args="--mode=engine --warmup=5000 --ops=20000"
-./gradlew :exc-xcore-bench:run --args="--mode=e2e --warmup=5000 --ops=20000"
+# Matching-level replay at upstream scale (3M benchmark commands) with parity check
+./gradlew :exc-xcore-bench:run --args="--mode=book --commands=3000000"
+# Engine dispatch (single-thread full path) vs disruptor pipeline
+./gradlew :exc-xcore-bench:run --args="--mode=engine --warmup=200000 --ops=1000000"
+# Cluster end-to-end vs pipeline end-to-end
+./gradlew :exc-xcore-bench:run --args="--mode=e2e --warmup=20000 --ops=200000"
 ./gradlew :exc-xcore-bench:jmh -PquickBench
 ```
 

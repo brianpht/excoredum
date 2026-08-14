@@ -76,14 +76,15 @@ the port. `XcoreBenchSmokeTest` (tag `integration`) guards this on the CI gate.
 ## Running
 
 ```bash
-# Matching-level replay with cross-validation (default 100k benchmark commands)
-./gradlew :exc-xcore-bench:run --args="--mode=book --commands=100000 --target-orders=1000 --iterations=3"
+# Matching-level replay with cross-validation (defaults mirror the upstream
+# single-pair benchmark scale: 3M benchmark commands, 1K target orders, 1K users)
+./gradlew :exc-xcore-bench:run --args="--mode=book --commands=3000000 --target-orders=1000 --iterations=3"
 
-# Engine dispatch (single-thread full path) vs disruptor pipeline
-./gradlew :exc-xcore-bench:run --args="--mode=engine --warmup=5000 --ops=20000"
+# Engine dispatch (single-thread full path) vs disruptor pipeline (1M measured ops)
+./gradlew :exc-xcore-bench:run --args="--mode=engine --warmup=200000 --ops=1000000"
 
-# Cluster end-to-end vs pipeline end-to-end
-./gradlew :exc-xcore-bench:run --args="--mode=e2e --warmup=5000 --ops=20000"
+# Cluster end-to-end vs pipeline end-to-end (200K measured ops)
+./gradlew :exc-xcore-bench:run --args="--mode=e2e --warmup=20000 --ops=200000"
 
 # All three in one run
 ./gradlew :exc-xcore-bench:run --args="--mode=all"
@@ -94,6 +95,12 @@ the port. `XcoreBenchSmokeTest` (tag `integration`) guards this on the CI gate.
 ./gradlew :exc-xcore-bench:jmh -PquickBench
 ./gradlew :exc-xcore-bench:jmh -Pjmh.profilers=gc
 ```
+
+Sub-100K runs are smoke tests only: the book implementations and the pipeline
+need the 3M-command scale to reach steady state, so small runs overstate the
+excoredum book's advantage and understate the pipeline's steady-state
+throughput. The harness reports through p99.9; the upstream README publishes
+through 99.99 and worst, so deepest tails are not directly comparable.
 
 Absolute numbers move with hardware; compare implementations on the same
 machine, and prefer tail percentiles over means when drawing conclusions.
