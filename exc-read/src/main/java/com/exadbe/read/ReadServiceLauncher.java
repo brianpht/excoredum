@@ -33,10 +33,13 @@ public final class ReadServiceLauncher {
         final ReadReplicaConfig config = ReadReplicaConfig.localhost(aeronDir, archiveControlChannel);
 
         final IdleStrategy idle = new BackoffIdleStrategy();
-        try (ExcReadReplica replica = new ExcReadReplica(config, CoreConfig.defaults())) {
-            System.out.println("exc-read replica following " + archiveControlChannel + " (Ctrl-C to stop)");
+        try (ExcReadReplica replica = new ExcReadReplica(config, CoreConfig.defaults());
+                QueryResponder responder = new QueryResponder(replica, config)) {
+            System.out.println("exc-read replica following " + archiveControlChannel + ", serving queries on "
+                    + config.queryRequestChannel() + " (Ctrl-C to stop)");
             while (!Thread.currentThread().isInterrupted()) {
-                idle.idle(replica.poll());
+                final int work = replica.poll() + responder.poll();
+                idle.idle(work);
             }
         }
     }

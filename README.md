@@ -53,6 +53,10 @@ highly-available domain event journal on the Aeron Archive.
   member's Aeron Archive and reproduces engine state for eventually-consistent
   reads (L2 order-book snapshots, balances, user reports), without joining Raft
   or affecting quorum.
+- **Read-Side Query SDK**: `exc-read-client` lets internal services query a read
+  replica over the wire (`userExists`, `balance`, L2 order book, user reports,
+  order history, trade tape, conservation totals) with request-id correlation
+  and idempotent retry, decoupled from `exc-core` exactly like `exc-client`.
 - **Order History and Trade Tape**: the read replica rebuilds a per-user order
   lifecycle ledger (state, fills, order type, `userCookie`) and a bounded market
   trade tape directly from the replicated log - covering every order placed by
@@ -214,6 +218,38 @@ System.out.println(outcome.resultCode()); // e.g. SUCCESS
 ./gradlew :exc-read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
 ```
 
+The read service also answers queries on the query protocol (default
+`aeron:udp?endpoint=localhost:44000`, stream 300). Query it from any internal
+service with the `exc-read-client` SDK, which depends only on `exc-protocol`:
+
+```java
+import com.exadbe.read.client.ReadClient;
+import com.exadbe.read.client.L2Snapshot;
+import com.exadbe.read.client.UserReport;
+import com.exadbe.read.client.config.ReadClientConfig;
+
+try (ReadClient client = new ReadClient(ReadClientConfig.builder().build())) {
+    boolean exists = client.userExists(42L);                        // replicated account?
+    long balance = client.balance(42L, 10).balance();               // free balance, currency 10
+    L2Snapshot l2 = client.orderBook(1, 10);                        // best 10 levels per side
+    UserReport report = client.singleUserReport(42L);               // status + balances + resting orders
+    long stateHash = client.stateHash();                            // deterministic fingerprint
+    long appliedPosition = client.lastAppliedPosition();            // replica's log position
+}
+```
+
+Queries block until answered or the retry budget is exhausted
+(`QueryTimeoutException`), are eventually consistent, and each result carries
+the replica's `appliedPosition` at answer time. Reads are retried idempotently
+(re-publishing the same request id), so a read service restart between attempts
+is harmless.
+
+The same client also exposes an asynchronous mode mirroring `ExcClient`:
+`submitBalance(...)`-style methods return a `requestId` without blocking,
+`poll()` drives delivery, and a registered `QueryListener` receives each result
+(plus `onTimeout` / `onError`), with a bounded in-flight window that throws
+`BackpressureException` when full.
+
 ## How It Works
 
 excoredum is a replicated state machine. Commands flow through Aeron Cluster and
@@ -329,6 +365,7 @@ flowchart TB
 | `exc-launcher` | Aeron bootstrap: Media Driver, Archive, Consensus, Container, journaler agent |
 | `exc-client`   | Client-side SDK: leader-change handling, idempotent retry, correlation, events |
 | `exc-read`     | CQRS read side and journal consumers: log follower, replay, dedup, HA failover, order-history ledger and trade tape |
+| `exc-read-client` | Read-side SDK: blocking queries over plain Aeron request/response streams (protocol only, like `exc-client`) |
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram)     |
 | `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3 (replay parity, latency, JMH) |
 | `exc-tests`    | Unit, property, integration, cluster, fault tests and fixtures            |
@@ -403,6 +440,8 @@ Performance targets (defaults; tune per service):
 | `XcoreBenchSmokeTest`              | Integration | exchange-core replay cross-validates; pipeline boots    |
 | `ReadReplicaIntegrationTest`       | Integration | Replica reproduces users, balances, resting depth, L2   |
 | `ReadReplicaOrderHistoryIntegrationTest` | Integration | Replica rebuilds order history, fills, and trades from the log; survives replica restart |
+| `ReadQueryIntegrationTest`   | Integration | Read-side SDK queries balances, L2, reports, history, trades, and totals over the query protocol |
+| `QueryCodecRoundTripTest`    | Unit        | Query request / response codecs round-trip every group and scalar   |
 | `EventJournalRecorderIntegrationTest` | Integration | Recorder drains the ring onto an Aeron stream        |
 | `JournalClusterIntegrationTest`    | Integration | A committed trade reaches the recorded journal stream   |
 | `JournalConsumerIntegrationTest`   | Integration | Re-delivered events are deduped to exactly-once         |

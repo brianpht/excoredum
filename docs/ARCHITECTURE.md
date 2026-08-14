@@ -222,21 +222,32 @@ flowchart TB
         LLS["LiveLogSubscriber\n(stream 100)"]
         ME2["MatchingEngine"]
         LED["OrderLedger"]
+        QR["QueryResponder\n(query protocol)"]
         LLS -->|" engine.process() "| ME2
         LLS -->|" applyCommand() "| LED
         RR --> LLS
+        RR --> QR
+    end
+
+    subgraph READCLIENT["Query SDK (exc-read-client)"]
+        RC["ReadClient\nblocking, request-id correlation"]
     end
 
     CLIENT -->|" CommandEnvelope (SBE) ingress "| CM
     MS -->|" CommandResult + Trade/Reduce/Reject + L2 (SBE) egress "| CLIENT
     AR -.->|" consensus log replay "| LLS
     AR -.->|" journal replay "| HJC
+    RC -->|" QueryRequest (SBE, stream 300) "| QR
+    QR -->|" QueryResponse (SBE, stream 301) "| RC
 ```
 
 A node's components communicate over IPC. The `ClusteredServiceAgent` receives
 the committed log, so every command reaches `MatchingService` in total order on a
 single thread. The read replica runs its own media driver and follows a member's
-Archive over UDP, never joining consensus.
+Archive over UDP, never joining consensus. The query SDK talks to a read
+replica's `QueryResponder` over plain Aeron UDP request/response streams
+(stream 300 request, 301 response by default), so internal services can read
+replicated state without joining the replica's process.
 
 ---
 
@@ -399,10 +410,21 @@ and the tape holds at most `OrderLedger.MAX_MARKET_TRADES` trades. Re-delivered
 commands are skipped by reusing the engine's dedup decision (outcome
 `DUPLICATE`), and a replicated RESET clears the ledger.
 
+The replica also serves a network query protocol for internal services.
+`QueryResponder` subscribes to `QueryRequest` frames (SBE, default stream 300 on
+`aeron:udp?endpoint=localhost:44000`) and answers each from the replica's state
+on the same single polling thread, publishing a `QueryResponse` (default stream
+301) to the client's ephemeral response subscription named in the request. Every
+response carries the `appliedPosition` the replica had reached, so consumers can
+judge staleness; a response that would overflow the preallocated reply buffer is
+truncated with status `TRUNCATED` rather than corrupting it. The `ReadServiceLauncher`
+wires the responder into the same poll loop as the replica.
+
 | Component           | Responsibility                                                       |
 |---------------------|----------------------------------------------------------------------|
 | `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log; balance / count / report / L2 / order-history queries |
 | `LiveLogSubscriber` | Subscribes the consensus recording, parses cluster framing, applies commands to the engine and the ledger |
+| `QueryResponder`    | Serves `QueryRequest` frames on the replica's poll thread; publishes `QueryResponse` to each client's subscription |
 | `OrderLedger`       | Per-user order lifecycle history, per-order fills, and a bounded market trade tape, rebuilt from the log |
 | `OrderRecord` / `Fill` / `MarketTrade` | Read-side result holders for the order-history queries       |
 | `ReportGenerator`   | Assembles single-user, total-currency-balance, and state-hash reports over the replica engine |
@@ -412,8 +434,45 @@ commands are skipped by reusing the engine's dedup decision (outcome
 | `HaJournalConsumer` | Follows one member's journal live and fails over to another on source loss |
 | `ReplicationHealth` | Health and applied cluster-global position published for readers     |
 | `ReadStreams`       | Consensus log and replay stream id constants                         |
-| `ReadReplicaConfig` | Archive control channel, control stream id, local host               |
-| `ReadServiceLauncher`| Entry point: follow a member archive                                |
+| `ReadReplicaConfig` | Archive control channel, control stream id, query request channel, local host |
+| `ReadServiceLauncher`| Entry point: follow a member archive and serve queries             |
+
+### exc-read-client - Read-Side SDK
+
+The read-side SDK, deliberately decoupled like `exc-client`: it depends only on
+`exc-protocol` (never `exc-core` or `exc-read`). `ReadClient` opens a plain Aeron
+publication to a read replica's query request stream and an ephemeral response
+subscription, and encodes `QueryRequest` frames with a per-call `requestId`.
+Two API modes share one core, mirroring `ExcClient`:
+
+- **Asynchronous**: `submitBalance(uid, currency)`-style methods return a
+  `requestId` without blocking (throwing `BackpressureException` when the
+  bounded in-flight window is full); `poll()` drives delivery and fires the
+  registered `QueryListener` callbacks on the caller's thread; unanswered
+  queries are re-published idempotently (same request id) until answered or the
+  retry budget is exhausted, then `onTimeout` fires.
+- **Synchronous**: `balance(uid, currency)`-style convenience methods submit and
+  block (driving `poll()` themselves) until the matching response arrives or
+  `messageTimeoutNs` elapses, throwing `QueryTimeoutException`.
+
+Queries are reads, so a retry simply re-publishes the same request id;
+responses to abandoned attempts are discarded. Results are eventually
+consistent and each carries the replica's `appliedPosition` at answer time.
+
+The query surface mirrors the replica's in-process API: `userExists(uid)`,
+`balance(uid, currency)`, `orderBook(symbolId, maxLevels)`,
+`singleUserReport(uid)`, `orderHistory(uid)`, `activeOrders(uid)`,
+`order(orderId)`, `userTrades(uid, limit)`, `marketTrades(symbolId, limit)`,
+`totalCurrencyBalance()`, and `stateHash()` (each also available as
+`submit...`).
+
+| Component           | Responsibility                                                       |
+|---------------------|----------------------------------------------------------------------|
+| `ReadClient`        | Sync wrappers + async `submit` / `poll` / listener core, request-id correlation, idempotent retransmission, bounded in-flight window |
+| `QueryListener`     | Async delivery callbacks, one per query type, plus `onTimeout` / `onError` |
+| `ReadClientConfig`  | Request / response channels and stream ids, media driver dir, timing, `maxInFlight` |
+| Result holders      | `BalanceResult`, `L2Snapshot`, `UserReport`, `OrderRecordResult`, `MarketTradeResult`, `TotalBalanceResult`, `OrderState` |
+| `BackpressureException` / `QueryTimeoutException` / `QueryException` | Query failure signalling |
 
 ### exc-bench - Latency Harness
 

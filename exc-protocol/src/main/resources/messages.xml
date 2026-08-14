@@ -2,7 +2,7 @@
 <sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
                    package="com.exadbe.protocol"
                    id="1"
-                   version="3"
+                   version="4"
                    semanticVersion="1.0"
                    byteOrder="littleEndian"
                    description="excoredum wire and snapshot messages.">
@@ -18,6 +18,11 @@
         <composite name="groupSizeEncoding" description="Repeating group dimensions.">
             <type name="blockLength" primitiveType="uint16"/>
             <type name="numInGroup" primitiveType="uint16"/>
+        </composite>
+
+        <composite name="varDataEncoding" description="Variable-length data block.">
+            <type name="length" primitiveType="uint32" maxValue="1073741824"/>
+            <type name="varData" primitiveType="uint8" length="0" characterEncoding="UTF-8"/>
         </composite>
 
         <enum name="OrderCommandType" encodingType="uint8">
@@ -72,6 +77,27 @@
             <validValue name="USER_SUSPENDED">802</validValue>
             <validValue name="USER_ALREADY_SUSPENDED">803</validValue>
             <validValue name="USER_NOT_SUSPENDED">804</validValue>
+        </enum>
+
+        <enum name="QueryType" encodingType="uint8">
+            <validValue name="BALANCE">0</validValue>
+            <validValue name="L2_ORDER_BOOK">1</validValue>
+            <validValue name="SINGLE_USER_REPORT">2</validValue>
+            <validValue name="ORDER_HISTORY">3</validValue>
+            <validValue name="ACTIVE_ORDERS">4</validValue>
+            <validValue name="ORDER_BY_ID">5</validValue>
+            <validValue name="USER_TRADES">6</validValue>
+            <validValue name="MARKET_TRADES">7</validValue>
+            <validValue name="TOTAL_CURRENCY_BALANCE">8</validValue>
+            <validValue name="STATE_HASH">9</validValue>
+            <validValue name="USER_EXISTS">10</validValue>
+        </enum>
+
+        <enum name="QueryStatusCode" encodingType="uint16">
+            <validValue name="SUCCESS">0</validValue>
+            <validValue name="NOT_FOUND">1</validValue>
+            <validValue name="UNSUPPORTED">2</validValue>
+            <validValue name="TRUNCATED">3</validValue>
         </enum>
     </types>
 
@@ -171,6 +197,110 @@
             <field name="price"  id="9"  type="int64"/>
             <field name="size"   id="10" type="int64"/>
             <field name="orders" id="11" type="int32"/>
+        </group>
+    </sbe:message>
+
+    <!-- ===================== Read-side query protocol ===================== -->
+
+    <sbe:message name="QueryRequest" id="60" sinceVersion="4"
+                 description="One read query submitted to a read replica's QueryResponder.">
+        <field name="requestId"       id="1" type="uint64"/>
+        <field name="queryType"       id="2" type="QueryType"/>
+        <field name="uid"             id="3" type="uint64" presence="optional"/>
+        <field name="currency"        id="4" type="int32" presence="optional"/>
+        <field name="symbolId"        id="5" type="int32" presence="optional"/>
+        <field name="orderId"         id="6" type="int64" presence="optional"/>
+        <field name="tradeLimit"      id="7" type="uint16" presence="optional"/>
+        <field name="maxLevels"       id="8" type="uint16" presence="optional"/>
+        <!-- Where the client listens for the QueryResponse for this request. -->
+        <field name="responseStreamId" id="9" type="uint32"/>
+        <data   name="responseChannel" id="10" type="varDataEncoding"/>
+    </sbe:message>
+
+    <sbe:message name="QueryResponse" id="61" sinceVersion="4"
+                 description="One read query result; only the group relevant to the queryType is populated.">
+        <field name="requestId"       id="1" type="uint64"/>
+        <field name="queryType"       id="2" type="QueryType"/>
+        <field name="status"          id="3" type="QueryStatusCode"/>
+        <!-- Cluster log position the replica had applied when answering. -->
+        <field name="appliedPosition" id="4" type="uint64"/>
+        <field name="uid"             id="5" type="uint64" presence="optional"/>
+        <field name="symbolId"        id="6" type="int32" presence="optional"/>
+        <field name="balance"         id="7" type="int64" presence="optional"/>
+        <field name="userExists"      id="8" type="uint8" presence="optional"/>
+        <field name="suspended"       id="9" type="uint8" presence="optional"/>
+        <field name="stateHash"       id="10" type="int64" presence="optional"/>
+
+        <!-- L2_ORDER_BOOK price levels, best first. -->
+        <group name="asks" id="54" dimensionType="groupSizeEncoding">
+            <field name="price"  id="55" type="int64"/>
+            <field name="size"   id="56" type="int64"/>
+            <field name="orders" id="57" type="int32"/>
+        </group>
+        <group name="bids" id="58" dimensionType="groupSizeEncoding">
+            <field name="price"  id="59" type="int64"/>
+            <field name="size"   id="60" type="int64"/>
+            <field name="orders" id="61" type="int32"/>
+        </group>
+
+        <!-- BALANCE / SINGLE_USER_REPORT balances: (currency, balance) pairs. -->
+        <group name="balances" id="11" dimensionType="groupSizeEncoding">
+            <field name="currency" id="12" type="int32"/>
+            <field name="balance"  id="13" type="int64"/>
+        </group>
+
+        <!-- SINGLE_USER_REPORT resting orders. -->
+        <group name="orders" id="14" dimensionType="groupSizeEncoding">
+            <field name="symbolId"        id="15" type="int32"/>
+            <field name="orderId"         id="16" type="int64"/>
+            <field name="ask"             id="17" type="uint8"/>
+            <field name="price"           id="18" type="int64"/>
+            <field name="size"            id="19" type="int64"/>
+            <field name="filled"          id="20" type="int64"/>
+            <field name="reserveBidPrice" id="21" type="int64"/>
+        </group>
+
+        <!-- ORDER_HISTORY / ACTIVE_ORDERS / ORDER_BY_ID lifecycle records. -->
+        <group name="history" id="22" dimensionType="groupSizeEncoding">
+            <field name="symbolId"    id="23" type="int32"/>
+            <field name="orderId"     id="24" type="int64"/>
+            <field name="uid"         id="25" type="uint64"/>
+            <field name="ask"         id="26" type="uint8"/>
+            <field name="orderType"   id="27" type="OrderType"/>
+            <field name="price"       id="28" type="int64"/>
+            <field name="size"        id="29" type="int64"/>
+            <field name="filled"      id="30" type="int64"/>
+            <field name="reduced"     id="31" type="int64"/>
+            <field name="lastTimestamp" id="32" type="int64"/>
+            <field name="placedTimestamp" id="62" type="int64"/>
+            <field name="userCookie"  id="33" type="int32"/>
+            <field name="state"       id="34" type="uint8"/>
+            <group name="fills" id="35" dimensionType="groupSizeEncoding">
+                <field name="price"          id="36" type="int64"/>
+                <field name="size"           id="37" type="int64"/>
+                <field name="taker"          id="38" type="uint8"/>
+                <field name="counterpartyUid" id="39" type="uint64"/>
+                <field name="timestamp"      id="40" type="int64"/>
+            </group>
+        </group>
+
+        <!-- USER_TRADES / MARKET_TRADES tape entries. -->
+        <group name="trades" id="41" dimensionType="groupSizeEncoding">
+            <field name="symbolId"     id="42" type="int32"/>
+            <field name="makerOrderId" id="43" type="int64"/>
+            <field name="makerUid"     id="44" type="uint64"/>
+            <field name="takerUid"     id="45" type="uint64"/>
+            <field name="price"        id="46" type="int64"/>
+            <field name="size"         id="47" type="int64"/>
+            <field name="timestamp"    id="48" type="int64"/>
+        </group>
+
+        <!-- TOTAL_CURRENCY_BALANCE per-currency conservation breakdown. -->
+        <group name="totals" id="49" dimensionType="groupSizeEncoding">
+            <field name="currency"        id="50" type="int32"/>
+            <field name="accountBalance"  id="51" type="int64"/>
+            <field name="reserved"        id="52" type="int64"/>
+            <field name="fees"            id="53" type="int64"/>
         </group>
     </sbe:message>
 

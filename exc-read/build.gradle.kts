@@ -18,5 +18,4 @@ application {
 dependencies {
     implementation(project(":exc-core"))
     implementation(libs.bundles.aeron)
-    implementation(libs.netty.codec.http)
 }

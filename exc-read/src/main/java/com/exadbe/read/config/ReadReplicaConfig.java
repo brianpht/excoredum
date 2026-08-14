@@ -1,5 +1,6 @@
 package com.exadbe.read.config;
 
+import com.exadbe.protocol.QueryStreams;
 import io.aeron.archive.client.AeronArchive;
 
 /**
@@ -13,16 +14,22 @@ public final class ReadReplicaConfig {
     private final String archiveControlChannel;
     private final int archiveControlStreamId;
     private final String localHost;
+    private final String queryRequestChannel;
+    private final int queryRequestStreamId;
 
     private ReadReplicaConfig(
             final String aeronDirectoryName,
             final String archiveControlChannel,
             final int archiveControlStreamId,
-            final String localHost) {
+            final String localHost,
+            final String queryRequestChannel,
+            final int queryRequestStreamId) {
         this.aeronDirectoryName = aeronDirectoryName;
         this.archiveControlChannel = archiveControlChannel;
         this.archiveControlStreamId = archiveControlStreamId;
         this.localHost = localHost;
+        this.queryRequestChannel = queryRequestChannel;
+        this.queryRequestStreamId = queryRequestStreamId;
     }
 
     /**
@@ -37,7 +44,27 @@ public final class ReadReplicaConfig {
                 aeronDirectoryName,
                 archiveControlChannel,
                 AeronArchive.Configuration.CONTROL_STREAM_ID_DEFAULT,
-                "localhost");
+                "localhost",
+                QueryStreams.QUERY_REQUEST_CHANNEL,
+                QueryStreams.QUERY_REQUEST_STREAM_ID);
+    }
+
+    /**
+     * Builds a localhost replica configuration with a custom query request
+     * channel, for deployments that move the read service off the default port.
+     */
+    public static ReadReplicaConfig localhost(
+            final String aeronDirectoryName,
+            final String archiveControlChannel,
+            final String queryRequestChannel,
+            final int queryRequestStreamId) {
+        return new ReadReplicaConfig(
+                aeronDirectoryName,
+                archiveControlChannel,
+                AeronArchive.Configuration.CONTROL_STREAM_ID_DEFAULT,
+                "localhost",
+                queryRequestChannel,
+                queryRequestStreamId);
     }
 
     public String aeronDirectoryName() {
@@ -54,5 +81,15 @@ public final class ReadReplicaConfig {
 
     public String localHost() {
         return localHost;
+    }
+
+    /** The channel the read service subscribes to for {@code QueryRequest} frames. */
+    public String queryRequestChannel() {
+        return queryRequestChannel;
+    }
+
+    /** The stream id the read service subscribes to for {@code QueryRequest} frames. */
+    public int queryRequestStreamId() {
+        return queryRequestStreamId;
     }
 }
