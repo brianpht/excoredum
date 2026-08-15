@@ -17,6 +17,7 @@ final class PendingCommand {
     int length;
     long commandIdHi;
     long commandIdLo;
+    long clientSeq;
     long submitNanos;
     long deadlineNanos;
     int retries;
@@ -33,6 +34,7 @@ final class PendingCommand {
         length = 0;
         commandIdHi = 0L;
         commandIdLo = 0L;
+        clientSeq = 0L;
         submitNanos = 0L;
         deadlineNanos = 0L;
         retries = 0;

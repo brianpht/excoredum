@@ -1,0 +1,145 @@
+# End-to-end excoredum system test in containers: a 3-node Aeron Cluster
+# (Raft), a CQRS read replica following node-0's archive, a write-side load
+# runner submitting the deterministic 100k-command workload through the client
+# SDK, and a read-side verifier asserting the replica rebuilt exactly the
+# simulated state.
+#
+#   docker compose -f docker/docker-compose.yml up --build
+#   docker compose -f docker/docker-compose.yml ps
+#   docker compose -f docker/docker-compose.yml logs load verify
+#   docker compose -f docker/docker-compose.yml down -v
+#
+# Exit code: 0 when load (write checks) and verify (read checks) both pass.
+name: excoredum-e2e
+
+networks:
+  exc-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+# Aeron member format: id,ingress,consensus,log,catchup,archive per node,
+# separated by |. Node n uses ports 20100 + n*100 .. +4; ingress/consensus/
+# archive are UDP, log/catchup are TCP. Hosts are the compose service names,
+# resolved by the embedded DNS on the bridge network.
+x-members: &members
+  EXC_CLUSTER_MEMBERS: >-
+    0,node-0:20100,node-0:20101,node-0:20102,node-0:20103,node-0:20104
+    |1,node-1:20200,node-1:20201,node-1:20202,node-1:20203,node-1:20204
+    |2,node-2:20300,node-2:20301,node-2:20302,node-2:20303,node-2:20304
+
+x-image: &image
+  image: excoredum:test
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  networks: [exc-net]
+
+services:
+  node-0:
+    <<: *image
+    container_name: excoredum-node-0
+    shm_size: 1g
+    environment:
+      <<: *members
+      EXC_NODE_ID: "0"
+      EXC_CLEAN_START: "true"
+    volumes:
+      - node0-data:/data
+    command: ["/usr/local/bin/entrypoint-node.sh"]
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "ClusterLauncher"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
+  node-1:
+    <<: *image
+    container_name: excoredum-node-1
+    shm_size: 1g
+    environment:
+      <<: *members
+      EXC_NODE_ID: "1"
+      EXC_CLEAN_START: "true"
+    volumes:
+      - node1-data:/data
+    command: ["/usr/local/bin/entrypoint-node.sh"]
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "ClusterLauncher"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
+  node-2:
+    <<: *image
+    container_name: excoredum-node-2
+    shm_size: 1g
+    environment:
+      <<: *members
+      EXC_NODE_ID: "2"
+      EXC_CLEAN_START: "true"
+    volumes:
+      - node2-data:/data
+    command: ["/usr/local/bin/entrypoint-node.sh"]
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "ClusterLauncher"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
+  read:
+    <<: *image
+    container_name: excoredum-read
+    shm_size: 256m
+    environment:
+      EXC_ARCHIVE: "aeron:udp?endpoint=node-0:20104"
+      EXC_QUERY: "aeron:udp?endpoint=0.0.0.0:44000"
+    command: ["/usr/local/bin/entrypoint-read.sh"]
+    depends_on:
+      node-0:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "ReadServiceLauncher"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
+  load:
+    <<: *image
+    container_name: excoredum-load
+    shm_size: 256m
+    environment:
+      EXC_INGRESS: "0=node-0:20100,1=node-1:20200,2=node-2:20300"
+      # EXC_OPS: "100000"
+      # EXC_USERS: "100"
+    command: ["/usr/local/bin/entrypoint-load.sh"]
+    depends_on:
+      node-0:
+        condition: service_healthy
+      node-1:
+        condition: service_healthy
+      node-2:
+        condition: service_healthy
+
+  verify:
+    <<: *image
+    container_name: excoredum-verify
+    shm_size: 256m
+    environment:
+      EXC_QUERY: "aeron:udp?endpoint=read:44000"
+    command: ["/usr/local/bin/entrypoint-verify.sh"]
+    depends_on:
+      load:
+        condition: service_completed_successfully
+      read:
+        condition: service_healthy
+
+volumes:
+  node0-data:
+  node1-data:
+  node2-data:

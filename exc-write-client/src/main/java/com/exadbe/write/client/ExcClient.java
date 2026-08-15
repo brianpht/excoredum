@@ -89,7 +89,11 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     private long completed;
     private long expired;
     private long backpressureEvents;
+    private long firstNegativeOfferResult;
     private long keepalives;
+    private long retransmits;
+    private long firstRetransmitIdLo = Long.MIN_VALUE;
+    private long firstExpiredIdLo = Long.MIN_VALUE;
     private int reconnects;
     private int leaderChanges;
     private int leaderMemberId = -1;
@@ -213,11 +217,13 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         pc.retries = 0;
         pc.commandIdHi = config.clientId();
         pc.commandIdLo = nextCommandIdLo++;
+        final long clientSeq = nextClientSeq++;
+        pc.clientSeq = clientSeq;
 
         envelopeEncoder
                 .wrapAndApplyHeader(pc.buffer, 0, headerEncoder)
                 .clientId(config.clientId())
-                .clientSeq(nextClientSeq++)
+                .clientSeq(clientSeq)
                 .commandIdHi(pc.commandIdHi)
                 .commandIdLo(pc.commandIdLo)
                 .commandType(OrderCommandType.ADD_SYMBOL)
@@ -244,7 +250,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         pc.deadlineNanos = pc.submitNanos + config.retryBackoffNs();
         pending.put(pc.commandIdLo, pc);
         submitted++;
-        offer(pc);
+        offerUntilSent(pc);
         return pc.commandIdLo;
     }
 
@@ -412,11 +418,13 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         pc.retries = 0;
         pc.commandIdHi = config.clientId();
         pc.commandIdLo = nextCommandIdLo++;
+        final long clientSeq = nextClientSeq++;
+        pc.clientSeq = clientSeq;
 
         envelopeEncoder
                 .wrapAndApplyHeader(pc.buffer, 0, headerEncoder)
                 .clientId(config.clientId())
-                .clientSeq(nextClientSeq++)
+                .clientSeq(clientSeq)
                 .commandIdHi(pc.commandIdHi)
                 .commandIdLo(pc.commandIdLo)
                 .commandType(type)
@@ -444,7 +452,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
 
         pending.put(pc.commandIdLo, pc);
         submitted++;
-        offer(pc);
+        offerUntilSent(pc);
         return pc.commandIdLo;
     }
 
@@ -469,11 +477,13 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         pc.retries = 0;
         pc.commandIdHi = config.clientId();
         pc.commandIdLo = nextCommandIdLo++;
+        final long clientSeq = nextClientSeq++;
+        pc.clientSeq = clientSeq;
 
         envelopeEncoder
                 .wrapAndApplyHeader(pc.buffer, 0, headerEncoder)
                 .clientId(config.clientId())
-                .clientSeq(nextClientSeq++)
+                .clientSeq(clientSeq)
                 .commandIdHi(pc.commandIdHi)
                 .commandIdLo(pc.commandIdLo)
                 .commandType(type)
@@ -501,7 +511,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
 
         pending.put(pc.commandIdLo, pc);
         submitted++;
-        offer(pc);
+        offerUntilSent(pc);
         return pc.commandIdLo;
     }
 
@@ -535,9 +545,21 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 expire(pc);
                 continue;
             }
+            // A resend is only safe while the engine's per-client dedup window
+            // can still match the original (clientId, clientSeq); once more
+            // than dedupWindow commands have been submitted since, retrying
+            // would apply the command a second time. Expire instead of risking
+            // a double-apply: the command's outcome is unrecoverable.
+            if (config.dedupWindow() > 0 && nextClientSeq - pc.clientSeq > config.dedupWindow()) {
+                expire(pc);
+                continue;
+            }
             offer(pc);
             pc.retries++;
-            pc.deadlineNanos = now + config.retryBackoffNs();
+            if (firstRetransmitIdLo == Long.MIN_VALUE) {
+                firstRetransmitIdLo = pc.commandIdLo;
+            }
+            retransmits++;
             work++;
         }
         retransmitAll = false;
@@ -583,11 +605,49 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         if (!pc.keepalive) {
             handler.onExpired(pc.commandIdHi, pc.commandIdLo);
         }
+        if (firstExpiredIdLo == Long.MIN_VALUE) {
+            firstExpiredIdLo = pc.commandIdLo;
+        }
         expired++;
         release(pc);
     }
 
     private long lastOfferResult;
+
+    /**
+     * Offers a command and does not return until the driver accepted it, so
+     * submission order equals cluster delivery order. A transient negative
+     * offer result (backpressure, admin action, not-yet-connected) is retried
+     * in place: if submit returned while the command sat pending, a later
+     * retry would land at the end of the ingress queue and be processed after
+     * subsequent commands, silently reordering the caller's sequence (a cancel
+     * could then arrive before the order it targets).
+     */
+    private void offerUntilSent(final PendingCommand pc) {
+        for (; ; ) {
+            if (sessionLost) {
+                backpressureEvents++;
+                return;
+            }
+            final long result = cluster.offer(pc.buffer, 0, pc.length);
+            lastOfferResult = result;
+            if (result >= 0) {
+                pc.deadlineNanos = System.nanoTime() + config.retryBackoffNs();
+                // Any ingress traffic resets the cluster's session timer.
+                nextKeepaliveNanos = System.nanoTime() + config.keepaliveIntervalNs();
+                return;
+            }
+            backpressureEvents++;
+            if (firstNegativeOfferResult == 0L) {
+                firstNegativeOfferResult = result;
+            }
+            if (result == Publication.CLOSED) {
+                sessionLost = true;
+                return;
+            }
+            Thread.onSpinWait();
+        }
+    }
 
     private void offer(final PendingCommand pc) {
         if (sessionLost) {
@@ -598,10 +658,20 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         lastOfferResult = result;
         if (result < 0) {
             backpressureEvents++;
+            if (firstNegativeOfferResult == 0L) {
+                firstNegativeOfferResult = result;
+            }
             if (result == Publication.CLOSED) {
                 sessionLost = true;
+            } else {
+                // A backpressured or not-yet-connected offer must be retried on
+                // the next poll, not after the full retry backoff: at high
+                // throughput the engine's per-client dedup window rolls in a
+                // few milliseconds, so waiting would make the retry unsafe.
+                pc.deadlineNanos = 0L;
             }
         } else {
+            pc.deadlineNanos = System.nanoTime() + config.retryBackoffNs();
             // Any ingress traffic resets the cluster's session timer.
             nextKeepaliveNanos = System.nanoTime() + config.keepaliveIntervalNs();
         }
@@ -610,6 +680,11 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     /** The raw result of the most recent ingress offer (diagnostics). */
     public long lastOfferResult() {
         return lastOfferResult;
+    }
+
+    /** The first negative ingress offer result (0 when every offer succeeded). */
+    public long firstNegativeOfferResult() {
+        return firstNegativeOfferResult;
     }
 
     private void release(final PendingCommand pc) {
@@ -827,6 +902,21 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     /** Commands abandoned after exhausting {@code maxRetries}; each was reported via {@link ResultHandler#onExpired}. */
     public long expired() {
         return expired;
+    }
+
+    /** Commands re-offered to the cluster because their retry deadline passed without a result. */
+    public long retransmits() {
+        return retransmits;
+    }
+
+    /** The command id of the first retransmitted command, or {@link Long#MIN_VALUE} when none were. */
+    public long firstRetransmitIdLo() {
+        return firstRetransmitIdLo;
+    }
+
+    /** The command id of the first expired command, or {@link Long#MIN_VALUE} when none were. */
+    public long firstExpiredIdLo() {
+        return firstExpiredIdLo;
     }
 
     public long backpressureEvents() {

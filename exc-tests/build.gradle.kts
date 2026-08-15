@@ -89,6 +89,10 @@ tasks.withType<Test>().configureEach {
         "--add-opens", "java.base/java.nio=ALL-UNNAMED",
         "--add-opens", "java.base/java.util=ALL-UNNAMED",
     )
+    // SystemLoadIntegrationTest scale knob: -Dexc.systemload.ops / -Dexc.systemload.users
+    // lets the docker-equivalent run be reproduced at full scale in one JVM.
+    systemProperty("exc.systemload.ops", System.getProperty("exc.systemload.ops", "20000"))
+    systemProperty("exc.systemload.users", System.getProperty("exc.systemload.users", "20"))
 }
 
 // Test code is not the production hot path; keep lint informative but non-fatal.

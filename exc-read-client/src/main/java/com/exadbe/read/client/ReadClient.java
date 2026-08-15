@@ -9,6 +9,7 @@ import com.exadbe.protocol.QueryStatusCode;
 import com.exadbe.protocol.QueryType;
 import com.exadbe.read.client.config.ReadClientConfig;
 import io.aeron.Aeron;
+import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.driver.MediaDriver;
@@ -64,6 +65,7 @@ public final class ReadClient implements AutoCloseable {
     private final Aeron aeron;
     private final Subscription responses;
     private final Publication requests;
+    private final FragmentAssembler fragmentAssembler;
     private final String responseChannel;
     private final IdleStrategy idle = new BackoffIdleStrategy();
 
@@ -123,7 +125,7 @@ public final class ReadClient implements AutoCloseable {
         String channel = null;
         try {
             this.aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(dir));
-            sub = aeron.addSubscription("aeron:udp?endpoint=localhost:0", config.responseStreamId());
+            sub = aeron.addSubscription(config.responseChannel(), config.responseStreamId());
             channel = awaitResolvedEndpoint(sub);
             pub = aeron.addPublication(config.requestChannel(), config.requestStreamId());
         } catch (final RuntimeException e) {
@@ -140,6 +142,7 @@ public final class ReadClient implements AutoCloseable {
         }
         this.responses = sub;
         this.requests = pub;
+        this.fragmentAssembler = new FragmentAssembler(this::onResponse);
         this.responseChannel = channel;
     }
 
@@ -214,7 +217,7 @@ public final class ReadClient implements AutoCloseable {
      * @return an opaque work count (positive when progress was made)
      */
     public int poll() {
-        int work = responses.poll(this::onResponse, RESPONSE_FRAGMENT_LIMIT);
+        int work = responses.poll(fragmentAssembler, RESPONSE_FRAGMENT_LIMIT);
         work += retransmit(System.nanoTime());
         return work;
     }

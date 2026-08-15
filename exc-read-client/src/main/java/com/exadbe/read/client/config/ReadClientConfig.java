@@ -16,6 +16,7 @@ public final class ReadClientConfig {
 
     private final String requestChannel;
     private final int requestStreamId;
+    private final String responseChannel;
     private final int responseStreamId;
     private final String aeronDirectoryName;
     private final long messageTimeoutNs;
@@ -26,6 +27,7 @@ public final class ReadClientConfig {
     private ReadClientConfig(final Builder builder) {
         this.requestChannel = builder.requestChannel;
         this.requestStreamId = builder.requestStreamId;
+        this.responseChannel = builder.responseChannel;
         this.responseStreamId = builder.responseStreamId;
         this.aeronDirectoryName = builder.aeronDirectoryName;
         this.messageTimeoutNs = builder.messageTimeoutNs;
@@ -44,6 +46,16 @@ public final class ReadClientConfig {
 
     public int requestStreamId() {
         return requestStreamId;
+    }
+
+    /**
+     * The channel the client binds for {@code QueryResponse} frames and
+     * advertises to the read service. Defaults to the loopback wildcard; a
+     * container deployment must point it at an address the read service can
+     * reach, e.g. {@code aeron:udp?endpoint=<container-ip>:0}.
+     */
+    public String responseChannel() {
+        return responseChannel;
     }
 
     /** The stream id the client listens on for {@code QueryResponse} frames. */
@@ -77,6 +89,7 @@ public final class ReadClientConfig {
     public static final class Builder {
         private String requestChannel = QueryStreams.QUERY_REQUEST_CHANNEL;
         private int requestStreamId = QueryStreams.QUERY_REQUEST_STREAM_ID;
+        private String responseChannel = "aeron:udp?endpoint=localhost:0";
         private int responseStreamId = QueryStreams.QUERY_RESPONSE_STREAM_ID;
         private String aeronDirectoryName;
         private long messageTimeoutNs = TimeUnit.SECONDS.toNanos(5);
@@ -92,6 +105,12 @@ public final class ReadClientConfig {
 
         public Builder requestStreamId(final int value) {
             this.requestStreamId = value;
+            return this;
+        }
+
+        /** The channel the client binds and advertises for {@code QueryResponse} frames. */
+        public Builder responseChannel(final String value) {
+            this.responseChannel = value;
             return this;
         }
 

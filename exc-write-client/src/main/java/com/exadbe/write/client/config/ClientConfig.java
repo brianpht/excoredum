@@ -19,6 +19,7 @@ public final class ClientConfig {
     private final long retryBackoffNs;
     private final int maxRetries;
     private final int maxInFlight;
+    private final int dedupWindow;
     private final long keepaliveIntervalNs;
 
     private ClientConfig(final Builder builder) {
@@ -30,6 +31,7 @@ public final class ClientConfig {
         this.retryBackoffNs = builder.retryBackoffNs;
         this.maxRetries = builder.maxRetries;
         this.maxInFlight = builder.maxInFlight;
+        this.dedupWindow = builder.dedupWindow;
         this.keepaliveIntervalNs = builder.keepaliveIntervalNs;
     }
 
@@ -70,6 +72,20 @@ public final class ClientConfig {
     }
 
     /**
+     * The cluster's per-client dedup window: how many of this client's most
+     * recent commands the engine can still recognize as duplicates. A
+     * retransmitted command is only safe while its original submission is
+     * inside this window; once more than {@code dedupWindow} new commands have
+     * been submitted, a resend would be applied a second time. The client
+     * therefore expires (never resends) commands that fell out of the window.
+     * Must be at most the engine's {@code CoreConfig.dedupWindow} (default
+     * 1024).
+     */
+    public int dedupWindow() {
+        return dedupWindow;
+    }
+
+    /**
      * Idle period after which the client submits a NOP keepalive to hold its
      * cluster session open; the cluster closes idle sessions after its session
      * timeout (10 s by default). Zero disables keepalives.
@@ -88,6 +104,7 @@ public final class ClientConfig {
         private long retryBackoffNs = TimeUnit.MILLISECONDS.toNanos(250);
         private int maxRetries;
         private int maxInFlight = 1024;
+        private int dedupWindow = 1024;
         private long keepaliveIntervalNs = TimeUnit.SECONDS.toNanos(2);
 
         private Builder(final long clientId, final String ingressEndpoints) {
@@ -125,6 +142,12 @@ public final class ClientConfig {
 
         public Builder maxInFlight(final int value) {
             this.maxInFlight = value;
+            return this;
+        }
+
+        /** The cluster's per-client dedup window; see {@link ClientConfig#dedupWindow()}. */
+        public Builder dedupWindow(final int value) {
+            this.dedupWindow = value;
             return this;
         }
 

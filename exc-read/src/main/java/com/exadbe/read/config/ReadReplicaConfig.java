@@ -40,10 +40,9 @@ public final class ReadReplicaConfig {
      *     e.g. {@code aeron:udp?endpoint=localhost:20104}
      */
     public static ReadReplicaConfig localhost(final String aeronDirectoryName, final String archiveControlChannel) {
-        return new ReadReplicaConfig(
+        return localhost(
                 aeronDirectoryName,
                 archiveControlChannel,
-                AeronArchive.Configuration.CONTROL_STREAM_ID_DEFAULT,
                 "localhost",
                 QueryStreams.QUERY_REQUEST_CHANNEL,
                 QueryStreams.QUERY_REQUEST_STREAM_ID);
@@ -58,11 +57,29 @@ public final class ReadReplicaConfig {
             final String archiveControlChannel,
             final String queryRequestChannel,
             final int queryRequestStreamId) {
+        return localhost(
+                aeronDirectoryName, archiveControlChannel, "localhost", queryRequestChannel, queryRequestStreamId);
+    }
+
+    /**
+     * Builds a replica configuration for a deployment where the replica's own
+     * address differs from {@code localhost} (e.g. a container on a bridge
+     * network). {@code localHost} is the address the replica binds for its
+     * archive control responses and log-replay subscription, so the followed
+     * member can reach it; the query channel is where the replica answers
+     * {@code QueryRequest} frames.
+     */
+    public static ReadReplicaConfig localhost(
+            final String aeronDirectoryName,
+            final String archiveControlChannel,
+            final String localHost,
+            final String queryRequestChannel,
+            final int queryRequestStreamId) {
         return new ReadReplicaConfig(
                 aeronDirectoryName,
                 archiveControlChannel,
                 AeronArchive.Configuration.CONTROL_STREAM_ID_DEFAULT,
-                "localhost",
+                localHost,
                 queryRequestChannel,
                 queryRequestStreamId);
     }

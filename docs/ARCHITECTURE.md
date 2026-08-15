@@ -515,12 +515,32 @@ The query surface mirrors the replica's in-process API: `userExists(uid)`,
 
 ### exc-bench - Latency Harness
 
-An end-to-end latency harness (exempt from the core determinism rules). It boots an
-in-process single-node cluster and drives it with the real client in a closed loop
-(one command outstanding at a time), recording client-observed round-trip latency
-in an HdrHistogram and reporting tail percentiles. Each measured op is a taker
-order that fully fills one unit against a deep resting maker, so the book stays
-bounded. JMH micro-benchmarks for the hot path live in `exc-core`'s jmh source set.
+End-to-end load drivers (exempt from the core determinism rules):
+
+- `ExcBenchHarness` - the latency harness. It boots an in-process single-node
+  cluster and drives it with the real client in a closed loop (one command
+  outstanding at a time), recording client-observed round-trip latency in an
+  HdrHistogram and reporting tail percentiles. Each measured op is a taker
+  order that fully fills one unit against a deep resting maker, so the book
+  stays bounded.
+- `LoadWorkload` - a deterministic synthetic workload plus an exact simulation
+  of the engine's single-price-level FIFO book. It is the shared expectation
+  model for the system tests: every decided command (place / cancel / reduce /
+  order-book request) is applied to the simulation with the engine's exact
+  reserve / settle / release semantics, so the simulation predicts the final
+  balances, resting orders, and fill counts. `LoadWorkloadEngineParityTest`
+  cross-validates it against the real engine command by command.
+- `ExternalLoadRunner` - drives a running (possibly multi-node, possibly
+  containerized) cluster over the network: submits the `LoadWorkload` through
+  `ExcClient` and verifies the write side (every result `SUCCESS`, nothing
+  expired, egress fills equal the simulation), reporting throughput and
+  round-trip latency tails.
+- `ReadVerifyRunner` - replays the same `LoadWorkload` simulation and asserts
+  a read replica's state matches it exactly through `ReadClient` (per-user
+  free balances and resting orders, order-history and trade-tape counts, the
+  L2 book, and the value-conservation totals).
+
+JMH micro-benchmarks for the hot path live in `exc-core`'s jmh source set.
 
 ### exc-xcore-bench - exchange-core Comparison
 
@@ -548,6 +568,10 @@ Unit, property, integration, cluster, and fault tests plus a `testFixtures`
 toolkit. `Commands` encodes a `CommandEnvelope` and returns a wrapped decoder so
 pure engine tests need no Aeron; `InMemorySnapshot` serialises and restores engine
 state through an in-memory record stream for snapshot round-trip tests.
+`SystemLoadIntegrationTest` runs the full docker-compose pipeline in one JVM
+(single-node cluster + read replica + write load + read verify), and
+`LoadWorkloadEngineParityTest` cross-validates the `LoadWorkload` simulation
+against the real engine command by command.
 
 Suites are grouped by JUnit tag and Gradle task: `test` (unit / property, no tag),
 `integrationTest` (tag `integration`), `clusterTest` (tag `cluster`), `faultTest`
@@ -930,6 +954,8 @@ counter.
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth, L2   |
 | `ReadReplicaOrderHistoryIntegrationTest` | Integration | Replica rebuilds order history, fills, and trades from the log; survives replica restart |
 | `ReadQueryIntegrationTest`           | Integration | Read-side SDK queries balances, L2, reports, history, trades, and totals over the query protocol |
+| `SystemLoadIntegrationTest`          | Integration | Full docker-compose pipeline in one JVM: 100k-command write load + read-side verification against the simulation |
+| `LoadWorkloadEngineParityTest`       | Unit        | Cross-validates the LoadWorkload simulation against the engine command by command (book parity) |
 | `EventJournalRecorderIntegrationTest`| Integration | Recorder drains the ring onto an Aeron stream           |
 | `JournalClusterIntegrationTest`      | Integration | A committed trade reaches the recorded journal stream   |
 | `JournalConsumerIntegrationTest`     | Integration | Re-delivered events are deduped to exactly-once         |
@@ -941,6 +967,96 @@ counter.
 
 Only `test` and `integrationTest` are the minimal gate; excoredum additionally
 wires `clusterTest` and `faultTest` into the default `check`.
+
+---
+
+## Containerized System Test (docker compose E2E)
+
+`docker/docker-compose.yml` deploys the whole system in containers and throws a
+deterministic 100k-command workload at it. It is the same pipeline
+`SystemLoadIntegrationTest` runs in one JVM, containerized: a 3-node Raft
+cluster, a read replica, a write-side load runner, and a read-side verifier.
+
+```mermaid
+flowchart LR
+    subgraph BRIDGE["exc-net (docker bridge)"]
+        N0["node-0 - ClusterLauncher"]
+        N1["node-1 - ClusterLauncher"]
+        N2["node-2 - ClusterLauncher"]
+        RD["read - ReadServiceLauncher"]
+        LD["load - ExternalLoadRunner"]
+        VF["verify - ReadVerifyRunner"]
+    end
+
+    LD -->|"CommandEnvelope (SBE), ingress 20100/20200/20300"| N0
+    LD -->|"ingress"| N1
+    LD -->|"ingress"| N2
+    N0 -->|"CommandResult + trade/reduce/L2 events (egress)"| LD
+    N1 -->|"egress"| LD
+    N2 -->|"egress"| LD
+
+    N0 -->|"archive control + consensus-log replay"| RD
+    VF -->|"QueryRequest (stream 300, port 44000)"| RD
+    RD -->|"QueryResponse (stream 301)"| VF
+```
+
+### Services
+
+| Container   | Main class / entrypoint       | Role                                                                 |
+|-------------|-------------------------------|----------------------------------------------------------------------|
+| `node-0/1/2`| `ClusterLauncher`             | Raft members; each uses ports `20100 + n*100 .. +4` (ingress, consensus, log, catchup, archive) |
+| `read`      | `ReadServiceLauncher`         | CQRS replica following node-0's archive; answers queries on `0.0.0.0:44000` |
+| `load`      | `ExternalLoadRunner`          | Submits the workload through `ExcClient`; verifies the write side     |
+| `verify`    | `ReadVerifyRunner`            | Replays the simulation; asserts the read side matches it exactly      |
+
+All services share one image (`excoredum:test`, built by `docker/Dockerfile`:
+multi-stage, JDK 21, `installDist` distributions for launcher / read / bench).
+Every container runs its own Aeron media driver; `/dev/shm` is sized per
+container (`shm_size`) to fit the driver buffers. Service names resolve on the
+bridge network, and each container advertises its own address (`hostname -i`)
+for archive control, cluster replication, and client egress, so no `localhost`
+assumptions leak across containers.
+
+### Deterministic workload and verification
+
+`LoadWorkload` is a deterministic generator plus an exact simulation of the
+engine's single-price-level FIFO book (one symbol, price 100, size-1 orders,
+zero fees; bids reserve quote, asks reserve base, exactly as
+`DirectExchangeRisk` does). Its 100k-command mix is places (75%), cancels /
+reduces (12.5%), and order-book requests (12.5%) over 100 users, round-robin;
+a cancel or reduce with an empty target side falls back to a place so every
+command is valid.
+
+- `load` (write side): every one of the 100,301 commands (301 setup + 100k
+  main) must be acknowledged `SUCCESS` with nothing expired, and the fills
+  observed on egress must equal the simulation's predicted count. Throughput
+  and round-trip latency tails (p50 / p99 / p99.9) are reported.
+- `verify` (read side): `ReadVerifyRunner` replays the same simulation and
+  asserts the replica's per-user free balances and resting orders, order
+  history and trade-tape counts, the L2 book, and the value-conservation
+  totals match it exactly.
+
+Because the simulation is itself cross-validated against the real engine
+command by command (`LoadWorkloadEngineParityTest`), a mismatch is a genuine
+system bug rather than a flaky assertion. The test has already caught three
+real defects: multi-frame query responses decoded without reassembly
+(`ReadClient` lacked a `FragmentAssembler`), ingress offers that failed with a
+transient `ADMIN_ACTION` being retried out of order (`ExcClient.offerUntilSent`
+now blocks until the driver accepts, preserving submission order), and
+retransmits beyond the engine's dedup window double-applying (the client now
+expires commands whose retry the window can no longer cover).
+
+### Running
+
+```bash
+docker compose -f docker/docker-compose.yml up --build   # exit 0 = all checks passed
+docker compose -f docker/docker-compose.yml logs load verify
+docker compose -f docker/docker-compose.yml down -v      # teardown
+```
+
+Scale with `EXC_OPS` / `EXC_USERS` on the `load` and `verify` services, keeping
+places and fills per user below 4096 (the read replica's per-user ledger and
+trade-tape bounds).
 
 ---
 

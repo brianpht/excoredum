@@ -468,6 +468,51 @@ Performance targets (defaults; tune per service):
 | `JournalHaFailoverTest`            | Fault       | Journal survives a leader kill; trades exactly-once     |
 | `JournalLiveFailoverTest`          | Fault       | Live consumer fails over to a survivor without loss     |
 
+## Dockerized system test
+
+`docker/docker-compose.yml` runs the whole system in containers and throws a
+deterministic 100k-command workload at it: a 3-node Aeron Cluster (Raft), a
+CQRS read replica following node-0's archive, a write-side load runner, and a
+read-side verifier. It is the same pipeline as `SystemLoadIntegrationTest`
+(which runs in one JVM for fast local iteration), fully containerized.
+
+```bash
+docker compose -f docker/docker-compose.yml up --build   # exit 0 = all checks passed
+docker compose -f docker/docker-compose.yml logs load verify
+docker compose -f docker/docker-compose.yml down -v      # teardown
+```
+
+One container per service on a bridge network (service names are the cluster
+hosts; each container advertises its own address via `hostname -i` for archive
+control, replication, and client egress):
+
+- `node-0/1/2` - `exc-launcher` members of the 3-node Raft cluster, ports
+  `20100 + n*100 .. +4` (ingress / consensus / log / catchup / archive).
+- `read` - `exc-read` replica following node-0's archive, answering queries on
+  `0.0.0.0:44000` (stream 300).
+- `load` - `ExternalLoadRunner`: submits the deterministic `LoadWorkload`
+  through `ExcClient` and verifies the write side.
+- `verify` - `ReadVerifyRunner`: replays the same simulation and asserts the
+  read side matches it exactly.
+
+Write-side checks (`load`): every command - 301 setup plus 100k places /
+cancels / reduces / order-book requests - must be acknowledged `SUCCESS` with
+nothing expired, and the fills observed on egress must equal the simulation.
+Read-side checks (`verify`): per-user free balances and resting orders,
+order-history and trade-tape counts, the L2 book, and the value-conservation
+totals must equal the simulation's predicted final state. The simulation is
+itself cross-validated against the real engine command by command by
+`LoadWorkloadEngineParityTest`, so a mismatch is a genuine system bug, not a
+flaky assertion. Throughput and round-trip latency tails (p50 / p99 / p99.9)
+are reported by the load container.
+
+Exit code 0 means every check passed; any failure leaves the `load` or `verify`
+container non-zero (see their logs). Scale with `EXC_OPS` / `EXC_USERS` on the
+`load` and `verify` services (uncomment the env lines in the compose file), and
+keep places and fills per user below 4096 - the read replica's per-user ledger
+and trade-tape bounds. Requires Docker with the Compose plugin; the image is
+built from `docker/Dockerfile` (multi-stage, JDK 21).
+
 ## Benchmarks
 
 ```bash
