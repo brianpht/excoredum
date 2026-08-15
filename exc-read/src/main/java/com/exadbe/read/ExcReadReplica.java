@@ -17,7 +17,10 @@ import io.aeron.Aeron;
 import io.aeron.archive.client.AeronArchive;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * A non-voting read replica that follows a cluster member's committed consensus
@@ -27,47 +30,62 @@ import java.util.List;
  *
  * <p>Poll-driven, single-threaded: the caller drives {@link #poll()} and issues
  * reads from the same thread, so the engine's non-thread-safe stores are only
- * ever touched by one thread and readers always see a consistent state. The
- * replica follows the log from the start; engine dedup makes any re-delivered
- * prefix idempotent.
+ * ever touched by one thread and readers always see a consistent state.
  *
  * <p>The replica is configured with an ordered list of member archives (see
- * {@link ReadReplicaConfig}). When the current source dies it fails over to the
- * next member: recording positions are member-specific, so the replicated state
- * is rebuilt by clearing the engine and ledger and replaying the new member's
- * recording from the start - the read model is eventually consistent, so a
- * brief catch-up window after failover is part of its contract.
+ * {@link ReadReplicaConfig}). Recording positions are cluster-global - every
+ * member records the same committed consensus log - so when the current source
+ * dies the replica fails over to the next member and resumes the replay from
+ * the position already applied, keeping the engine and ledger state. Only when
+ * no reachable source's recording covers the applied position (source behind,
+ * history purged) does it rebuild the state from the start of the log. A source
+ * that delivers no fragments and no successful archive op within
+ * {@link ReadReplicaConfig#livenessTimeoutMs()} is failed over.
  */
 public final class ExcReadReplica implements AutoCloseable {
 
     private static final int FRAGMENT_LIMIT = 64;
-    private static final long RECONNECT_BACKOFF_MS = 100L;
 
     private final MediaDriver mediaDriver;
     private final Aeron aeron;
     private final String[] archiveControlChannels;
     private final int archiveControlStreamId;
+    private final String localHost;
+    private final ReadReplicaConfig config;
+    private final CoreConfig coreConfig;
     private final MatchingEngine engine;
     private final CommandOutcome outcome;
-    private final OrderLedger ledger = new OrderLedger();
-    private final ReplicationHealth health = new ReplicationHealth();
-    private final String localHost;
     private final ReportGenerator reports;
+    private final ReplicationHealth health = new ReplicationHealth();
 
+    private OrderLedger ledger = new OrderLedger();
     private ReplicaCommandListener commandListener = ReplicaCommandListener.NONE;
     private LiveLogSubscriber liveLog;
     private AeronArchive archive;
     private int currentSource;
     private long appliedPosition;
     private long nextConnectMs;
+    private long lastActivityMs;
+    private long lastProbeMs;
+    private String currentChannel;
+
+    private SnapshotSubscriber snapshotSubscriber;
+    private LedgerRebuilder ledgerRebuilder;
+    private boolean ledgerRebuildNeeded;
+    private long nextSnapshotPollMs;
+    private long nextCheckpointMs;
+    private long lastCheckpointPosition = -1L;
 
     public ExcReadReplica(final ReadReplicaConfig config, final CoreConfig coreConfig) {
+        this.config = config;
+        this.coreConfig = coreConfig;
         this.engine = new MatchingEngine(coreConfig, new CoreMetrics());
         this.outcome = new CommandOutcome(coreConfig.eventBufferCapacity());
         this.localHost = config.localHost();
         this.reports = new ReportGenerator(engine);
         this.archiveControlChannels = config.archiveControlChannels();
         this.archiveControlStreamId = config.archiveControlStreamId();
+        this.currentChannel = archiveControlChannels[0];
 
         MediaDriver driver = null;
         Aeron aeronClient = null;
@@ -84,58 +102,211 @@ public final class ExcReadReplica implements AutoCloseable {
         }
         this.mediaDriver = driver;
         this.aeron = aeronClient;
+
+        if (config.checkpointFile() != null && Files.exists(config.checkpointFile())) {
+            try {
+                final ReplicaCheckpoint.Data data = ReplicaCheckpoint.load(config.checkpointFile(), engine);
+                this.ledger = data.ledger();
+                this.appliedPosition = data.logPosition();
+                this.currentSource = data.currentSource() % archiveControlChannels.length;
+                this.lastCheckpointPosition = appliedPosition;
+            } catch (final IOException e) {
+                throw new IllegalStateException("failed to load replica checkpoint " + config.checkpointFile(), e);
+            }
+        }
     }
 
     /** Advances replication by polling the live log; call repeatedly from one thread. */
     public int poll() {
-        ensureLiveLog();
-        if (liveLog == null) {
-            health.markStale();
+        try {
+            final long now = System.currentTimeMillis();
+            ensureLiveLog();
+            // Snapshot bootstrap / fast-forward runs even while the live log is
+            // stopped for a load, so a cold start can load the cluster snapshot
+            // before replaying history it can skip.
+            pollForNewSnapshot(now);
+            pollLedgerRebuild();
+            if (liveLog == null) {
+                health.markStale(currentChannel, appliedPosition);
+                return 0;
+            }
+            if (now - lastActivityMs > config.livenessTimeoutMs()) {
+                failover();
+                return 0;
+            }
+            probeIfDue(now);
+            final int fragments = liveLog.poll(FRAGMENT_LIMIT);
+            if (fragments > 0) {
+                lastActivityMs = now;
+                final long position = liveLog.lastPosition();
+                if (position > appliedPosition) {
+                    appliedPosition = position;
+                }
+            }
+            health.markHealthy(currentChannel, appliedPosition);
+            if (liveLog.isReplayEnded()) {
+                // The bounded replay caught up to an idle tail; re-point a fresh
+                // replay from the consumed position after a short backoff so
+                // commits that land later are still followed.
+                liveLog.close();
+                liveLog = null;
+                nextConnectMs = now + config.failoverBackoffMs();
+            }
+            writeCheckpointIfDue(now);
+            return fragments;
+        } catch (final RuntimeException e) {
+            failover();
             return 0;
         }
-        final int fragments = liveLog.poll(FRAGMENT_LIMIT);
-        if (fragments > 0) {
-            final long position = liveLog.lastPosition();
-            if (position > appliedPosition) {
-                appliedPosition = position;
+    }
+
+    /**
+     * Periodically loads a newer service snapshot into the engine (advance-only
+     * guard). The live log is stopped for the duration of the load (both feed
+     * the same engine) and restarted from the snapshot position on completion. A
+     * loaded snapshot fast-forwards the engine past the live-followed ledger, so
+     * a ledger rebuild is scheduled to restore the full order history.
+     */
+    private void pollForNewSnapshot(final long now) {
+        if (snapshotSubscriber == null) {
+            if (now < nextSnapshotPollMs || archive == null || ledgerRebuilder != null) {
+                return;
+            }
+            snapshotSubscriber = new SnapshotSubscriber(engine, localHost);
+            if (snapshotSubscriber.start(archive, appliedPosition)) {
+                restartLiveLog();
+            } else {
+                snapshotSubscriber.close();
+                snapshotSubscriber = null;
+            }
+            nextSnapshotPollMs = now + config.snapshotPollIntervalMs();
+        }
+        if (snapshotSubscriber != null) {
+            snapshotSubscriber.poll(FRAGMENT_LIMIT);
+            if (snapshotSubscriber.isComplete()) {
+                finishSnapshotLoad();
             }
         }
-        health.markHealthy(appliedPosition);
-        if (liveLog.isReplayEnded()) {
+    }
+
+    private void finishSnapshotLoad() {
+        switch (snapshotSubscriber.result()) {
+            case LOADED -> {
+                health.recordSnapshotLoaded();
+                final long loaded = snapshotSubscriber.loadedLogPosition();
+                if (loaded > appliedPosition) {
+                    appliedPosition = loaded;
+                    // The engine jumped past the ledger's coverage (the ledger is
+                    // read-side-only and not in the cluster snapshot), so the full
+                    // history must be replayed once to restore it.
+                    ledgerRebuildNeeded = true;
+                }
+            }
+            case CORRUPT -> {
+                health.recordIntegrityFailure();
+                resetReplication();
+            }
+            default -> {
+                // SKIPPED (nothing newer) or FAILED (transient): keep following.
+            }
+        }
+        snapshotSubscriber.close();
+        snapshotSubscriber = null;
+        restartLiveLog();
+    }
+
+    /** Advances the full-log ledger rebuild; swaps in the complete ledger when done. */
+    private void pollLedgerRebuild() {
+        if (!ledgerRebuildNeeded || archive == null) {
+            return;
+        }
+        if (ledgerRebuilder == null) {
+            ledgerRebuilder = new LedgerRebuilder(coreConfig, localHost);
+            if (!ledgerRebuilder.start(archive)) {
+                ledgerRebuilder.close();
+                ledgerRebuilder = null;
+                return;
+            }
+        }
+        ledgerRebuilder.poll(FRAGMENT_LIMIT);
+        if (ledgerRebuilder.isCaughtUp()) {
+            ledger = ledgerRebuilder.ledger();
+            ledgerRebuilder.close();
+            ledgerRebuilder = null;
+            ledgerRebuildNeeded = false;
+            // The ledger just became complete; persist it immediately.
+            writeCheckpoint();
+        }
+    }
+
+    /** Writes a checkpoint on the configured cadence, when the position advanced. */
+    private void writeCheckpointIfDue(final long now) {
+        if (config.checkpointFile() == null || now < nextCheckpointMs) {
+            return;
+        }
+        nextCheckpointMs = now + config.checkpointIntervalMs();
+        writeCheckpoint();
+    }
+
+    private void writeCheckpoint() {
+        if (config.checkpointFile() == null || appliedPosition <= 0L || appliedPosition <= lastCheckpointPosition) {
+            return;
+        }
+        try {
+            ReplicaCheckpoint.save(config.checkpointFile(), engine, ledger, appliedPosition, currentSource);
+            lastCheckpointPosition = appliedPosition;
+        } catch (final IOException e) {
+            // A checkpoint write failure must not kill the replica; it retries
+            // on the next interval.
+            e.printStackTrace();
+        }
+    }
+
+    private void restartLiveLog() {
+        if (liveLog != null) {
             liveLog.close();
             liveLog = null;
-            nextConnectMs = System.currentTimeMillis() + RECONNECT_BACKOFF_MS;
         }
-        return fragments;
+        nextConnectMs = 0L;
     }
 
     private void ensureLiveLog() {
-        if (liveLog != null || System.currentTimeMillis() < nextConnectMs) {
+        // A snapshot load feeds the same engine, so the live log must not run
+        // concurrently with it.
+        if (liveLog != null || snapshotSubscriber != null || System.currentTimeMillis() < nextConnectMs) {
             return;
         }
+        boolean anyArchiveConnected = false;
         for (int attempt = 0; attempt < archiveControlChannels.length; attempt++) {
             final int idx = (currentSource + attempt) % archiveControlChannels.length;
-            if (idx != currentSource) {
-                // Failing over to another member: recording positions are
-                // member-specific, so rebuild the replicated state from scratch
-                // and replay that member's recording from the start.
-                resetReplication();
-                currentSource = idx;
-            }
             closeArchive();
             if (!connectArchive(idx)) {
                 continue;
             }
+            anyArchiveConnected = true;
+            // Resume from the cluster-global applied position on ANY member: the
+            // committed prefix is byte-identical everywhere, so the boundary is
+            // valid on the new source and no rebuild is needed.
             final LiveLogSubscriber subscriber = new LiveLogSubscriber(
                     archive, engine, outcome, ledger, commandListener, appliedPosition, localHost);
             if (subscriber.connect()) {
                 liveLog = subscriber;
+                currentSource = idx;
+                lastActivityMs = System.currentTimeMillis();
+                health.markHealthy(currentChannel, appliedPosition);
                 return;
             }
             subscriber.close();
         }
+        // Every reachable archive rejected a replay from the applied position
+        // (no recording covers it): the position is not servable on this quorum,
+        // so rebuild the replicated state from the start of the log.
+        if (anyArchiveConnected && appliedPosition > 0L) {
+            resetReplication();
+        }
         closeArchive();
-        nextConnectMs = System.currentTimeMillis() + RECONNECT_BACKOFF_MS;
+        nextConnectMs = System.currentTimeMillis() + config.failoverBackoffMs();
+        health.markStale(currentChannel, appliedPosition);
     }
 
     private boolean connectArchive(final int idx) {
@@ -144,7 +315,9 @@ public final class ExcReadReplica implements AutoCloseable {
                     .aeron(aeron)
                     .controlRequestChannel(archiveControlChannels[idx])
                     .controlRequestStreamId(archiveControlStreamId)
-                    .controlResponseChannel("aeron:udp?endpoint=" + localHost + ":0"));
+                    .controlResponseChannel("aeron:udp?endpoint=" + localHost + ":0")
+                    .messageTimeoutNs(TimeUnit.MILLISECONDS.toNanos(config.archiveMessageTimeoutMs())));
+            currentChannel = archiveControlChannels[idx];
             return true;
         } catch (final RuntimeException e) {
             archive = null;
@@ -156,6 +329,58 @@ public final class ExcReadReplica implements AutoCloseable {
         if (archive != null) {
             archive.close();
             archive = null;
+        }
+    }
+
+    /**
+     * Drops the current source and schedules a reconnect to the next member
+     * after the failover backoff. The engine and ledger state are kept; the next
+     * connect resumes from {@code appliedPosition}. An in-flight snapshot load is
+     * aborted: the engine may hold partial loaded state, so it is rebuilt from
+     * the log start on the new source.
+     */
+    private void failover() {
+        if (liveLog != null) {
+            liveLog.close();
+            liveLog = null;
+        }
+        if (snapshotSubscriber != null) {
+            final boolean midLoad = snapshotSubscriber.isLoadStarted();
+            snapshotSubscriber.close();
+            snapshotSubscriber = null;
+            if (midLoad) {
+                resetReplication();
+            }
+        }
+        if (ledgerRebuilder != null) {
+            // The rebuild is bound to the dead source's archive; it restarts on
+            // the new source because ledgerRebuildNeeded stays set.
+            ledgerRebuilder.close();
+            ledgerRebuilder = null;
+        }
+        closeArchive();
+        currentSource = (currentSource + 1) % archiveControlChannels.length;
+        health.recordFailover();
+        nextConnectMs = System.currentTimeMillis() + config.failoverBackoffMs();
+        health.markStale(currentChannel, appliedPosition);
+    }
+
+    /**
+     * Periodically probes the active archive so a silently dead source is
+     * detected even when no fragments flow; a successful archive op counts as
+     * activity, so an idle but healthy cluster never false-positives.
+     */
+    private void probeIfDue(final long now) {
+        final long interval = Math.max(1L, config.livenessTimeoutMs() / 2);
+        if (now - lastProbeMs < interval || archive == null || liveLog == null) {
+            return;
+        }
+        lastProbeMs = now;
+        try {
+            archive.getRecordingPosition(liveLog.recordingId());
+            lastActivityMs = now;
+        } catch (final RuntimeException e) {
+            failover();
         }
     }
 
@@ -197,6 +422,11 @@ public final class ExcReadReplica implements AutoCloseable {
 
     public boolean isHealthy() {
         return health.isHealthy();
+    }
+
+    /** Replication health snapshot for operators. */
+    public ReplicationHealth health() {
+        return health;
     }
 
     public boolean userExists(final long uid) {
@@ -275,6 +505,18 @@ public final class ExcReadReplica implements AutoCloseable {
 
     @Override
     public void close() {
+        // Final checkpoint: unconditional (bypasses the cadence) so a warm start
+        // always resumes from the last applied position, not an earlier partial
+        // periodic write.
+        writeCheckpoint();
+        if (snapshotSubscriber != null) {
+            snapshotSubscriber.close();
+            snapshotSubscriber = null;
+        }
+        if (ledgerRebuilder != null) {
+            ledgerRebuilder.close();
+            ledgerRebuilder = null;
+        }
         if (liveLog != null) {
             liveLog.close();
             liveLog = null;

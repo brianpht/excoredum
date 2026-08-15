@@ -5,7 +5,11 @@ import com.exadbe.protocol.CommandEnvelopeDecoder;
 import com.exadbe.protocol.CommandResultCode;
 import com.exadbe.protocol.OrderAction;
 import com.exadbe.protocol.OrderCommandType;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.agrona.collections.Long2ObjectHashMap;
 
@@ -72,6 +76,69 @@ public final class OrderLedger {
         ordersById.clear();
         tapeHead = 0;
         tapeCount = 0;
+    }
+
+    /**
+     * Serializes the ledger to {@code out} for a local checkpoint: every user's
+     * records in placement order (users sorted by uid for determinism) followed
+     * by the market trade tape oldest-first.
+     */
+    public void writeTo(final DataOutput out) throws IOException {
+        final long[] uids = new long[users.size()];
+        final int[] cursor = {0};
+        users.forEachLong((uid, user) -> uids[cursor[0]++] = uid);
+        Arrays.sort(uids, 0, users.size());
+
+        out.writeInt(users.size());
+        for (int u = 0; u < users.size(); u++) {
+            final UserHistory user = users.get(uids[u]);
+            out.writeLong(uids[u]);
+            out.writeInt(user.placementOrder.size());
+            for (final OrderRecord record : user.placementOrder) {
+                record.writeTo(out);
+            }
+        }
+        out.writeInt(tapeCount);
+        for (int i = 0; i < tapeCount; i++) {
+            final MarketTrade trade = tape[(tapeHead + i) % MAX_MARKET_TRADES];
+            out.writeLong(trade.timestamp());
+            out.writeInt(trade.symbolId());
+            out.writeLong(trade.price());
+            out.writeLong(trade.size());
+            out.writeLong(trade.makerOrderId());
+            out.writeLong(trade.makerUid());
+            out.writeLong(trade.takerUid());
+        }
+    }
+
+    /** Restores a ledger previously written by {@link #writeTo}. */
+    public void readFrom(final DataInput in) throws IOException {
+        clear();
+        final int userCount = in.readInt();
+        for (int u = 0; u < userCount; u++) {
+            final long uid = in.readLong();
+            final UserHistory user = users.computeIfAbsent(uid, ignored -> new UserHistory());
+            final int recordCount = in.readInt();
+            for (int r = 0; r < recordCount; r++) {
+                final OrderRecord record = OrderRecord.readFrom(in);
+                user.byId.put(record.orderId(), record);
+                user.placementOrder.add(record);
+                ordersById.put(record.orderId(), record);
+            }
+        }
+        final int restoredTapeCount = in.readInt();
+        tapeHead = 0;
+        tapeCount = restoredTapeCount;
+        for (int i = 0; i < restoredTapeCount; i++) {
+            tape[i] = new MarketTrade(
+                    in.readLong(),
+                    in.readInt(),
+                    in.readLong(),
+                    in.readLong(),
+                    in.readLong(),
+                    in.readLong(),
+                    in.readLong());
+        }
     }
 
     /** Every tracked order of {@code uid} in placement order, oldest first. */

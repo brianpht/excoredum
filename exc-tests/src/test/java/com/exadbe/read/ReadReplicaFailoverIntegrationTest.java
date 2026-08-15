@@ -1,6 +1,7 @@
 package com.exadbe.read;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,6 +16,7 @@ import com.exadbe.write.client.ExcClient;
 import com.exadbe.write.client.ResultHandler;
 import com.exadbe.write.client.config.ClientConfig;
 import java.nio.file.Path;
+import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -23,10 +25,12 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * P5 read-side failover: a read replica following node-0's archive keeps
- * replicating after node-0 dies by failing over to another member's archive,
- * rebuilding its state from that member's recording and then following live.
- * The read model is eventually consistent, so the assertions wait for the
- * replica to catch up to the full (pre- and post-kill) state.
+ * replicating after node-0 dies by failing over to another member's archive.
+ * Because recording positions are cluster-global, the replica resumes the
+ * replay from the position already applied (no full rebuild), so
+ * {@code appliedPosition} is monotonic across the switch. The read model is
+ * eventually consistent, so the assertions wait for the replica to catch up to
+ * the full (pre- and post-kill) state.
  */
 @Tag("fault")
 class ReadReplicaFailoverIntegrationTest {
@@ -36,10 +40,6 @@ class ReadReplicaFailoverIntegrationTest {
     private static final int SYM = 1;
     private static final int BASE = 10;
     private static final int QUOTE = 20;
-
-    private final long[] lastIdLo = {-1L};
-    private ExcClient client;
-    private ExcReadReplica replica;
 
     @Test
     @Timeout(300)
@@ -56,14 +56,13 @@ class ReadReplicaFailoverIntegrationTest {
         }
 
         try {
+            final long[] lastIdLo = {-1L};
             final ResultHandler handler =
                     (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) ->
                             lastIdLo[0] = idLo;
             final ClientConfig clientConfig = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                     .build();
             try (ExcClient client = new ExcClient(clientConfig, handler)) {
-                this.client = client;
-
                 final ReadReplicaConfig replicaConfig = ReadReplicaConfig.localhost(
                         baseDir.resolve("replica").resolve("driver").toString(),
                         channels,
@@ -71,23 +70,32 @@ class ReadReplicaFailoverIntegrationTest {
                         QueryStreams.QUERY_REQUEST_CHANNEL,
                         QueryStreams.QUERY_REQUEST_STREAM_ID);
                 try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
-                    this.replica = replica;
-
-                    submitBatch1();
-                    pollUntil(() -> replica.userCount() == 5 && replica.orderCount() == 1);
+                    submitBatch1(client, lastIdLo, replica);
+                    pollUntil(client, replica, () -> replica.userCount() == 5 && replica.orderCount() == 1);
                     assertEquals(0, replica.currentSource(), "the replica initially follows the primary source");
+
+                    final long positionBeforeKill = replica.appliedPosition();
+                    assertTrue(positionBeforeKill > 0L, "the replica must consume the log before the kill");
 
                     // Kill the replica's current source; the cluster (quorum 2
                     // of 3) keeps serving and the replica must fail over.
                     nodes[0].close();
                     nodes[0] = null;
 
-                    submitBatch2();
+                    submitBatch2(client, lastIdLo, replica);
 
-                    pollUntil(() -> replica.userCount() == 10 && replica.orderCount() == 2);
+                    pollUntil(client, replica, () -> replica.userCount() == 10 && replica.orderCount() == 2);
 
                     assertNotEquals(0, replica.currentSource(), "the replica must fail over to another member archive");
-                    assertTrue(replica.appliedPosition() > 0L, "the replica must consume the log after failover");
+                    // Positions are cluster-global: the failover resumes from the
+                    // applied position instead of rebuilding from 0, so the
+                    // position is strictly monotonic across the switch.
+                    assertTrue(
+                            replica.appliedPosition() > positionBeforeKill,
+                            "appliedPosition must advance monotonically across the failover, was "
+                                    + positionBeforeKill
+                                    + " -> "
+                                    + replica.appliedPosition());
                     assertEquals(990L, replica.balance(1L, BASE), "maker base after the 4-unit fill");
                     // FIFO within a price level: the batch-2 bid crosses the
                     // OLDER resting ask (user 1's remainder), not user 6's.
@@ -112,33 +120,111 @@ class ReadReplicaFailoverIntegrationTest {
         }
     }
 
-    private void submitBatch1() {
-        // Symbol plus users 1..5 with funding; a resting ask 10 @ 100 and a
-        // crossing bid fills 4 of it.
-        await(submit(() -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L)));
-        for (long uid = 1L; uid <= 5L; uid++) {
-            final long u = uid;
-            await(submit(() -> client.addUser(u)));
-            await(submit(() -> client.adjustBalance(u, BASE, 1_000L)));
-            await(submit(() -> client.adjustBalance(u, QUOTE, 1_000_000L)));
+    @Test
+    @Timeout(300)
+    void replicaRecoversWhenEverySourceComesBack(@TempDir final Path baseDir) throws Exception {
+        final ClusterConfig[] configs = ClusterConfig.multiNodeLocalhost(NODES, baseDir);
+        final ClusterNode[] nodes = new ClusterNode[NODES];
+        for (int i = 0; i < NODES; i++) {
+            nodes[i] = new ClusterNode(configs[i], CoreConfig.defaults());
         }
-        await(submit(() -> client.placeGtc(SYM, 1L, true, 100L, 10L, 0L, 1L, 0)));
-        await(submit(() -> client.placeGtc(SYM, 2L, false, 105L, 4L, 105L, 2L, 0)));
+
+        final String[] channels = new String[NODES];
+        for (int i = 0; i < NODES; i++) {
+            channels[i] = configs[i].archiveControlChannel();
+        }
+
+        try {
+            final long[] lastIdLo = {-1L};
+            final ResultHandler handler =
+                    (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) ->
+                            lastIdLo[0] = idLo;
+            final ClientConfig clientConfig = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
+                    .build();
+            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+                final ReadReplicaConfig replicaConfig = ReadReplicaConfig.localhost(
+                        baseDir.resolve("replica").resolve("driver").toString(),
+                        channels,
+                        "localhost",
+                        QueryStreams.QUERY_REQUEST_CHANNEL,
+                        QueryStreams.QUERY_REQUEST_STREAM_ID);
+                try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+                    submitBatch1(client, lastIdLo, replica);
+                    pollUntil(client, replica, () -> replica.userCount() == 5 && replica.orderCount() == 1);
+                    final long positionBefore = replica.appliedPosition();
+                    assertTrue(positionBefore > 0L, "the replica must consume the log before the outage");
+
+                    // All sources die: the replica keeps serving its last state
+                    // and marks itself stale without resetting its position.
+                    for (int i = 0; i < NODES; i++) {
+                        nodes[i].close();
+                        nodes[i] = null;
+                    }
+                    final long staleDeadline = System.currentTimeMillis() + TIMEOUT_MS;
+                    while (System.currentTimeMillis() < staleDeadline && replica.isHealthy()) {
+                        replica.poll();
+                        Thread.onSpinWait();
+                    }
+                    assertFalse(replica.isHealthy(), "the replica must report stale while every source is down");
+                    assertEquals(
+                            positionBefore,
+                            replica.appliedPosition(),
+                            "a lost source must not reset the applied position");
+
+                    // Warm restart every member (state preserved); the replica
+                    // reconnects and resumes from its applied position.
+                    for (int i = 0; i < NODES; i++) {
+                        nodes[i] = new ClusterNode(configs[i], CoreConfig.defaults(), false);
+                    }
+                    submitBatch2(client, lastIdLo, replica);
+                    pollUntil(client, replica, () -> replica.userCount() == 10 && replica.orderCount() == 2);
+                    assertTrue(
+                            replica.appliedPosition() > positionBefore,
+                            "the replica must resume from its applied position after the cluster returns, was "
+                                    + positionBefore
+                                    + " -> "
+                                    + replica.appliedPosition());
+                    assertEquals(990L, replica.balance(1L, BASE), "maker base after the 4-unit fill");
+                    assertEquals(1_004L, replica.balance(2L, BASE), "taker bought 4 base units");
+                    assertEquals(1_000_600L, replica.balance(1L, QUOTE), "maker quote after both batches");
+                }
+            }
+        } finally {
+            for (final ClusterNode node : nodes) {
+                if (node != null) {
+                    node.close();
+                }
+            }
+        }
     }
 
-    private void submitBatch2() {
+    private static void submitBatch1(final ExcClient client, final long[] lastIdLo, final ExcReadReplica replica) {
+        // Symbol plus users 1..5 with funding; a resting ask 10 @ 100 and a
+        // crossing bid fills 4 of it.
+        await(client, replica, submit(client, () -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L)), lastIdLo);
+        for (long uid = 1L; uid <= 5L; uid++) {
+            final long u = uid;
+            await(client, replica, submit(client, () -> client.addUser(u)), lastIdLo);
+            await(client, replica, submit(client, () -> client.adjustBalance(u, BASE, 1_000L)), lastIdLo);
+            await(client, replica, submit(client, () -> client.adjustBalance(u, QUOTE, 1_000_000L)), lastIdLo);
+        }
+        await(client, replica, submit(client, () -> client.placeGtc(SYM, 1L, true, 100L, 10L, 0L, 1L, 0)), lastIdLo);
+        await(client, replica, submit(client, () -> client.placeGtc(SYM, 2L, false, 105L, 4L, 105L, 2L, 0)), lastIdLo);
+    }
+
+    private static void submitBatch2(final ExcClient client, final long[] lastIdLo, final ExcReadReplica replica) {
         // Users 6..10 plus a resting ask 5 @ 100 crossed by a bid 2 @ 100.
         for (long uid = 6L; uid <= 10L; uid++) {
             final long u = uid;
-            await(submit(() -> client.addUser(u)));
-            await(submit(() -> client.adjustBalance(u, BASE, 1_000L)));
-            await(submit(() -> client.adjustBalance(u, QUOTE, 1_000_000L)));
+            await(client, replica, submit(client, () -> client.addUser(u)), lastIdLo);
+            await(client, replica, submit(client, () -> client.adjustBalance(u, BASE, 1_000L)), lastIdLo);
+            await(client, replica, submit(client, () -> client.adjustBalance(u, QUOTE, 1_000_000L)), lastIdLo);
         }
-        await(submit(() -> client.placeGtc(SYM, 3L, true, 100L, 5L, 0L, 6L, 0)));
-        await(submit(() -> client.placeGtc(SYM, 4L, false, 100L, 2L, 100L, 7L, 0)));
+        await(client, replica, submit(client, () -> client.placeGtc(SYM, 3L, true, 100L, 5L, 0L, 6L, 0)), lastIdLo);
+        await(client, replica, submit(client, () -> client.placeGtc(SYM, 4L, false, 100L, 2L, 100L, 7L, 0)), lastIdLo);
     }
 
-    private long submit(final LongSupplier command) {
+    private static long submit(final ExcClient client, final LongSupplier command) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -151,7 +237,8 @@ class ReadReplicaFailoverIntegrationTest {
         throw new AssertionError("could not submit within timeout");
     }
 
-    private void await(final long commandIdLo) {
+    private static void await(
+            final ExcClient client, final ExcReadReplica replica, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -164,7 +251,8 @@ class ReadReplicaFailoverIntegrationTest {
         throw new AssertionError("no result for command id " + commandIdLo);
     }
 
-    private void pollUntil(final java.util.function.BooleanSupplier condition) {
+    private static void pollUntil(
+            final ExcClient client, final ExcReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

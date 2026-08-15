@@ -1,5 +1,8 @@
 package com.exadbe.read.order;
 
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -182,5 +185,72 @@ public final class OrderRecord {
     /** Marks the last change time without altering state. */
     void touch(final long ts) {
         lastTimestamp = ts;
+    }
+
+    /** Restores the mutable fields from a checkpoint load (see {@link #writeTo}). */
+    void restore(
+            final long restoredPrice,
+            final long restoredFilled,
+            final long restoredReduced,
+            final long restoredLastTimestamp,
+            final int restoredState,
+            final List<Fill> restoredFills) {
+        this.price = restoredPrice;
+        this.filled = restoredFilled;
+        this.reduced = restoredReduced;
+        this.lastTimestamp = restoredLastTimestamp;
+        this.state = restoredState;
+        this.fills.addAll(restoredFills);
+    }
+
+    /** Writes this record (placement fields, mutable state, fills) to {@code out}. */
+    void writeTo(final DataOutput out) throws IOException {
+        out.writeLong(orderId);
+        out.writeLong(uid);
+        out.writeInt(symbolId);
+        out.writeBoolean(ask);
+        out.writeUTF(orderType);
+        out.writeInt(userCookie);
+        out.writeLong(price);
+        out.writeLong(size);
+        out.writeLong(filled);
+        out.writeLong(reduced);
+        out.writeLong(placedTimestamp);
+        out.writeLong(lastTimestamp);
+        out.writeInt(state);
+        out.writeInt(fills.size());
+        for (final Fill fill : fills) {
+            out.writeBoolean(fill.taker());
+            out.writeLong(fill.price());
+            out.writeLong(fill.size());
+            out.writeLong(fill.counterpartyUid());
+            out.writeLong(fill.timestamp());
+        }
+    }
+
+    /** Reads a record previously written by {@link #writeTo}. */
+    static OrderRecord readFrom(final DataInput in) throws IOException {
+        final long orderId = in.readLong();
+        final long uid = in.readLong();
+        final int symbolId = in.readInt();
+        final boolean ask = in.readBoolean();
+        final String orderType = in.readUTF();
+        final int userCookie = in.readInt();
+        final long price = in.readLong();
+        final long size = in.readLong();
+        final long filled = in.readLong();
+        final long reduced = in.readLong();
+        final long placedTimestamp = in.readLong();
+        final long lastTimestamp = in.readLong();
+        final int state = in.readInt();
+        final int fillCount = in.readInt();
+        final ArrayList<Fill> restored = new ArrayList<>(fillCount);
+        for (int i = 0; i < fillCount; i++) {
+            restored.add(new Fill(in.readBoolean(), in.readLong(), in.readLong(), in.readLong(), in.readLong()));
+        }
+        final OrderRecord record =
+                new OrderRecord(orderId, uid, symbolId, ask, orderType, userCookie, price, size, placedTimestamp);
+        record.restore(price, filled, reduced, lastTimestamp, state, restored);
+        return record;
     }
 }

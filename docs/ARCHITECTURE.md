@@ -398,9 +398,9 @@ for this reason.
 The read (query) side. Unlike the deterministic core it may use the system clock
 and heap allocation. `ExcReadReplica` runs a non-voting node with its own embedded
 Media Driver and Aeron Archive client. It connects to a cluster member's Archive
-and follows the consensus log recording (stream 100) from the start, applying each
-command to a private `MatchingEngine`; engine dedup keeps any re-delivered prefix
-idempotent. Reads are eventually consistent with bounded staleness.
+and follows the consensus log recording (stream 100), applying each command to a
+private `MatchingEngine`; engine dedup keeps any re-delivered prefix idempotent.
+Reads are eventually consistent with bounded staleness.
 
 It is poll-driven and single-threaded: the caller drives `poll()` and issues reads
 from the same thread, so the engine's non-thread-safe stores are only ever touched
@@ -408,14 +408,36 @@ by one thread and readers always see a consistent state. A read replica is NOT a
 cluster member: it does not vote, does not affect quorum, and can be restarted
 independently.
 
-The replica is configured with an ordered list of member archives (see
-`ReadReplicaConfig`); the first is the primary source. When the current source
-dies, the replica fails over to the next member in order: recording positions are
-member-specific, so it clears its engine and ledger and rebuilds its state by
-replaying the new source's consensus-log recording from the start, then follows
-live. Because reads are eventually consistent, the catch-up window after
-failover is part of the read model's contract; `currentSource()` exposes the
-member archive currently followed.
+**Positions are cluster-global.** Every member records the same committed
+consensus log to its own Archive (verified by `ReadReplicaPositionModelClusterTest`:
+fresh recordings start at 0 and the committed prefixes are byte-identical across
+members), so a recording position is a valid replay boundary on any member. When
+the current source dies, the replica fails over to the next member in order and
+**resumes the replay from the position already applied** - no state rebuild, so
+`appliedPosition` is monotonic across the switch and the catch-up window is just
+the tail. `LiveLogSubscriber` verifies the new source's recording covers the
+applied position before replaying; only when no reachable source can serve the
+position (behind, history purged) does the replica rebuild from the start of the
+log. A source that delivers no fragments and no successful archive op within
+`livenessTimeoutMs` is failed over (archive message timeouts bound the poll
+thread, so a dead source cannot stall reads).
+
+**Snapshot bootstrap.** On a cold start (no local checkpoint) the replica polls
+the source Archive for the newest service snapshot and, if one advances the
+applied position, loads it into the engine (`SnapshotSubscriber`, advance-only
+guard - an older snapshot found on a failover source can never roll state back;
+a snapshot failing the integrity check is discarded and the state rebuilt from
+the log). The live-log replay then catches up only the tail. The cluster
+snapshot contains engine state only - the `OrderLedger` is read-side-only - so a
+snapshot fast-forward schedules a full-log replay on a throwaway engine
+(`LedgerRebuilder`) to restore the complete order history and trade tape.
+
+**Local checkpoint.** With `--checkpoint=<file>`, the replica persists its
+engine + ledger + applied position (atomically: temp file + rename) on a
+configured cadence and at shutdown (`ReplicaCheckpoint`). A warm start loads the
+checkpoint and resumes the log from the stored position - no replay of the
+history before it, and the ledger is complete immediately (it is read-side-only,
+so it cannot come from a cluster snapshot).
 
 The replica also serves the read-side report framework over its private engine
 (eventually consistent, no ingress or consensus round trip): `singleUserReport(uid)`
@@ -463,14 +485,18 @@ example, to push real-time market events to gateway agents). The envelope and
 outcome passed to the listener are reused and only valid during the call.
 
 Replay and source stream ids are distinct: the consensus log is recorded on
-stream 100 and replayed on the ephemeral stream 43; the domain journal is
-recorded on stream 200 (`aeron:ipc`) and replayed by `JournalReplayReader` on
-stream 44 and by `HaJournalConsumer` on stream 45.
+stream 100 and replayed on the ephemeral stream 43; the service snapshot is
+replayed on stream 42 and the cold-start ledger rebuild on stream 46; the domain
+journal is recorded on stream 200 (`aeron:ipc`) and replayed by
+`JournalReplayReader` on stream 44 and by `HaJournalConsumer` on stream 45.
 
 | Component           | Responsibility                                                       |
 |---------------------|----------------------------------------------------------------------|
-| `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log; balance / count / report / L2 / order-history queries; `isCaughtUp()` and `setCommandListener(...)` |
-| `LiveLogSubscriber` | Subscribes the consensus recording, parses cluster framing, applies commands to the engine and the ledger |
+| `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log and fails over by resuming from the applied position; snapshot bootstrap, ledger rebuild, local checkpoint; balance / count / report / L2 / order-history queries; `isCaughtUp()` and `setCommandListener(...)` |
+| `LiveLogSubscriber` | Subscribes the consensus recording, verifies the recording covers the requested position, parses cluster framing, applies commands to the engine and the ledger |
+| `SnapshotSubscriber`| Loads the newest service snapshot into the engine (advance-only guard, integrity check, corrupt handling) |
+| `LedgerRebuilder`   | Replays the full consensus log on a throwaway engine to restore the complete order ledger after a snapshot fast-forward |
+| `ReplicaCheckpoint` | Atomically persists engine + ledger + applied position; loads it on warm start |
 | `ReplicaCommandListener` | Per-command callback fired on the poll thread for every applied command (envelope / outcome reused) |
 | `QueryResponder`    | Serves `QueryRequest` frames on the replica's poll thread; publishes `QueryResponse` to each client's subscription |
 | `OrderLedger`       | Per-user order lifecycle history, per-order fills, and a bounded market trade tape, rebuilt from the log |
@@ -480,10 +506,10 @@ stream 44 and by `HaJournalConsumer` on stream 45.
 | `JournalConsumer`   | Decodes a journal fragment stream and dedups to exactly-once delivery |
 | `JournalReplayReader` | Replays a member's recorded journal from the Archive through a `JournalConsumer` |
 | `HaJournalConsumer` | Follows one member's journal live and fails over to another on source loss |
-| `ReplicationHealth` | Health and applied cluster-global position published for readers     |
-| `ReadStreams`       | Consensus log and replay stream id constants                         |
-| `ReadReplicaConfig` | Archive control channel, control stream id, query request channel, local host |
-| `ReadServiceLauncher`| Entry point: follow a member archive and serve queries             |
+| `ReplicationHealth` | Health, applied cluster-global position, active endpoint, failover / integrity / snapshot counters |
+| `ReadStreams`       | Consensus log, snapshot, and replay stream id constants            |
+| `ReadReplicaConfig` | Archive control channels, query request channel, local host, failover / liveness / timeout / checkpoint knobs |
+| `ReadServiceLauncher`| Entry point: follow member archives (failover), serve queries, optional `--checkpoint`  |
 
 ### exc-read-client - Read-Side SDK
 
@@ -968,7 +994,10 @@ counter.
 | `BenchHarnessSmokeTest`              | Integration | End-to-end latency harness boots and measures           |
 | `XcoreBenchSmokeTest`                | Integration | exchange-core replay cross-validates; pipeline boots    |
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth, L2   |
-| `ReadReplicaFailoverIntegrationTest` | Fault       | Replica fails over to another member's archive when its source dies; state rebuilt and correct |
+| `ReadReplicaPositionModelClusterTest` | Cluster    | Every member's committed prefix is byte-identical (positions cluster-global); snapshot logPosition shared; resume from the committed boundary converges; restart extends the same recording |
+| `ReadReplicaCheckpointClusterTest`   | Cluster    | Warm start loads the local checkpoint and resumes the log without replaying history |
+| `ReadReplicaSnapshotBootstrapClusterTest` | Cluster | Cold start bootstraps the engine from a cluster snapshot and rebuilds the ledger by full-log replay |
+| `ReadReplicaFailoverIntegrationTest` | Fault       | Replica fails over by resuming from the applied position (monotonic, no rebuild); recovers when every source returns |
 | `ReadReplicaOrderHistoryIntegrationTest` | Integration | Replica rebuilds order history, fills, and trades from the log; survives replica restart |
 | `ReadQueryIntegrationTest`           | Integration | Read-side SDK queries balances, L2, reports, history, trades, and totals over the query protocol |
 | `SystemLoadIntegrationTest`          | Integration | Full docker-compose pipeline in one JVM: 100k-command write load + read-side verification against the simulation |

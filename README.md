@@ -225,10 +225,18 @@ System.out.println(outcome.resultCode()); // e.g. SUCCESS
 
 `--archive` also accepts a comma-separated list of member archive control
 channels: the first is the primary source and the replica fails over to the rest
-(in order) when it dies, rebuilding its state by replaying the new source's
-consensus-log recording from the start (recording positions are
-member-specific). The read model is eventually consistent, so there is a brief
+(in order) when it dies. Because recording positions are cluster-global (every
+member records the same committed consensus log), the replica **resumes the
+replay from the position already applied** instead of rebuilding its state, so
+`appliedPosition` is monotonic across the switch and the catch-up window is just
+the tail. The read model is eventually consistent, so there is a brief
 catch-up window after failover.
+
+Optional flags: `--checkpoint=<file>` enables local checkpoint persistence
+(engine + ledger + applied position, written periodically and at shutdown); a
+warm start loads the checkpoint and resumes from the stored position instead of
+replaying history. On a cold start the replica also bootstraps its engine from
+the newest cluster snapshot found on the source Archive, when one exists.
 
 The read service also answers queries on the query protocol (default
 `aeron:udp?endpoint=localhost:44000`, stream 300). Query it from any internal
@@ -471,7 +479,11 @@ Performance targets (defaults; tune per service):
 | `JournalConsumerIntegrationTest`   | Integration | Re-delivered events are deduped to exactly-once         |
 | `JournalReplayIntegrationTest`     | Integration | Archive replay decodes trades; repeated replay dedups   |
 | `SnapshotWarmRestartIntegrationTest` | Cluster   | Warm restart recovers state from a native snapshot      |
+| `ReadReplicaPositionModelClusterTest` | Cluster  | Records the committed prefix byte-identically on every member; snapshot logPosition is cluster-global; resume from the committed boundary converges |
+| `ReadReplicaCheckpointClusterTest`   | Cluster    | Warm start loads the local checkpoint (engine + ledger + position) and resumes the log without replaying history |
+| `ReadReplicaSnapshotBootstrapClusterTest` | Cluster | Cold start bootstraps the engine from a cluster snapshot and rebuilds the order ledger by full-log replay |
 | `LeaderKillFailoverTest`           | Fault       | Three-node leader kill; exactly-once, no loss or dup    |
+| `ReadReplicaFailoverIntegrationTest` | Fault     | Replica fails over by resuming from the applied position (monotonic); recovers when every source returns |
 | `JournalHaFailoverTest`            | Fault       | Journal survives a leader kill; trades exactly-once     |
 | `JournalLiveFailoverTest`          | Fault       | Live consumer fails over to a survivor without loss     |
 

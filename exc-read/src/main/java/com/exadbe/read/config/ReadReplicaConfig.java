@@ -2,6 +2,8 @@ package com.exadbe.read.config;
 
 import com.exadbe.protocol.QueryStreams;
 import io.aeron.archive.client.AeronArchive;
+import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Configuration for a non-voting read replica following one or more cluster
@@ -9,8 +11,22 @@ import io.aeron.archive.client.AeronArchive;
  * needs no dependency on the launcher's cluster configuration. The first
  * channel is the primary source; the replica fails over to the remaining
  * channels (in order, round-robin) when the current source dies.
+ *
+ * <p>Recording positions are cluster-global (every member records the same
+ * committed consensus log), so a failover resumes the live-log replay from the
+ * position already applied instead of rebuilding the state from scratch. The
+ * tuning knobs bound how long a dead source can block the poll thread
+ * ({@code archiveMessageTimeoutMs}), how often the replica retries a lost
+ * source ({@code failoverBackoffMs}), and how long a source can stay silent
+ * before it is declared dead ({@code livenessTimeoutMs}).
  */
 public final class ReadReplicaConfig {
+
+    private static final long DEFAULT_FAILOVER_BACKOFF_MS = 250L;
+    private static final long DEFAULT_ARCHIVE_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(2);
+    private static final long DEFAULT_LIVENESS_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(10);
+    private static final long DEFAULT_SNAPSHOT_POLL_MS = TimeUnit.SECONDS.toMillis(5);
+    private static final long DEFAULT_CHECKPOINT_INTERVAL_MS = TimeUnit.SECONDS.toMillis(30);
 
     private final String aeronDirectoryName;
     private final String[] archiveControlChannels;
@@ -18,20 +34,31 @@ public final class ReadReplicaConfig {
     private final String localHost;
     private final String queryRequestChannel;
     private final int queryRequestStreamId;
+    private final long failoverBackoffMs;
+    private final long archiveMessageTimeoutMs;
+    private final long livenessTimeoutMs;
+    private final long snapshotPollIntervalMs;
+    private final Path checkpointFile;
+    private final long checkpointIntervalMs;
 
-    private ReadReplicaConfig(
-            final String aeronDirectoryName,
-            final String[] archiveControlChannels,
-            final int archiveControlStreamId,
-            final String localHost,
-            final String queryRequestChannel,
-            final int queryRequestStreamId) {
-        this.aeronDirectoryName = aeronDirectoryName;
-        this.archiveControlChannels = archiveControlChannels.clone();
-        this.archiveControlStreamId = archiveControlStreamId;
-        this.localHost = localHost;
-        this.queryRequestChannel = queryRequestChannel;
-        this.queryRequestStreamId = queryRequestStreamId;
+    private ReadReplicaConfig(final Builder builder) {
+        this.aeronDirectoryName = builder.aeronDirectoryName;
+        this.archiveControlChannels = builder.archiveControlChannels.clone();
+        this.archiveControlStreamId = builder.archiveControlStreamId;
+        this.localHost = builder.localHost;
+        this.queryRequestChannel = builder.queryRequestChannel;
+        this.queryRequestStreamId = builder.queryRequestStreamId;
+        this.failoverBackoffMs = builder.failoverBackoffMs;
+        this.archiveMessageTimeoutMs = builder.archiveMessageTimeoutMs;
+        this.livenessTimeoutMs = builder.livenessTimeoutMs;
+        this.snapshotPollIntervalMs = builder.snapshotPollIntervalMs;
+        this.checkpointFile = builder.checkpointFile;
+        this.checkpointIntervalMs = builder.checkpointIntervalMs;
+    }
+
+    /** Starts a replica configuration with the given media-driver directory. */
+    public static Builder builder(final String aeronDirectoryName) {
+        return new Builder(aeronDirectoryName);
     }
 
     /**
@@ -42,12 +69,7 @@ public final class ReadReplicaConfig {
      *     channel, e.g. {@code aeron:udp?endpoint=localhost:20104}
      */
     public static ReadReplicaConfig localhost(final String aeronDirectoryName, final String archiveControlChannel) {
-        return localhost(
-                aeronDirectoryName,
-                archiveControlChannel,
-                "localhost",
-                QueryStreams.QUERY_REQUEST_CHANNEL,
-                QueryStreams.QUERY_REQUEST_STREAM_ID);
+        return builder(aeronDirectoryName).channels(archiveControlChannel).build();
     }
 
     /**
@@ -59,8 +81,10 @@ public final class ReadReplicaConfig {
             final String archiveControlChannel,
             final String queryRequestChannel,
             final int queryRequestStreamId) {
-        return localhost(
-                aeronDirectoryName, archiveControlChannel, "localhost", queryRequestChannel, queryRequestStreamId);
+        return builder(aeronDirectoryName)
+                .channels(archiveControlChannel)
+                .query(queryRequestChannel, queryRequestStreamId)
+                .build();
     }
 
     /**
@@ -77,19 +101,19 @@ public final class ReadReplicaConfig {
             final String localHost,
             final String queryRequestChannel,
             final int queryRequestStreamId) {
-        return localhost(
-                aeronDirectoryName,
-                new String[] {archiveControlChannel},
-                localHost,
-                queryRequestChannel,
-                queryRequestStreamId);
+        return builder(aeronDirectoryName)
+                .channels(archiveControlChannel)
+                .localHost(localHost)
+                .query(queryRequestChannel, queryRequestStreamId)
+                .build();
     }
 
     /**
      * Builds a replica configuration with several failover sources, in order of
      * preference. When the current source dies, the replica moves to the next
-     * channel (round-robin) and rebuilds its state by replaying that member's
-     * consensus-log recording from the start.
+     * channel (round-robin) and resumes the consensus-log replay from the
+     * position already applied - positions are cluster-global, so no rebuild is
+     * required unless no source covers the applied position.
      */
     public static ReadReplicaConfig localhost(
             final String aeronDirectoryName,
@@ -97,16 +121,11 @@ public final class ReadReplicaConfig {
             final String localHost,
             final String queryRequestChannel,
             final int queryRequestStreamId) {
-        if (archiveControlChannels == null || archiveControlChannels.length == 0) {
-            throw new IllegalArgumentException("at least one archive control channel is required");
-        }
-        return new ReadReplicaConfig(
-                aeronDirectoryName,
-                archiveControlChannels,
-                AeronArchive.Configuration.CONTROL_STREAM_ID_DEFAULT,
-                localHost,
-                queryRequestChannel,
-                queryRequestStreamId);
+        return builder(aeronDirectoryName)
+                .channels(archiveControlChannels)
+                .localHost(localHost)
+                .query(queryRequestChannel, queryRequestStreamId)
+                .build();
     }
 
     public String aeronDirectoryName() {
@@ -139,5 +158,114 @@ public final class ReadReplicaConfig {
     /** The stream id the read service subscribes to for {@code QueryRequest} frames. */
     public int queryRequestStreamId() {
         return queryRequestStreamId;
+    }
+
+    /** Backoff between failover/connect cycles when no source is reachable. */
+    public long failoverBackoffMs() {
+        return failoverBackoffMs;
+    }
+
+    /** Bounds one archive control operation (connect, list, replay) on the poll thread. */
+    public long archiveMessageTimeoutMs() {
+        return archiveMessageTimeoutMs;
+    }
+
+    /** A source that delivers neither fragments nor successful archive ops within this window is failed over. */
+    public long livenessTimeoutMs() {
+        return livenessTimeoutMs;
+    }
+
+    /** Interval between snapshot polls on the active source (snapshot bootstrap). */
+    public long snapshotPollIntervalMs() {
+        return snapshotPollIntervalMs;
+    }
+
+    /** Local checkpoint file for warm restarts, or {@code null} to disable checkpoints. */
+    public Path checkpointFile() {
+        return checkpointFile;
+    }
+
+    /** Interval between periodic checkpoint writes. */
+    public long checkpointIntervalMs() {
+        return checkpointIntervalMs;
+    }
+
+    /** Fluent builder for a read replica configuration. */
+    public static final class Builder {
+        private final String aeronDirectoryName;
+        private String[] archiveControlChannels;
+        private int archiveControlStreamId = AeronArchive.Configuration.CONTROL_STREAM_ID_DEFAULT;
+        private String localHost = "localhost";
+        private String queryRequestChannel = QueryStreams.QUERY_REQUEST_CHANNEL;
+        private int queryRequestStreamId = QueryStreams.QUERY_REQUEST_STREAM_ID;
+        private long failoverBackoffMs = DEFAULT_FAILOVER_BACKOFF_MS;
+        private long archiveMessageTimeoutMs = DEFAULT_ARCHIVE_TIMEOUT_MS;
+        private long livenessTimeoutMs = DEFAULT_LIVENESS_TIMEOUT_MS;
+        private long snapshotPollIntervalMs = DEFAULT_SNAPSHOT_POLL_MS;
+        private Path checkpointFile;
+        private long checkpointIntervalMs = DEFAULT_CHECKPOINT_INTERVAL_MS;
+
+        private Builder(final String aeronDirectoryName) {
+            this.aeronDirectoryName = aeronDirectoryName;
+        }
+
+        /** The ordered failover sources, primary first. */
+        public Builder channels(final String... channels) {
+            if (channels == null || channels.length == 0) {
+                throw new IllegalArgumentException("at least one archive control channel is required");
+            }
+            this.archiveControlChannels = channels.clone();
+            return this;
+        }
+
+        public Builder localHost(final String value) {
+            this.localHost = value;
+            return this;
+        }
+
+        /** The channel and stream the replica listens on for read-side queries. */
+        public Builder query(final String channel, final int streamId) {
+            this.queryRequestChannel = channel;
+            this.queryRequestStreamId = streamId;
+            return this;
+        }
+
+        public Builder failoverBackoffMs(final long value) {
+            this.failoverBackoffMs = value;
+            return this;
+        }
+
+        public Builder archiveMessageTimeoutMs(final long value) {
+            this.archiveMessageTimeoutMs = value;
+            return this;
+        }
+
+        public Builder livenessTimeoutMs(final long value) {
+            this.livenessTimeoutMs = value;
+            return this;
+        }
+
+        public Builder snapshotPollIntervalMs(final long value) {
+            this.snapshotPollIntervalMs = value;
+            return this;
+        }
+
+        /** Enables periodic + shutdown checkpoint persistence to {@code file}. */
+        public Builder checkpointFile(final Path file) {
+            this.checkpointFile = file;
+            return this;
+        }
+
+        public Builder checkpointIntervalMs(final long value) {
+            this.checkpointIntervalMs = value;
+            return this;
+        }
+
+        public ReadReplicaConfig build() {
+            if (archiveControlChannels == null || archiveControlChannels.length == 0) {
+                throw new IllegalArgumentException("at least one archive control channel is required");
+            }
+            return new ReadReplicaConfig(this);
+        }
     }
 }
