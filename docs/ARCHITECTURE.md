@@ -408,6 +408,15 @@ by one thread and readers always see a consistent state. A read replica is NOT a
 cluster member: it does not vote, does not affect quorum, and can be restarted
 independently.
 
+The replica is configured with an ordered list of member archives (see
+`ReadReplicaConfig`); the first is the primary source. When the current source
+dies, the replica fails over to the next member in order: recording positions are
+member-specific, so it clears its engine and ledger and rebuilds its state by
+replaying the new source's consensus-log recording from the start, then follows
+live. Because reads are eventually consistent, the catch-up window after
+failover is part of the read model's contract; `currentSource()` exposes the
+member archive currently followed.
+
 The replica also serves the read-side report framework over its private engine
 (eventually consistent, no ingress or consensus round trip): `singleUserReport(uid)`
 returns a user's status, balances, and resting orders, `totalCurrencyBalance()`
@@ -810,6 +819,13 @@ sequenceDiagram
     ME -->> Q: eventually-consistent read
 ```
 
+On source loss (the followed member's archive dies), the replica reconnects and
+fails over to the next configured member archive in order: it clears its engine
+and ledger and replays that member's recording from the start (`ExcReadReplica`
+keeps an ordered list of archive control channels; `--archive=ch1,ch2,ch3`
+configures it). The eventually-consistent read contract absorbs the catch-up
+window.
+
 ---
 
 ## Command Processing Pipeline
@@ -952,6 +968,7 @@ counter.
 | `BenchHarnessSmokeTest`              | Integration | End-to-end latency harness boots and measures           |
 | `XcoreBenchSmokeTest`                | Integration | exchange-core replay cross-validates; pipeline boots    |
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth, L2   |
+| `ReadReplicaFailoverIntegrationTest` | Fault       | Replica fails over to another member's archive when its source dies; state rebuilt and correct |
 | `ReadReplicaOrderHistoryIntegrationTest` | Integration | Replica rebuilds order history, fills, and trades from the log; survives replica restart |
 | `ReadQueryIntegrationTest`           | Integration | Read-side SDK queries balances, L2, reports, history, trades, and totals over the query protocol |
 | `SystemLoadIntegrationTest`          | Integration | Full docker-compose pipeline in one JVM: 100k-command write load + read-side verification against the simulation |
@@ -1005,7 +1022,7 @@ flowchart LR
 | Container   | Main class / entrypoint       | Role                                                                 |
 |-------------|-------------------------------|----------------------------------------------------------------------|
 | `node-0/1/2`| `ClusterLauncher`             | Raft members; each uses ports `20100 + n*100 .. +4` (ingress, consensus, log, catchup, archive) |
-| `read`      | `ReadServiceLauncher`         | CQRS replica following node-0's archive; answers queries on `0.0.0.0:44000` |
+| `read`      | `ReadServiceLauncher`         | CQRS replica following node-0's archive (node-1 / node-2 as failover sources), answers queries on `0.0.0.0:44000` |
 | `load`      | `ExternalLoadRunner`          | Submits the workload through `ExcClient`; verifies the write side     |
 | `verify`    | `ReadVerifyRunner`            | Replays the simulation; asserts the read side matches it exactly      |
 

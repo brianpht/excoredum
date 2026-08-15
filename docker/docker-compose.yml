@@ -96,7 +96,10 @@ services:
     container_name: excoredum-read
     shm_size: 256m
     environment:
-      EXC_ARCHIVE: "aeron:udp?endpoint=node-0:20104"
+      # Primary source is node-0; the replica fails over to node-1 / node-2's
+      # archive if node-0 dies (recording positions are member-specific, so it
+      # rebuilds its state by replaying the new source from the start).
+      EXC_ARCHIVE: "aeron:udp?endpoint=node-0:20104,aeron:udp?endpoint=node-1:20204,aeron:udp?endpoint=node-2:20304"
       EXC_QUERY: "aeron:udp?endpoint=0.0.0.0:44000"
     command: ["/usr/local/bin/entrypoint-read.sh"]
     depends_on:

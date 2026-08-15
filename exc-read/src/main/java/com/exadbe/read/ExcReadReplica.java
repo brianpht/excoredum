@@ -30,6 +30,13 @@ import java.util.List;
  * ever touched by one thread and readers always see a consistent state. The
  * replica follows the log from the start; engine dedup makes any re-delivered
  * prefix idempotent.
+ *
+ * <p>The replica is configured with an ordered list of member archives (see
+ * {@link ReadReplicaConfig}). When the current source dies it fails over to the
+ * next member: recording positions are member-specific, so the replicated state
+ * is rebuilt by clearing the engine and ledger and replaying the new member's
+ * recording from the start - the read model is eventually consistent, so a
+ * brief catch-up window after failover is part of its contract.
  */
 public final class ExcReadReplica implements AutoCloseable {
 
@@ -38,7 +45,8 @@ public final class ExcReadReplica implements AutoCloseable {
 
     private final MediaDriver mediaDriver;
     private final Aeron aeron;
-    private final AeronArchive archive;
+    private final String[] archiveControlChannels;
+    private final int archiveControlStreamId;
     private final MatchingEngine engine;
     private final CommandOutcome outcome;
     private final OrderLedger ledger = new OrderLedger();
@@ -48,6 +56,8 @@ public final class ExcReadReplica implements AutoCloseable {
 
     private ReplicaCommandListener commandListener = ReplicaCommandListener.NONE;
     private LiveLogSubscriber liveLog;
+    private AeronArchive archive;
+    private int currentSource;
     private long appliedPosition;
     private long nextConnectMs;
 
@@ -56,10 +66,11 @@ public final class ExcReadReplica implements AutoCloseable {
         this.outcome = new CommandOutcome(coreConfig.eventBufferCapacity());
         this.localHost = config.localHost();
         this.reports = new ReportGenerator(engine);
+        this.archiveControlChannels = config.archiveControlChannels();
+        this.archiveControlStreamId = config.archiveControlStreamId();
 
         MediaDriver driver = null;
         Aeron aeronClient = null;
-        AeronArchive archiveClient = null;
         try {
             driver = MediaDriver.launch(new MediaDriver.Context()
                     .aeronDirectoryName(config.aeronDirectoryName())
@@ -67,18 +78,12 @@ public final class ExcReadReplica implements AutoCloseable {
                     .dirDeleteOnStart(true)
                     .dirDeleteOnShutdown(true));
             aeronClient = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectoryName()));
-            archiveClient = AeronArchive.connect(new AeronArchive.Context()
-                    .aeron(aeronClient)
-                    .controlRequestChannel(config.archiveControlChannel())
-                    .controlRequestStreamId(config.archiveControlStreamId())
-                    .controlResponseChannel("aeron:udp?endpoint=" + config.localHost() + ":0"));
         } catch (final RuntimeException e) {
-            closeQuietly(archiveClient, aeronClient, driver);
+            closeQuietly(aeronClient, driver);
             throw e;
         }
         this.mediaDriver = driver;
         this.aeron = aeronClient;
-        this.archive = archiveClient;
     }
 
     /** Advances replication by polling the live log; call repeatedly from one thread. */
@@ -108,14 +113,57 @@ public final class ExcReadReplica implements AutoCloseable {
         if (liveLog != null || System.currentTimeMillis() < nextConnectMs) {
             return;
         }
-        final LiveLogSubscriber subscriber =
-                new LiveLogSubscriber(archive, engine, outcome, ledger, commandListener, appliedPosition, localHost);
-        if (subscriber.connect()) {
-            liveLog = subscriber;
-        } else {
+        for (int attempt = 0; attempt < archiveControlChannels.length; attempt++) {
+            final int idx = (currentSource + attempt) % archiveControlChannels.length;
+            if (idx != currentSource) {
+                // Failing over to another member: recording positions are
+                // member-specific, so rebuild the replicated state from scratch
+                // and replay that member's recording from the start.
+                resetReplication();
+                currentSource = idx;
+            }
+            closeArchive();
+            if (!connectArchive(idx)) {
+                continue;
+            }
+            final LiveLogSubscriber subscriber = new LiveLogSubscriber(
+                    archive, engine, outcome, ledger, commandListener, appliedPosition, localHost);
+            if (subscriber.connect()) {
+                liveLog = subscriber;
+                return;
+            }
             subscriber.close();
-            nextConnectMs = System.currentTimeMillis() + RECONNECT_BACKOFF_MS;
         }
+        closeArchive();
+        nextConnectMs = System.currentTimeMillis() + RECONNECT_BACKOFF_MS;
+    }
+
+    private boolean connectArchive(final int idx) {
+        try {
+            archive = AeronArchive.connect(new AeronArchive.Context()
+                    .aeron(aeron)
+                    .controlRequestChannel(archiveControlChannels[idx])
+                    .controlRequestStreamId(archiveControlStreamId)
+                    .controlResponseChannel("aeron:udp?endpoint=" + localHost + ":0"));
+            return true;
+        } catch (final RuntimeException e) {
+            archive = null;
+            return false;
+        }
+    }
+
+    private void closeArchive() {
+        if (archive != null) {
+            archive.close();
+            archive = null;
+        }
+    }
+
+    private void resetReplication() {
+        engine.clearState();
+        ledger.clear();
+        outcome.reset(0L, 0L);
+        appliedPosition = 0L;
     }
 
     /**
@@ -140,6 +188,11 @@ public final class ExcReadReplica implements AutoCloseable {
     /** The cluster-global log position consumed so far. */
     public long appliedPosition() {
         return appliedPosition;
+    }
+
+    /** Index of the member archive currently followed (0 = the primary source). */
+    public int currentSource() {
+        return currentSource;
     }
 
     public boolean isHealthy() {
@@ -226,7 +279,8 @@ public final class ExcReadReplica implements AutoCloseable {
             liveLog.close();
             liveLog = null;
         }
-        closeQuietly(archive, aeron, mediaDriver);
+        closeArchive();
+        closeQuietly(aeron, mediaDriver);
     }
 
     private static void closeQuietly(final AutoCloseable... resources) {

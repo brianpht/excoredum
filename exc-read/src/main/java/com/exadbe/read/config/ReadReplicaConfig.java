@@ -4,14 +4,16 @@ import com.exadbe.protocol.QueryStreams;
 import io.aeron.archive.client.AeronArchive;
 
 /**
- * Configuration for a non-voting read replica following one cluster member's
- * Aeron Archive. Endpoints are supplied as raw strings so this module needs no
- * dependency on the launcher's cluster configuration.
+ * Configuration for a non-voting read replica following one or more cluster
+ * members' Aeron Archives. Endpoints are supplied as raw strings so this module
+ * needs no dependency on the launcher's cluster configuration. The first
+ * channel is the primary source; the replica fails over to the remaining
+ * channels (in order, round-robin) when the current source dies.
  */
 public final class ReadReplicaConfig {
 
     private final String aeronDirectoryName;
-    private final String archiveControlChannel;
+    private final String[] archiveControlChannels;
     private final int archiveControlStreamId;
     private final String localHost;
     private final String queryRequestChannel;
@@ -19,13 +21,13 @@ public final class ReadReplicaConfig {
 
     private ReadReplicaConfig(
             final String aeronDirectoryName,
-            final String archiveControlChannel,
+            final String[] archiveControlChannels,
             final int archiveControlStreamId,
             final String localHost,
             final String queryRequestChannel,
             final int queryRequestStreamId) {
         this.aeronDirectoryName = aeronDirectoryName;
-        this.archiveControlChannel = archiveControlChannel;
+        this.archiveControlChannels = archiveControlChannels.clone();
         this.archiveControlStreamId = archiveControlStreamId;
         this.localHost = localHost;
         this.queryRequestChannel = queryRequestChannel;
@@ -36,8 +38,8 @@ public final class ReadReplicaConfig {
      * Builds a localhost replica configuration.
      *
      * @param aeronDirectoryName the replica's own (separate) media driver directory
-     * @param archiveControlChannel the source member's archive control channel,
-     *     e.g. {@code aeron:udp?endpoint=localhost:20104}
+     * @param archiveControlChannel the primary source member's archive control
+     *     channel, e.g. {@code aeron:udp?endpoint=localhost:20104}
      */
     public static ReadReplicaConfig localhost(final String aeronDirectoryName, final String archiveControlChannel) {
         return localhost(
@@ -75,9 +77,32 @@ public final class ReadReplicaConfig {
             final String localHost,
             final String queryRequestChannel,
             final int queryRequestStreamId) {
+        return localhost(
+                aeronDirectoryName,
+                new String[] {archiveControlChannel},
+                localHost,
+                queryRequestChannel,
+                queryRequestStreamId);
+    }
+
+    /**
+     * Builds a replica configuration with several failover sources, in order of
+     * preference. When the current source dies, the replica moves to the next
+     * channel (round-robin) and rebuilds its state by replaying that member's
+     * consensus-log recording from the start.
+     */
+    public static ReadReplicaConfig localhost(
+            final String aeronDirectoryName,
+            final String[] archiveControlChannels,
+            final String localHost,
+            final String queryRequestChannel,
+            final int queryRequestStreamId) {
+        if (archiveControlChannels == null || archiveControlChannels.length == 0) {
+            throw new IllegalArgumentException("at least one archive control channel is required");
+        }
         return new ReadReplicaConfig(
                 aeronDirectoryName,
-                archiveControlChannel,
+                archiveControlChannels,
                 AeronArchive.Configuration.CONTROL_STREAM_ID_DEFAULT,
                 localHost,
                 queryRequestChannel,
@@ -88,8 +113,14 @@ public final class ReadReplicaConfig {
         return aeronDirectoryName;
     }
 
+    /** The primary archive control channel (the first configured source). */
     public String archiveControlChannel() {
-        return archiveControlChannel;
+        return archiveControlChannels[0];
+    }
+
+    /** Every archive control channel, primary first; used for failover. */
+    public String[] archiveControlChannels() {
+        return archiveControlChannels.clone();
     }
 
     public int archiveControlStreamId() {

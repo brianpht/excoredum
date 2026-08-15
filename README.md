@@ -223,6 +223,13 @@ System.out.println(outcome.resultCode()); // e.g. SUCCESS
 ./gradlew :exc-read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
 ```
 
+`--archive` also accepts a comma-separated list of member archive control
+channels: the first is the primary source and the replica fails over to the rest
+(in order) when it dies, rebuilding its state by replaying the new source's
+consensus-log recording from the start (recording positions are
+member-specific). The read model is eventually consistent, so there is a brief
+catch-up window after failover.
+
 The read service also answers queries on the query protocol (default
 `aeron:udp?endpoint=localhost:44000`, stream 300). Query it from any internal
 service with the `exc-read-client` SDK, which depends only on `exc-protocol`:
@@ -488,8 +495,9 @@ control, replication, and client egress):
 
 - `node-0/1/2` - `exc-launcher` members of the 3-node Raft cluster, ports
   `20100 + n*100 .. +4` (ingress / consensus / log / catchup / archive).
-- `read` - `exc-read` replica following node-0's archive, answering queries on
-  `0.0.0.0:44000` (stream 300).
+- `read` - `exc-read` replica following node-0's archive (with node-1 and
+  node-2 as failover sources, in order), answering queries on `0.0.0.0:44000`
+  (stream 300).
 - `load` - `ExternalLoadRunner`: submits the deterministic `LoadWorkload`
   through `ExcClient` and verifies the write side.
 - `verify` - `ReadVerifyRunner`: replays the same simulation and asserts the
