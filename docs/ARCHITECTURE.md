@@ -439,7 +439,11 @@ engine + ledger + applied position (atomically: temp file + rename) on a
 configured cadence and at shutdown (`ReplicaCheckpoint`). A warm start loads the
 checkpoint and resumes the log from the stored position - no replay of the
 history before it, and the ledger is complete immediately (it is read-side-only,
-so it cannot come from a cluster snapshot).
+so it cannot come from a cluster snapshot). Because the cadence checkpoint lags
+the live position, a crash between writes loses the tail; a warm start then
+re-applies the lost tail from the log exactly once - the engine's per-client
+dedup and the ledger's `DUPLICATE` skip make the re-application idempotent
+(verified by `ReplicaCrashRecoveryClusterTest`).
 
 The replica also serves the read-side report framework over its private engine
 (eventually consistent, no ingress or consensus round trip): `singleUserReport(uid)`
@@ -1082,8 +1086,12 @@ counter.
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth, L2   |
 | `ReadReplicaPositionModelClusterTest` | Cluster    | Every member's committed prefix is byte-identical (positions cluster-global); snapshot logPosition shared; resume from the committed boundary converges; restart extends the same recording |
 | `ReadReplicaCheckpointClusterTest`   | Cluster    | Warm start loads the local checkpoint and resumes the log without replaying history |
+| `ReplicaCrashRecoveryClusterTest`    | Cluster    | Restart from a stale checkpoint (tail lost to a crash) re-applies the lost tail from the log exactly once - no duplicate users or trades |
+| `ReplicaRebuildPathClusterTest`      | Cluster    | Restart from a checkpoint no reachable source can serve rebuilds from the log start (state cleared, converged below the checkpoint position) |
 | `ReadReplicaSnapshotBootstrapClusterTest` | Cluster | Cold start bootstraps the engine from a cluster snapshot and rebuilds the ledger by full-log replay |
+| `SnapshotNegativeClusterTest`        | Cluster    | Fabricated snapshot recordings: a stale snapshot is skipped by the advance-only guard (state untouched); a corrupt one is discarded and the state rebuilt from the log |
 | `ReadReplicaFailoverIntegrationTest` | Fault       | Replica fails over by resuming from the applied position (monotonic, no rebuild); recovers when every source returns |
+| `ReplicaMidStreamFailoverFaultTest`  | Fault       | The source is killed while a burst is still being consumed; buffered fragments drain, then failover resumes, and the trade tape holds every trade exactly once |
 | `ReadReplicaOrderHistoryIntegrationTest` | Integration | Replica rebuilds order history, fills, and trades from the log; survives replica restart |
 | `ReadQueryIntegrationTest`           | Integration | Read-side SDK queries balances, L2, reports, history, trades, and totals over the query protocol |
 | `SystemLoadIntegrationTest`          | Integration | Full docker-compose pipeline in one JVM: 100k-command write load + read-side verification against the simulation |

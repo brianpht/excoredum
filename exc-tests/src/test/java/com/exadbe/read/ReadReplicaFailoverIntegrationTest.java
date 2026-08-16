@@ -84,7 +84,15 @@ class ReadReplicaFailoverIntegrationTest {
 
                     submitBatch2(client, lastIdLo, replica);
 
-                    pollUntil(client, replica, () -> replica.userCount() == 10 && replica.orderCount() == 2);
+                    // The order count reaches 2 as soon as the batch-2 ask rests,
+                    // before the crossing bid is applied, so wait for the final
+                    // maker quote as well before asserting the balances.
+                    pollUntil(
+                            client,
+                            replica,
+                            () -> replica.userCount() == 10
+                                    && replica.orderCount() == 2
+                                    && replica.balance(1L, QUOTE) == 1_000_600L);
 
                     assertNotEquals(0, replica.currentSource(), "the replica must fail over to another member archive");
                     // Positions are cluster-global: the failover resumes from the
@@ -182,7 +190,15 @@ class ReadReplicaFailoverIntegrationTest {
                         nodes[i] = new ClusterNode(configs[i], CoreConfig.defaults(), false);
                     }
                     submitBatch2(client, lastIdLo, replica);
-                    pollUntil(client, replica, () -> replica.userCount() == 10 && replica.orderCount() == 2);
+                    // The order count reaches 2 as soon as the batch-2 ask rests,
+                    // before the crossing bid is applied, so wait for the final
+                    // maker quote as well before asserting the balances.
+                    pollUntil(
+                            client,
+                            replica,
+                            () -> replica.userCount() == 10
+                                    && replica.orderCount() == 2
+                                    && replica.balance(1L, QUOTE) == 1_000_600L);
                     assertTrue(
                             replica.appliedPosition() > positionBefore,
                             "the replica must resume from its applied position after the cluster returns, was "
