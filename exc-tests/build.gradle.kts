@@ -23,6 +23,7 @@ dependencies {
     testFixturesApi(project(":exc-launcher"))
     testFixturesApi(libs.bundles.aeron)
 
+    testImplementation(libs.hdrhistogram)
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.jqwik)
     testRuntimeOnly(libs.junit.platform.launcher)
@@ -93,6 +94,10 @@ tasks.withType<Test>().configureEach {
     // lets the docker-equivalent run be reproduced at full scale in one JVM.
     systemProperty("exc.systemload.ops", System.getProperty("exc.systemload.ops", "20000"))
     systemProperty("exc.systemload.users", System.getProperty("exc.systemload.users", "20"))
+    // ChaosSoakTest scale knob: -Dexc.soak.warmupRounds / -Dexc.soak.steadyRounds
+    // (one round is one step of an 8-step workload pattern; 8 rounds = 13 commands).
+    systemProperty("exc.soak.warmupRounds", System.getProperty("exc.soak.warmupRounds", "15000"))
+    systemProperty("exc.soak.steadyRounds", System.getProperty("exc.soak.steadyRounds", "120000"))
 }
 
 // Test code is not the production hot path; keep lint informative but non-fatal.

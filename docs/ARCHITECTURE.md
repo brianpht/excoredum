@@ -192,7 +192,7 @@ excoredum/
 |   +-- src/main/java/com/exadbe/examples/
 |       +-- QuickStartExample.java      Boots a node, funds users, crosses orders, shows all egress events
 |
-+-- exc-tests/                      Unit, property, integration, cluster, fault tests
++-- exc-tests/                      Unit, property, integration, cluster, fault, soak tests
     |-- src/testFixtures/java/com/exadbe/testkit/InMemorySnapshot.java   Snapshot to/from an in-memory buffer
     +-- src/test/java/com/exadbe/            Test suites (see Test Coverage)
 ```
@@ -605,7 +605,7 @@ an L2 snapshot. Run with `./gradlew :exc-examples:run`.
 
 ### exc-tests - Verification and Fixtures
 
-Unit, property, integration, cluster, and fault tests plus a `testFixtures`
+Unit, property, integration, cluster, fault, and soak tests plus a `testFixtures`
 toolkit (`InMemorySnapshot`). `Commands` (a plain `src/test` helper) encodes a
 `CommandEnvelope` and returns a wrapped decoder so pure engine tests need no
 Aeron; `InMemorySnapshot` serialises and restores engine state through an
@@ -614,12 +614,19 @@ in-memory record stream for snapshot round-trip tests.
 (single-node cluster + read replica + write load + read verify), and
 `LoadWorkloadEngineParityTest` cross-validates the `LoadWorkload` simulation
 against the real engine command by command.
+`ChaosSoakTest` (tag `soak`) is the long-running steady-state suite: it drives a
+mixed workload of full and partial GTC / IOC matching, cancel and reduce order
+lifecycle, balance credit / debit, and non-zero maker / taker fees through the
+client against a single-node cluster, asserting that every command completes
+without rejection, that tail latency stays within budget, and that GC stays
+bounded during the measured window. Its scale is tunable with
+`-Dexc.soak.warmupRounds` / `-Dexc.soak.steadyRounds` (one round is one step of
+an 8-step workload pattern; 8 rounds = 13 commands).
 
 Suites are grouped by JUnit tag and Gradle task: `test` (unit / property, no tag),
 `integrationTest` (tag `integration`), `clusterTest` (tag `cluster`), `faultTest`
 (tag `fault`), and `soakTest` (tag `soak`). The default `check` gate runs `test`,
-`integrationTest`, `clusterTest`, and `faultTest`. The `soakTest` task exists but
-currently has no soak-tagged suites.
+`integrationTest`, `clusterTest`, and `faultTest`; `soakTest` stays opt-in.
 
 ---
 
@@ -1104,6 +1111,7 @@ counter.
 | `LeaderKillFailoverTest`             | Fault       | Three-node leader kill; exactly-once, no loss or dup    |
 | `JournalHaFailoverTest`              | Fault       | Journal survives a leader kill; trades exactly-once     |
 | `JournalLiveFailoverTest`            | Fault       | Live consumer fails over to a survivor without loss     |
+| `ChaosSoakTest`                      | Soak        | Long-running mixed workload (full / partial GTC-IOC matching, cancel / reduce, balance credit / debit, non-zero fees); asserts every command completes with no rejection, p99.9 latency budget, bounded GC |
 
 Only `test` and `integrationTest` are the minimal gate; excoredum additionally
 wires `clusterTest` and `faultTest` into the default `check`.
@@ -1209,6 +1217,12 @@ trade-tape bounds).
 ./gradlew checkstyleMain checkstyleTest
 ./gradlew compileJava
 ./gradlew test integrationTest
+
+# Heavy suites (also wired into check): multi-node cluster and fault failover
+./gradlew clusterTest faultTest
+
+# Opt-in long-running soak (mixed workload, tail latency + GC budgets)
+./gradlew :exc-tests:soakTest
 
 # Micro-benchmarks (add -PquickBench for a fast smoke run)
 ./gradlew :exc-core:jmh -PquickBench
