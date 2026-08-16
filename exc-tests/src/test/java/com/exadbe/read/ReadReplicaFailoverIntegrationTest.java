@@ -166,10 +166,15 @@ class ReadReplicaFailoverIntegrationTest {
                         Thread.onSpinWait();
                     }
                     assertFalse(replica.isHealthy(), "the replica must report stale while every source is down");
-                    assertEquals(
-                            positionBefore,
-                            replica.appliedPosition(),
-                            "a lost source must not reset the applied position");
+                    // Fragments already buffered before the sources died may still
+                    // be drained after the kill, so the position may advance; the
+                    // invariant is that it never goes backward.
+                    assertTrue(
+                            replica.appliedPosition() >= positionBefore,
+                            "a lost source must not reset the applied position, was "
+                                    + positionBefore
+                                    + " -> "
+                                    + replica.appliedPosition());
 
                     // Warm restart every member (state preserved); the replica
                     // reconnects and resumes from its applied position.
