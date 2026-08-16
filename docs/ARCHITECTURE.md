@@ -30,6 +30,8 @@
     - [Flow 2 - Idempotent Retry](#flow-2---idempotent-retry)
     - [Flow 3 - Snapshot and Recovery](#flow-3---snapshot-and-recovery)
     - [Flow 4 - Read Replica Following](#flow-4---read-replica-following)
+    - [Flow 5 - Read-Side Query Protocol](#flow-5---read-side-query-protocol)
+    - [Flow 6 - Read Replica Bootstrap and Checkpoint](#flow-6---read-replica-bootstrap-and-checkpoint)
 - [Command Processing Pipeline](#command-processing-pipeline)
 - [Determinism Rules](#determinism-rules)
 - [Snapshot Format](#snapshot-format)
@@ -600,9 +602,10 @@ an L2 snapshot. Run with `./gradlew :exc-examples:run`.
 ### exc-tests - Verification and Fixtures
 
 Unit, property, integration, cluster, and fault tests plus a `testFixtures`
-toolkit. `Commands` encodes a `CommandEnvelope` and returns a wrapped decoder so
-pure engine tests need no Aeron; `InMemorySnapshot` serialises and restores engine
-state through an in-memory record stream for snapshot round-trip tests.
+toolkit (`InMemorySnapshot`). `Commands` (a plain `src/test` helper) encodes a
+`CommandEnvelope` and returns a wrapped decoder so pure engine tests need no
+Aeron; `InMemorySnapshot` serialises and restores engine state through an
+in-memory record stream for snapshot round-trip tests.
 `SystemLoadIntegrationTest` runs the full docker-compose pipeline in one JVM
 (single-node cluster + read replica + write load + read verify), and
 `LoadWorkloadEngineParityTest` cross-validates the `LoadWorkload` simulation
@@ -657,7 +660,7 @@ TRUNCATED).
 | Code | Meaning |
 |------|---------|
 | `SUCCESS` | Command applied |
-| `DUPLICATE` | Command already applied; cached result returned, nothing re-applied |
+| `DUPLICATE` | Duplicate `ADD_SYMBOL` (symbol already registered); a re-sent command instead replays the cached original result code |
 | `MATCHING_UNKNOWN_ORDER_ID` | Cancel / move / reduce on an unknown or foreign order |
 | `MATCHING_REDUCE_FAILED_WRONG_SIZE` | Reduce size not positive or exceeding remaining |
 | `MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT` | Bid moved above its reserved price |
@@ -698,8 +701,10 @@ exchange-core's naive order book onto Agrona structures (no `TreeMap`, no stream
   matches immediately.
 
 Resting nodes come from an `OrderNodePool` and price levels from a
-`PriceBucketPool` (both grow-to-high-water free stacks), so steady-state matching
-allocates nothing after warmup. Matcher events accumulate into the
+`PriceBucketPool` (both fixed-capacity free stacks: an empty stack allocates a
+fresh node on the cold path and bumps an exhaustion counter, and a full stack
+drops released nodes to GC), so steady-state matching allocates nothing after
+warmup. Matcher events accumulate into the
 `CommandOutcome` buffer, which is preallocated and only grows on a cold path
 (tracked by a metric).
 
@@ -724,8 +729,9 @@ account (uid 0). Margin is out of scope.
 - **Release on cancel / reduce** - the freed hold (including its reserved taker
   fee) returns to available balance.
 
-All amounts are signed 64-bit `long` with a fixed scale; `Amounts` detects
-overflow and returns a status code rather than wrapping silently. The fee account
+All amounts are signed 64-bit `long` with a fixed scale; `Amounts` provides
+overflow-checked helpers (returning booleans, never wrapping silently), and the
+engine surfaces overflow as the `OVERFLOW` result code. The fee account
 is reserved: `ADD_USER(0)` and placing as uid 0 are rejected.
 
 ---
@@ -739,7 +745,9 @@ It is decoupled from the hot path and highly available.
 - **Zero-alloc emission** - at apply time `MatchingService` encodes each matcher
   event into an off-heap `EventJournalRing` (single-producer). The producer cost
   is one `memcpy` plus a release store; a JMH `-prof gc` run confirms zero
-  steady-state allocation. A full ring signals back-pressure rather than dropping.
+  steady-state allocation. A full ring rejects offers (the producer must apply
+  back-pressure); the recorder drains continuously, and the current producer
+  path counts and drops on overflow rather than stalling the consensus thread.
 - **Off the consensus thread** - a dedicated `EventJournalRecorder` agent drains
   the ring and offers each event to an Aeron publication that the node's Archive
   records (stream 200). No journal I/O ever touches the Raft thread.
@@ -826,6 +834,12 @@ sequenceDiagram
     MS ->> MS: load snapshot, verify checksum, resume from log position
 ```
 
+Snapshots are trigger-driven: no in-process scheduler calls
+`scheduleTakeSnapshot` (there is none in the codebase), so a snapshot is taken
+when the consensus module requests one (for example at a leadership change) or
+when an operator / cluster tool triggers it. Every node writes the same
+deterministic record stream to its own Archive.
+
 ### Flow 4 - Read Replica Following
 
 ```mermaid
@@ -845,12 +859,83 @@ sequenceDiagram
     ME -->> Q: eventually-consistent read
 ```
 
-On source loss (the followed member's archive dies), the replica reconnects and
-fails over to the next configured member archive in order: it clears its engine
-and ledger and replays that member's recording from the start (`ExcReadReplica`
-keeps an ordered list of archive control channels; `--archive=ch1,ch2,ch3`
-configures it). The eventually-consistent read contract absorbs the catch-up
-window.
+On source loss (a liveness timeout, no fragments, or a failed probe), the
+replica fails over to the next configured member archive in order
+(`ExcReadReplica` keeps an ordered list of archive control channels;
+`--archive=ch1,ch2,ch3` configures it). Engine and ledger state are kept: the
+new source resumes the replay from the position already applied, so
+`appliedPosition` stays monotonic across the switch and the catch-up window is
+just the tail. `LiveLogSubscriber` first verifies the new recording covers the
+applied position before replaying; only when no reachable source can serve it
+(source behind, history purged) does the replica clear its state and rebuild
+from the start of the log. The eventually-consistent read contract absorbs the
+catch-up window.
+
+### Flow 5 - Read-Side Query Protocol
+
+```mermaid
+sequenceDiagram
+    participant RC as ReadClient (exc-read-client)
+    participant QR as QueryResponder (replica poll thread)
+    participant R as Read replica state (engine and ledger)
+
+    RC ->> QR: QueryRequest (SBE, stream 300) with requestId, queryType, operands, response channel and stream id
+    Note over QR: answered on the same single thread that advances replication
+    QR ->> R: read from the replicated engine / ledger
+    Note over QR: encode into the 256 KiB buffer, overflow: TRUNCATED, unknown user / symbol / order: NOT_FOUND
+    QR -->> RC: QueryResponse (SBE, stream 301) with requestId, appliedPosition, status
+    RC ->> RC: correlate by requestId, fire the QueryListener callback
+```
+
+The read-side SDK talks to a replica's `QueryResponder` over plain Aeron
+request/response streams (defaults: request stream 300 on
+`aeron:udp?endpoint=localhost:44000`, response stream 301 on the client's
+ephemeral subscription). Every request carries a per-call `requestId` and names
+the client's response channel / stream id; the replica answers on its single
+polling thread, so the response reflects a consistent engine + ledger state.
+Every response carries the replica's `appliedPosition`, so callers can judge
+staleness; an answer that would overflow the preallocated 256 KiB reply buffer
+is truncated with status `TRUNCATED`, and unknown users / symbols / orders
+answer `NOT_FOUND`. Queries are reads, so a retry simply re-publishes the same
+request id; responses to abandoned attempts are discarded, and an unanswered
+query fires `onTimeout` once the retry budget is exhausted (the synchronous
+wrappers throw `QueryTimeoutException` instead).
+
+### Flow 6 - Read Replica Bootstrap and Checkpoint
+
+```mermaid
+sequenceDiagram
+    participant AR as Member Archive
+    participant SS as SnapshotSubscriber
+    participant ME as MatchingEngine (replica)
+    participant LR as LedgerRebuilder
+    participant CP as ReplicaCheckpoint
+
+    Note over AR,CP: Cold start (no local checkpoint), orchestrated by ExcReadReplica.poll()
+    SS ->> AR: replay newest service snapshot (stream 42)
+    AR -->> SS: snapshot records (advance-only guard, corrupt discarded, state rebuilt)
+    SS ->> ME: load engine state at the snapshot logPosition
+    Note over ME,LR: the ledger is read-side-only, so a fast-forward schedules a full-log rebuild
+    LR ->> AR: replay the full consensus log (stream 46) on a throwaway engine
+    LR -->> ME: swap in the complete ledger and persist the checkpoint
+
+    Note over AR,CP: Warm start (checkpoint present)
+    CP ->> ME: load engine, ledger, and appliedPosition (atomic temp file and rename)
+    ME ->> AR: resume the consensus log replay from appliedPosition (stream 43)
+```
+
+A cold start (no local checkpoint) polls the source Archive for the newest
+service snapshot and loads it into the engine if it advances the applied
+position (`SnapshotSubscriber`, stream 42; advance-only guard - an older
+snapshot found on a failover source can never roll state back, and a snapshot
+failing the integrity check is discarded with the state rebuilt from the log).
+Because the cluster snapshot holds engine state only, the fast-forward
+schedules a full-log replay on a throwaway engine (`LedgerRebuilder`, stream
+46) to restore the complete order history and trade tape; the rebuilt ledger is
+swapped in and persisted immediately. A warm start (with `--checkpoint=<file>`)
+loads the engine + ledger + applied position atomically (temp file + rename)
+and resumes the live log from the stored position - no replay of the history
+before it.
 
 ---
 
@@ -901,8 +986,8 @@ are forbidden in `exc-core` and enforced by a Checkstyle rule set
   primitives on the hot path.
 
 Money and quantities are 64-bit signed `long` values; overflow is detected by
-`Amounts` and returned as a status code rather than thrown, so exceptions are
-never used for control flow.
+`Amounts` helpers and surfaced as the `OVERFLOW` result code rather than thrown,
+so exceptions are never used for control flow.
 
 ---
 
@@ -931,8 +1016,9 @@ recovery rather than serving broken state.
 
 ## Configuration
 
-`CoreConfig` holds preallocated capacities sized at construction; ring capacities
-are validated as power-of-two where they index a ring. Defaults suit a large
+`CoreConfig` holds preallocated capacities sized at construction; the journal
+ring validates its power-of-two slot count at construction (the dedup window is
+masked but not validated). Defaults suit a large
 single node; tests use smaller values.
 
 | Setting               | Default | Purpose                                     |
@@ -1068,10 +1154,11 @@ assumptions leak across containers.
 `LoadWorkload` is a deterministic generator plus an exact simulation of the
 engine's single-price-level FIFO book (one symbol, price 100, size-1 orders,
 zero fees; bids reserve quote, asks reserve base, exactly as
-`DirectExchangeRisk` does). Its 100k-command mix is places (75%), cancels /
-reduces (12.5%), and order-book requests (12.5%) over 100 users, round-robin;
-a cancel or reduce with an empty target side falls back to a place so every
-command is valid.
+`DirectExchangeRisk` does). Its 100k-command mix is places (5 of 8 slots,
+62.5%), cancels (12.5%), reduces (12.5%), and order-book requests (12.5%) over
+100 users, round-robin; a cancel or reduce with an empty target side falls back
+to a place so every command is valid (which pushes the realized place share
+above 62.5%, state-dependently).
 
 - `load` (write side): every one of the 100,301 commands (301 setup + 100k
   main) must be acknowledged `SUCCESS` with nothing expired, and the fills
