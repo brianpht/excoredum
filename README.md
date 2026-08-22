@@ -35,7 +35,8 @@ design, and the steady-state hot path allocates nothing.
   constant).
 - **Audit-ready by default** - every committed trade / reduce / reject is
   written to a highly-available journal on the Aeron Archive, off the
-  consensus thread, and consumers dedup on `(logPosition, eventIndex)` for
+  consensus thread: the producer blocks (never drops) until the journaler
+  drains, and consumers dedup on `(logPosition, eventIndex)` for
   exactly-once delivery that survives a leader loss.
 - **Reads without touching consensus** - a CQRS read replica follows a
   member's archive, rebuilds per-user order history and a market trade tape
