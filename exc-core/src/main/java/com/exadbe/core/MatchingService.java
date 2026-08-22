@@ -226,7 +226,8 @@ public final class MatchingService implements ClusteredService {
                 .filledSize(outcome.hasFilledSize() ? outcome.filledSize() : CommandResultEncoder.filledSizeNullValue())
                 // Duplicates carry no events (they are not re-emitted), so the count
                 // stays the zero left by the dedup cache path.
-                .eventCount(outcome.eventCount());
+                .eventCount(outcome.eventCount())
+                .eventCountExt(outcome.eventCount());
 
         final int msgLength = MessageHeaderEncoder.ENCODED_LENGTH + resultEncoder.encodedLength();
         offerToSession(session, egressBuffer, msgLength);
@@ -244,6 +245,7 @@ public final class MatchingService implements ClusteredService {
                             .commandIdHi(outcome.commandIdHi())
                             .commandIdLo(outcome.commandIdLo())
                             .eventIndex(i)
+                            .eventIndexExt(i)
                             .timestamp(timestamp)
                             .symbolId(e.symbolId())
                             .makerOrderId(e.makerOrderId())
@@ -260,6 +262,7 @@ public final class MatchingService implements ClusteredService {
                             .commandIdHi(outcome.commandIdHi())
                             .commandIdLo(outcome.commandIdLo())
                             .eventIndex(i)
+                            .eventIndexExt(i)
                             .timestamp(timestamp)
                             .symbolId(e.symbolId())
                             .orderId(e.makerOrderId())
@@ -275,6 +278,7 @@ public final class MatchingService implements ClusteredService {
                             .commandIdHi(outcome.commandIdHi())
                             .commandIdLo(outcome.commandIdLo())
                             .eventIndex(i)
+                            .eventIndexExt(i)
                             .timestamp(timestamp)
                             .symbolId(e.symbolId())
                             .orderId(e.makerOrderId())

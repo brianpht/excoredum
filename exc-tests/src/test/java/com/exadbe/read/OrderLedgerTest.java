@@ -190,7 +190,8 @@ final class OrderLedgerTest {
     @Test
     void duplicateCommandIsSkipped() {
         applyPlace(1L, 100L, MAKER, true, OrderType.GTC, 100L, 10L, 0, CommandResultCode.SUCCESS, 0L);
-        // Same placement re-delivered: the engine's dedup answers DUPLICATE.
+        // Same placement re-delivered: the ordersById guard (plus a zero-event
+        // cached outcome) prevents a second record without re-applying fills.
         applyPlace(2L, 100L, MAKER, true, OrderType.GTC, 100L, 10L, 0, CommandResultCode.DUPLICATE, 0L);
 
         assertEquals(1, ledger.orderHistory(MAKER).size());

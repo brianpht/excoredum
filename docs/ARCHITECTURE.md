@@ -1095,7 +1095,9 @@ snapshot write / read time. The hot path only increments a counter.
 | Suite                                | Type        | What it covers                                          |
 |--------------------------------------|-------------|---------------------------------------------------------|
 | `MatchingEngineTest`                 | Unit        | Dedup, account handlers, suspend / resume, result codes |
-| `InputValidationTest`                | Unit        | Size / price / budget positivity, overflow pre-checks, balance sentinel, spec sanity, reserved clientSeq sentinel, self-trade conservation |
+| `InputValidationTest`                | Unit        | Size / price / budget positivity, overflow pre-checks, balance / uid / orderId sentinels, scale / fee upper bounds, dedup-window eviction counter, self-trade conservation |
+| `NegativeResultCodesTest`            | Unit        | Unknown symbol / command, wrong-uid cancel / move / reduce, non-positive reduce, RESET |
+| `CoreConfigTest`                     | Unit        | Capacity validation (positivity, power-of-two), DedupRing capacity guard |
 | `OrderBookConformanceTest`           | Unit        | GTC / IOC / FOK-BUDGET, cancel / move / reduce, L2      |
 | `SpotRiskTest`                       | Unit        | Reserve / settle / release, value conservation          |
 | `FeeTest`                            | Unit        | Maker / taker fees, fee account, conservation with fees |
@@ -1104,11 +1106,12 @@ snapshot write / read time. The hot path only increments a counter.
 | `DedupRingTest`                      | Unit + Property | Dedup ring windowing, eviction, per-client isolation, EMPTY sentinel rejection |
 | `EngineDeterminismTest`              | Property    | Replay determinism and sum-of-deltas (jqwik)            |
 | `SnapshotRoundTripTest`              | Unit        | Byte-identical snapshot round trip and checksum         |
-| `SnapshotIntegrityTest`              | Unit        | Truncation and corruption are rejected                  |
+| `SnapshotIntegrityTest`              | Unit        | Truncation, balance corruption, and dedup-field corruption are rejected |
 | `HotPathHardeningTest`               | Unit        | Node pooling, bounded event buffer, off-heap counters   |
 | `ReportGeneratorTest`                | Unit        | Read-side reports: single-user, conservation totals, state hash |
 | `OrderLedgerTest`                    | Unit        | Ledger lifecycle, fills, dedup skip, eviction, userCookie |
 | `QueryCodecRoundTripTest`            | Unit        | Query request / response codecs round-trip every group and scalar |
+| `EventCodecExtRoundTripTest`         | Unit        | v5 index / count extension fields round-trip past the uint16 ceiling while the legacy field wraps |
 | `ExcClientIntegrationTest`           | Integration | Client submit / poll, command-id correlation            |
 | `ExcClientKeepaliveIntegrationTest`  | Integration | Idle client survives cluster session timeout via NOP keepalives |
 | `ExcAccountsIntegrationTest`         | Integration | Account lifecycle result codes end to end               |

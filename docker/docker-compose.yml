@@ -49,7 +49,7 @@ services:
       - node0-data:/data
     command: ["/usr/local/bin/entrypoint-node.sh"]
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "ClusterLauncher"]
+      test: ["CMD-SHELL", "kill -0 $$(cat /data/excoredum-node.pid) 2>/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 60
@@ -67,7 +67,7 @@ services:
       - node1-data:/data
     command: ["/usr/local/bin/entrypoint-node.sh"]
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "ClusterLauncher"]
+      test: ["CMD-SHELL", "kill -0 $$(cat /data/excoredum-node.pid) 2>/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 60
@@ -85,7 +85,7 @@ services:
       - node2-data:/data
     command: ["/usr/local/bin/entrypoint-node.sh"]
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "ClusterLauncher"]
+      test: ["CMD-SHELL", "kill -0 $$(cat /data/excoredum-node.pid) 2>/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 60
@@ -106,7 +106,7 @@ services:
       node-0:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "ReadServiceLauncher"]
+      test: ["CMD-SHELL", "kill -0 $$(cat /data/excoredum-read.pid) 2>/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 60

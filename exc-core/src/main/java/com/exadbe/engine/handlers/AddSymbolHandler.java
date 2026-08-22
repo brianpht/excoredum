@@ -15,6 +15,20 @@ import com.exadbe.protocol.CommandResultCode;
  */
 public final class AddSymbolHandler {
 
+    /**
+     * Upper bound for scale factors. Money math multiplies {@code size * price *
+     * scaleK}, so an unbounded scale factor makes the placement-time overflow
+     * guards the only defence; capping it keeps every resting hold within a
+     * documented range and rejects degenerate specs up front.
+     */
+    public static final long MAX_SCALE_K = 1_000_000_000_000L;
+
+    /**
+     * Upper bound for per-lot fees (quote units). Fees multiply against swept
+     * size, so the same reasoning as {@link #MAX_SCALE_K} applies.
+     */
+    public static final long MAX_FEE = 1_000_000_000_000L;
+
     private final SymbolSpecStore symbols;
 
     public AddSymbolHandler(final SymbolSpecStore symbols) {
@@ -32,8 +46,12 @@ public final class AddSymbolHandler {
             final CommandOutcome out) {
         if (baseScaleK <= 0L
                 || quoteScaleK <= 0L
+                || baseScaleK > MAX_SCALE_K
+                || quoteScaleK > MAX_SCALE_K
                 || takerFee < 0L
                 || makerFee < 0L
+                || takerFee > MAX_FEE
+                || makerFee > MAX_FEE
                 || makerFee > takerFee
                 || baseCurrency == quoteCurrency) {
             out.resultCode(CommandResultCode.INVALID_AMOUNT);

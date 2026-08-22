@@ -131,12 +131,23 @@ public final class ClusterConfig {
      * cluster client.
      */
     public static String ingressEndpoints(final int nodeCount) {
+        return ingressEndpoints(nodeCount, "localhost");
+    }
+
+    /** Multi-host variant of {@link #ingressEndpoints(int)} for a distributed cluster. */
+    public static String ingressEndpoints(final int nodeCount, final String host) {
+        if (nodeCount <= 0) {
+            throw new IllegalArgumentException("nodeCount must be positive, was: " + nodeCount);
+        }
+        if (host == null || host.isBlank()) {
+            throw new IllegalArgumentException("host is required");
+        }
         final StringBuilder sb = new StringBuilder();
         for (int i = 0; i < nodeCount; i++) {
             if (i > 0) {
                 sb.append(',');
             }
-            sb.append(i).append("=localhost:").append(PORT_BASE + (i * PORT_STRIDE));
+            sb.append(i).append('=').append(host).append(':').append(PORT_BASE + (i * PORT_STRIDE));
         }
         return sb.toString();
     }
@@ -152,8 +163,43 @@ public final class ClusterConfig {
                 + host + ":" + (portBase + 4);
     }
 
+    /** Whether the members string (entries separated by {@code |}) has a member with id {@code nodeId}. */
+    private static boolean containsMember(final String members, final int nodeId) {
+        for (final String entry : members.split("\\|")) {
+            final int comma = entry.indexOf(',');
+            if (comma <= 0) {
+                continue;
+            }
+            try {
+                if (Integer.parseInt(entry.substring(0, comma).trim()) == nodeId) {
+                    return true;
+                }
+            } catch (final NumberFormatException ignored) {
+                // Malformed entry; reported as an invalid members string by the caller.
+            }
+        }
+        return false;
+    }
+
     /** Assembles a node config given its directory root, host, and members string. */
     private static ClusterConfig build(final int nodeId, final Path baseDir, final String host, final String members) {
+        if (nodeId < 0) {
+            throw new IllegalArgumentException("nodeId must be non-negative, was: " + nodeId);
+        }
+        if (baseDir == null) {
+            throw new IllegalArgumentException("baseDir is required");
+        }
+        if (host == null || host.isBlank()) {
+            throw new IllegalArgumentException("host is required");
+        }
+        if (members == null || members.isBlank()) {
+            throw new IllegalArgumentException("clusterMembers is required");
+        }
+        if (!containsMember(members, nodeId)) {
+            // A node that is not in its own members string can never join (or
+            // re-join) the cluster; fail at construction instead of hanging.
+            throw new IllegalArgumentException("clusterMembers does not contain an entry for nodeId " + nodeId);
+        }
         final int archivePort = PORT_BASE + (nodeId * PORT_STRIDE) + 4;
         return new ClusterConfig(
                 nodeId,

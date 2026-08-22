@@ -148,6 +148,18 @@ public final class ReadClientConfig {
         }
 
         public ReadClientConfig build() {
+            if (messageTimeoutNs <= 0L) {
+                throw new IllegalArgumentException("messageTimeoutNs must be positive, was: " + messageTimeoutNs);
+            }
+            if (retryBackoffNs < 0L) {
+                throw new IllegalArgumentException("retryBackoffNs must be non-negative, was: " + retryBackoffNs);
+            }
+            if (maxRetries < 0) {
+                throw new IllegalArgumentException("maxRetries must be non-negative, was: " + maxRetries);
+            }
+            if (maxInFlight <= 0) {
+                throw new IllegalArgumentException("maxInFlight must be positive, was: " + maxInFlight);
+            }
             return new ReadClientConfig(this);
         }
     }

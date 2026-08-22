@@ -182,6 +182,32 @@ public final class ClientConfig {
         }
 
         public ClientConfig build() {
+            if (maxRetries == 0 && dedupWindow == 0) {
+                // Unbounded resend with no dedup-window safety means a command whose
+                // result never arrives is retried forever, and once the in-flight
+                // window is full every later submit backpressures permanently.
+                throw new IllegalArgumentException(
+                        "maxRetries=0 with dedupWindow=0 would retransmit forever and exhaust the in-flight window");
+            }
+            if (maxRetries < 0) {
+                throw new IllegalArgumentException("maxRetries must be non-negative, was: " + maxRetries);
+            }
+            if (dedupWindow < 0) {
+                throw new IllegalArgumentException("dedupWindow must be non-negative, was: " + dedupWindow);
+            }
+            if (maxInFlight <= 0) {
+                throw new IllegalArgumentException("maxInFlight must be positive, was: " + maxInFlight);
+            }
+            if (messageTimeoutNs <= 0L) {
+                throw new IllegalArgumentException("messageTimeoutNs must be positive, was: " + messageTimeoutNs);
+            }
+            if (retryBackoffNs < 0L) {
+                throw new IllegalArgumentException("retryBackoffNs must be non-negative, was: " + retryBackoffNs);
+            }
+            if (keepaliveIntervalNs < 0L) {
+                throw new IllegalArgumentException(
+                        "keepaliveIntervalNs must be non-negative, was: " + keepaliveIntervalNs);
+            }
             return new ClientConfig(this);
         }
     }

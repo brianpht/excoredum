@@ -16,6 +16,7 @@ import com.exadbe.read.order.OrderRecord;
 import com.exadbe.read.report.SingleUserReport;
 import com.exadbe.read.report.TotalCurrencyBalance;
 import io.aeron.Aeron;
+import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.logbuffer.Header;
@@ -49,6 +50,7 @@ public final class QueryResponder implements AutoCloseable {
     private final ExcReadReplica replica;
     private final Aeron aeron;
     private final Subscription requests;
+    private final FragmentAssembler requestAssembler;
     private final MessageHeaderDecoder headerDecoder = new MessageHeaderDecoder();
     private final QueryRequestDecoder requestDecoder = new QueryRequestDecoder();
     private final MessageHeaderEncoder headerEncoder = new MessageHeaderEncoder();
@@ -69,6 +71,7 @@ public final class QueryResponder implements AutoCloseable {
     public QueryResponder(final ExcReadReplica replica, final ReadReplicaConfig config) {
         this.replica = replica;
         this.aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectoryName()));
+        this.requestAssembler = new FragmentAssembler(this::onRequest);
         try {
             this.requests = aeron.addSubscription(config.queryRequestChannel(), config.queryRequestStreamId());
         } catch (final RuntimeException e) {
@@ -79,7 +82,7 @@ public final class QueryResponder implements AutoCloseable {
 
     /** Advances request delivery and reply publishing; call from the replica's polling thread. */
     public int poll() {
-        return requests.poll(this::onRequest, FRAGMENT_LIMIT);
+        return requests.poll(requestAssembler, FRAGMENT_LIMIT);
     }
 
     /** Number of queries answered. */
@@ -99,7 +102,8 @@ public final class QueryResponder implements AutoCloseable {
 
     private void onRequest(final DirectBuffer buffer, final int offset, final int length, final Header header) {
         headerDecoder.wrap(buffer, offset);
-        if (headerDecoder.templateId() != QueryRequestDecoder.TEMPLATE_ID
+        if (headerDecoder.schemaId() != MessageHeaderDecoder.SCHEMA_ID
+                || headerDecoder.templateId() != QueryRequestDecoder.TEMPLATE_ID
                 || length < MessageHeaderDecoder.ENCODED_LENGTH + headerDecoder.blockLength()) {
             return;
         }
@@ -111,14 +115,25 @@ public final class QueryResponder implements AutoCloseable {
         received++;
 
         final String responseChannel = requestDecoder.responseChannel();
-        if (responseChannel == null || responseChannel.isEmpty()) {
+        if (responseChannel == null || responseChannel.isEmpty() || !isAllowedChannel(responseChannel)) {
+            return;
+        }
+        // The uint32 stream id narrows to a Java int; a value whose top bit is set
+        // is negative and invalid for Aeron, so reject it rather than open a
+        // publication on a bogus stream.
+        final int responseStreamId = (int) requestDecoder.responseStreamId();
+        if (responseStreamId < 0) {
             return;
         }
         final int responseLength = encodeResponse();
         if (responseLength <= 0) {
             return;
         }
-        final Publication publication = responsePublication(responseChannel, (int) requestDecoder.responseStreamId());
+        final Publication publication = responsePublication(responseChannel, responseStreamId);
+        if (publication == null) {
+            dropped++;
+            return;
+        }
         final long result = publication.offer(responseBuffer, 0, responseLength);
         if (result < 0) {
             dropped++;
@@ -402,13 +417,25 @@ public final class QueryResponder implements AutoCloseable {
         }
     }
 
+    // The replica only ever publishes responses over UDP (or IPC). Anything else
+    // (TCP, exotic schemes) is rejected so a malformed client cannot open an
+    // arbitrary publication or cause addPublication to throw out of poll().
+    private static boolean isAllowedChannel(final String channel) {
+        return channel.startsWith("aeron:udp") || channel.startsWith("aeron:ipc");
+    }
+
     private Publication responsePublication(final String channel, final int streamId) {
         final String key = channel + '\u0000' + streamId;
         Publication publication = responsePublications.get(key);
         if (publication != null) {
             return publication;
         }
-        publication = aeron.addPublication(channel, streamId);
+        try {
+            publication = aeron.addPublication(channel, streamId);
+        } catch (final RuntimeException e) {
+            // A malformed channel must not kill the poll loop; skip the reply.
+            return null;
+        }
         if (responsePublications.size() >= MAX_RESPONSE_PUBLICATIONS) {
             final Iterator<Map.Entry<String, Publication>> iterator =
                     responsePublications.entrySet().iterator();

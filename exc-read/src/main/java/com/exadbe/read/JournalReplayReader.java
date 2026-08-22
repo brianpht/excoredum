@@ -5,7 +5,6 @@ import com.exadbe.read.config.ReadReplicaConfig;
 import io.aeron.Aeron;
 import io.aeron.Subscription;
 import io.aeron.archive.client.AeronArchive;
-import io.aeron.archive.client.RecordingDescriptorConsumer;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
 
@@ -21,7 +20,8 @@ import io.aeron.driver.ThreadingMode;
 public final class JournalReplayReader implements AutoCloseable {
 
     private static final int JOURNAL_REPLAY_STREAM_ID = 44;
-    private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 10_000L;
+    // Bounded so a stuck endpoint resolution cannot freeze the poll thread.
+    private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 2_000L;
 
     private final MediaDriver mediaDriver;
     private final Aeron aeron;
@@ -122,30 +122,7 @@ public final class JournalReplayReader implements AutoCloseable {
     }
 
     private long findRecording() {
-        final long[] latest = {-1L};
-        final RecordingDescriptorConsumer consumer =
-                (controlSessionId,
-                        correlationId,
-                        recId,
-                        startTimestamp,
-                        stopTimestamp,
-                        startPos,
-                        stopPos,
-                        initialTermId,
-                        segmentFileLength,
-                        termBufferLength,
-                        mtuLength,
-                        sessionId,
-                        streamId,
-                        strippedChannel,
-                        originalChannel,
-                        sourceIdentity) -> {
-                    if (streamId == JournalStreams.JOURNAL_STREAM_ID && recId > latest[0]) {
-                        latest[0] = recId;
-                    }
-                };
-        archive.listRecordings(0L, 100, consumer);
-        return latest[0];
+        return ArchiveRecordings.latestRecordingId(archive, JournalStreams.JOURNAL_STREAM_ID);
     }
 
     private static String awaitResolvedEndpoint(final Subscription subscription) {

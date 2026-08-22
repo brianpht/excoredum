@@ -13,6 +13,8 @@ public final class ReplicationHealth {
     private volatile long failovers;
     private volatile long integrityFailures;
     private volatile long snapshotsLoaded;
+    private volatile long rebuildFailures;
+    private volatile long checkpointFailures;
 
     /** Records a successful following cycle at the given cluster-global position. */
     public void markHealthy(final String endpoint, final long position) {
@@ -43,6 +45,16 @@ public final class ReplicationHealth {
         snapshotsLoaded++;
     }
 
+    /** Counts one ledger-rebuild attempt that failed and will be retried. */
+    public void recordRebuildFailure() {
+        rebuildFailures++;
+    }
+
+    /** Counts one checkpoint write or load that failed. */
+    public void recordCheckpointFailure() {
+        checkpointFailures++;
+    }
+
     public boolean isHealthy() {
         return healthy;
     }
@@ -69,5 +81,15 @@ public final class ReplicationHealth {
     /** Number of service snapshots loaded into the engine. */
     public long snapshotsLoaded() {
         return snapshotsLoaded;
+    }
+
+    /** Number of ledger-rebuild attempts that failed and were retried. */
+    public long rebuildFailures() {
+        return rebuildFailures;
+    }
+
+    /** Number of checkpoint write or load failures. */
+    public long checkpointFailures() {
+        return checkpointFailures;
     }
 }

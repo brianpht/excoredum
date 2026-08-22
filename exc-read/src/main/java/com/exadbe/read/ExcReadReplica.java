@@ -114,7 +114,13 @@ public final class ExcReadReplica implements AutoCloseable {
                 this.currentSource = data.currentSource() % archiveControlChannels.length;
                 this.lastCheckpointPosition = appliedPosition;
             } catch (final IOException e) {
-                throw new IllegalStateException("failed to load replica checkpoint " + config.checkpointFile(), e);
+                // A corrupt checkpoint must not make the replica unconstructable:
+                // fall back to a cold start (the consensus log is replayed in
+                // full) and surface the failure through the health counters.
+                health.recordCheckpointFailure();
+                this.ledger = new OrderLedger();
+                this.appliedPosition = 0L;
+                this.lastCheckpointPosition = -1L;
             }
         }
     }
@@ -138,6 +144,12 @@ public final class ExcReadReplica implements AutoCloseable {
                 return 0;
             }
             probeIfDue(now);
+            // probeIfDue may fail the source over (setting liveLog null); a null
+            // dereference here would re-trigger failover in the catch and advance
+            // the source twice in one poll.
+            if (liveLog == null) {
+                return 0;
+            }
             final int fragments = liveLog.poll(FRAGMENT_LIMIT);
             if (fragments > 0) {
                 lastActivityMs = now;
@@ -257,6 +269,7 @@ public final class ExcReadReplica implements AutoCloseable {
             if (!ledgerRebuilder.start(archive, appliedPosition)) {
                 ledgerRebuilder.close();
                 ledgerRebuilder = null;
+                health.recordRebuildFailure();
                 nextLedgerRebuildMs = System.currentTimeMillis() + config.failoverBackoffMs();
                 return;
             }
@@ -267,6 +280,7 @@ public final class ExcReadReplica implements AutoCloseable {
             // ledger is never swapped in. Retry after a backoff.
             ledgerRebuilder.close();
             ledgerRebuilder = null;
+            health.recordRebuildFailure();
             nextLedgerRebuildMs = System.currentTimeMillis() + config.failoverBackoffMs();
             return;
         }
@@ -301,8 +315,9 @@ public final class ExcReadReplica implements AutoCloseable {
             lastCheckpointPosition = appliedPosition;
         } catch (final IOException e) {
             // A checkpoint write failure must not kill the replica; it retries
-            // on the next interval.
-            e.printStackTrace();
+            // on the next interval. The failure is counted (not printed) so it is
+            // observable operationally without synchronous console I/O.
+            health.recordCheckpointFailure();
         }
     }
 

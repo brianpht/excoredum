@@ -31,7 +31,8 @@ public interface CounterSink {
         ORDER_POOL_EXHAUSTED,
         PRICE_BUCKET_POOL_EXHAUSTED,
         JOURNAL_BACKPRESSURE,
-        JOURNAL_RECORDER_ERRORS;
+        JOURNAL_RECORDER_ERRORS,
+        DEDUP_EVICTIONS;
 
         /** Number of distinct counters; useful for sizing off-heap buffers. */
         public static final int COUNT = values().length;

@@ -94,6 +94,18 @@ public final class MatchingEngine {
             return false;
         }
 
+        // The uid field is uint64 on the wire, so -1 (all-ones) is the "absent"
+        // sentinel of CommandResult/DedupRecord, and Long.MIN_VALUE is the missing
+        // sentinel of the account-status map. Either as a real uid would be read
+        // back as "no uid" after a snapshot round-trip (or be rejected by the
+        // status map), silently corrupting the cached-result invariant.
+        if (cmd.uid() == DedupRing.EMPTY || cmd.uid() == AccountStore.MISSING) {
+            out.reset(cmd.commandIdHi(), cmd.commandIdLo());
+            out.resultCode(CommandResultCode.INVALID_AMOUNT);
+            metrics.onCommandProcessed();
+            return false;
+        }
+
         final DedupRing ring = dedup.ringFor(clientId);
         if (ring != null && ring.contains(clientSeq)) {
             out.set(
@@ -126,7 +138,7 @@ public final class MatchingEngine {
             metrics.onPriceBucketPoolExhausted();
         }
 
-        dedup.store(
+        if (dedup.store(
                 clientId,
                 clientSeq,
                 idHi,
@@ -137,7 +149,13 @@ public final class MatchingEngine {
                 out.orderId(),
                 out.hasOrderId(),
                 out.filledSize(),
-                out.hasFilledSize());
+                out.hasFilledSize())) {
+            // A different, older sequence was evicted from this client's bounded
+            // window; its cached result is now unrecoverable. The SDK coordinates
+            // with the window so a live resend never falls out, but the count is
+            // surfaced so an operator can detect a mis-sized window.
+            metrics.onDedupEviction();
+        }
         metrics.onCommandProcessed();
         return false;
     }
@@ -174,6 +192,14 @@ public final class MatchingEngine {
         final long orderId = cmd.orderId();
         final long uid = cmd.uid();
         out.uid(uid);
+        // The int64 "absent" sentinel (Long.MIN_VALUE) is the null value of the
+        // optional orderId in CommandResult/DedupRecord; a real order with that id
+        // would be read back as "no order id" after a snapshot round-trip. Reject
+        // before recording the order id on the outcome.
+        if (orderId == CommandEnvelopeDecoder.orderIdNullValue()) {
+            out.resultCode(CommandResultCode.INVALID_AMOUNT);
+            return;
+        }
         out.orderId(orderId);
 
         final SymbolSpec spec = symbols.get(symbolId);
@@ -288,6 +314,10 @@ public final class MatchingEngine {
         final long uid = cmd.uid();
         final long orderId = cmd.orderId();
         out.uid(uid);
+        if (orderId == CommandEnvelopeDecoder.orderIdNullValue()) {
+            out.resultCode(CommandResultCode.INVALID_AMOUNT);
+            return;
+        }
         out.orderId(orderId);
         final int symbolId = cmd.symbolId();
         final OrderBookNaive book = books.get(symbolId);
@@ -306,6 +336,10 @@ public final class MatchingEngine {
         final long uid = cmd.uid();
         final long orderId = cmd.orderId();
         out.uid(uid);
+        if (orderId == CommandEnvelopeDecoder.orderIdNullValue()) {
+            out.resultCode(CommandResultCode.INVALID_AMOUNT);
+            return;
+        }
         out.orderId(orderId);
         final int symbolId = cmd.symbolId();
         final OrderBookNaive book = books.get(symbolId);
@@ -324,6 +358,10 @@ public final class MatchingEngine {
         final long uid = cmd.uid();
         final long orderId = cmd.orderId();
         out.uid(uid);
+        if (orderId == CommandEnvelopeDecoder.orderIdNullValue()) {
+            out.resultCode(CommandResultCode.INVALID_AMOUNT);
+            return;
+        }
         out.orderId(orderId);
         final int symbolId = cmd.symbolId();
         final OrderBookNaive book = books.get(symbolId);

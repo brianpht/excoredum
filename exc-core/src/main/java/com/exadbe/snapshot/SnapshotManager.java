@@ -74,6 +74,15 @@ public final class SnapshotManager {
     private boolean footerSeen;
     private long loadedLogPosition;
 
+    // Counts announced by the snapshot header, cross-checked against the records
+    // actually decoded so a truncated or tampered recording cannot silently
+    // commit an under-populated store.
+    private long headerSymbolCount = -1L;
+    private long headerUserCount = -1L;
+    private long headerOrderCount = -1L;
+    private long headerDedupClientCount = -1L;
+    private long loadedOrderCount;
+
     /** Receives one encoded snapshot record. */
     @FunctionalInterface
     public interface SnapshotSink {
@@ -237,6 +246,11 @@ public final class SnapshotManager {
         this.expectedChecksum = 0L;
         this.footerSeen = false;
         this.loadedLogPosition = 0L;
+        this.headerSymbolCount = -1L;
+        this.headerUserCount = -1L;
+        this.headerOrderCount = -1L;
+        this.headerDedupClientCount = -1L;
+        this.loadedOrderCount = 0L;
     }
 
     /** Decodes and applies a single snapshot record. */
@@ -251,6 +265,10 @@ public final class SnapshotManager {
             case SnapshotHeaderDecoder.TEMPLATE_ID -> {
                 snapshotHeaderDecoder.wrap(buffer, bodyOffset, blockLength, version);
                 loadedLogPosition = snapshotHeaderDecoder.logPosition();
+                headerSymbolCount = snapshotHeaderDecoder.symbolCount();
+                headerUserCount = snapshotHeaderDecoder.userCount();
+                headerOrderCount = snapshotHeaderDecoder.orderCount();
+                headerDedupClientCount = snapshotHeaderDecoder.dedupClientCount();
             }
             case SymbolSpecRecordDecoder.TEMPLATE_ID -> {
                 symbolDecoder.wrap(buffer, bodyOffset, blockLength, version);
@@ -275,10 +293,17 @@ public final class SnapshotManager {
             }
             case BalanceRecordDecoder.TEMPLATE_ID -> {
                 balanceDecoder.wrap(buffer, bodyOffset, blockLength, version);
+                if (!loadAccounts.userExists(balanceDecoder.uid())) {
+                    // A balance whose user never appeared in a UserRecord is not a
+                    // clean store state (the map lookup would NPE); fail with a
+                    // clear diagnostic rather than a bare null dereference.
+                    throw new IllegalStateException("snapshot balance references unknown user " + balanceDecoder.uid());
+                }
                 loadAccounts.set(balanceDecoder.uid(), balanceDecoder.currency(), balanceDecoder.balance());
             }
             case OrderRecordDecoder.TEMPLATE_ID -> {
                 orderDecoder.wrap(buffer, bodyOffset, blockLength, version);
+                loadedOrderCount++;
                 loadOrders.restore(
                         orderDecoder.symbolId(),
                         orderDecoder.orderId(),
@@ -332,7 +357,18 @@ public final class SnapshotManager {
 
     /** Verifies that the restored state reproduces the checksum carried by the footer. */
     public boolean verifyInvariant() {
-        return footerSeen && computeChecksum(loadSymbols, loadAccounts, loadOrderSource, loadDedup) == expectedChecksum;
+        if (!footerSeen) {
+            return false;
+        }
+        // Cross-check the header's announced counts against what actually decoded,
+        // so a truncated stream that happens to hash cleanly cannot slip through.
+        if (headerSymbolCount != loadSymbols.size()
+                || headerUserCount != loadAccounts.userCount()
+                || headerOrderCount != loadedOrderCount
+                || headerDedupClientCount != loadDedup.clientCount()) {
+            return false;
+        }
+        return computeChecksum(loadSymbols, loadAccounts, loadOrderSource, loadDedup) == expectedChecksum;
     }
 
     /** Deterministic fingerprint of the given state, identical to a snapshot footer checksum. */
@@ -393,6 +429,12 @@ public final class SnapshotManager {
                     h[0] = combine(h[0], cmdHi);
                     h[0] = combine(h[0], cmdLo);
                     h[0] = combine(h[0], code);
+                    h[0] = combine(h[0], hasUid ? 1L : 0L);
+                    h[0] = combine(h[0], uid);
+                    h[0] = combine(h[0], hasOrderId ? 1L : 0L);
+                    h[0] = combine(h[0], orderId);
+                    h[0] = combine(h[0], hasFilledSize ? 1L : 0L);
+                    h[0] = combine(h[0], filledSize);
                 });
         return h[0];
     }

@@ -92,6 +92,95 @@ together**; restart from snapshot + log remains compatible.
 
 ---
 
+## P2/P3 resolution (2026-08-22)
+
+This round addressed the P2 and P3 backlog. Summary of what changed and how:
+
+- **F-12** - the snapshot checksum now folds the dedup record's uid/orderId/
+  filledSize and their presence flags into `SnapshotManager.computeChecksum`.
+  Covered by `SnapshotIntegrityTest.corruptedDedupFieldFailsInvariant`.
+- **F-13** - `eventIndex`/`eventCount` are widened to uint32 via optional
+  `sinceVersion=5` extension fields (`eventIndexExt` on TradeEvent / ReduceEvent /
+  RejectEvent / JournalEvent, `eventCountExt` on CommandResult); encoders write
+  both, decoders prefer the extension and fall back to the legacy uint16 for pre-v5
+  frames. `JournalDedup` now keys on a `long` index. Schema bumped to version 5,
+  `semanticVersion` 2.0 (F-42).
+- **F-14** - `ADD_SYMBOL` now also rejects scale factors and fees above a
+  documented upper bound (`AddSymbolHandler.MAX_SCALE_K` / `MAX_FEE`).
+- **F-15** - dedup-window eviction is counted (`CoreMetrics.dedupEvictions`,
+  mirrored off-heap) rather than silently ignored.
+- **F-16** - `CoreConfig` validates all capacities (positive, power-of-two for
+  `dedupWindow` and `journalSlotCount`) and gains a `builder()`; `DedupRing`
+  rejects non-power-of-two capacities.
+- **F-17** - snapshot load cross-checks the header's symbol/user/order/dedup-client
+  counts against what actually decoded, and a balance for an unknown user raises a
+  clean `IllegalStateException`; uid and orderId values that collide with the
+  optional-field sentinels (`-1`, `Long.MIN_VALUE`) are rejected before caching.
+- **F-18** - `probeIfDue` failover no longer NPEs and double-fails-over in one poll.
+- **F-19** - ledger-rebuild failures are counted (`ReplicationHealth.rebuildFailures`).
+- **F-20** - `listRecordings(0, N, ...)` caps replaced by paginated enumeration
+  (`ArchiveRecordings`), so the newest recording is never missed.
+- **F-21** - `awaitResolvedEndpoint` waits are bounded to 2 s (were 10 s); the
+  consensus/journal recording sniffs were already fixed in the prior round.
+- **F-22** - `QueryResponder` validates the response channel scheme, rejects a
+  narrowing-negative stream id, and catches malformed-channel `addPublication`.
+- **F-23** - both `QueryResponder` and `ReadClient` validate the message
+  `schemaId`; unknown query types degrade to `UNSUPPORTED` (no NPE).
+- **F-24** - async queries carry an overall budget (`messageTimeoutNs`) even with
+  `maxRetries=0`, and a timed-out sync query releases its window slot.
+- **F-25** - synchronous awaits use a small stack, so a nested sync query from a
+  listener callback no longer corrupts the outer await.
+- **F-26** - `ClientConfig.build()` rejects `maxRetries=0` with `dedupWindow=0`
+  and validates the remaining knobs.
+- **F-27** - reconnect uses the configured message timeout (not a hardcoded 5 s)
+  and counts failures (`reconnectsFailures()`).
+- **F-28** - `ClusterConfig` validates nodeId, host, members, and that the node is
+  a member of its own members string.
+- **F-29** - Docker base images pinned by digest; runtime runs as unprivileged
+  user `excoredum`.
+- **F-30** / **F-47** - `docs/decisions/` now exists with the performance budget
+  and an ADR recording that hot agents are not pinned in-repo (deployment concern).
+- **F-34** - `QueryResponder` reassembles fragments (`FragmentAssembler`).
+- **F-35** - checkpoint write/load failures fall back to cold start and are
+  counted (`ReplicationHealth.checkpointFailures`) instead of `printStackTrace`.
+- **F-36** - `HaJournalConsumer` backs off between reconnect attempts and resumes
+  from the last consumed position when reconnecting to the same recording.
+- **F-38** - request ids never wrap through 0; `ReadClientConfig` validated.
+- **F-39** - `ClusterConfig.ingressEndpoints(nodeCount, host)` multi-host variant.
+- **F-40** - counters direct buffers are freed on close and on construction failure
+  (allocated manually so the original buffer, not a slice, is freed).
+- **F-41** - egress dispatch drops truncated frames; the NOP keepalive uses a
+  reserved pool slot so a full window cannot starve session liveness.
+- **F-43** - entrypoints take the first `hostname -i` address; healthchecks probe
+  a pid file (`kill -0`) instead of depending on `pgrep`.
+- **F-44** - exc-tests comments fixed (cluster/fault ARE in `check`); exc-protocol
+  checkstyle scoped to hand-written `QueryStreams.java` only.
+- **F-45** - JaCoCo report and a verification task merge all test tasks' exec data
+  and set a floor.
+- **F-46** - `.github/workflows/ci.yml` and `scripts/jmh-regression.py` added.
+
+Not changed (documented, deliberate):
+
+- **F-31** - duplicate `orderId` on PLACE still matches then rejects the remainder
+  (exchange-core semantics, deterministic; changing it would break log-replay
+  determinism).
+- **F-32** - pool exhaustion still falls back to `new` (instrumented design).
+- **F-37** - the read replica's replay loop still allocates `MarketTrade`/`Fill`
+  records and uses `ArrayList.remove` on eviction; the read side is not the hot
+  path and its records are returned to callers by reference.
+
+Test additions: `InputValidationTest` (uid/orderId sentinels, scale/fee caps,
+eviction counter), `CoreConfigTest`, `NegativeResultCodesTest`,
+`SnapshotIntegrityTest.corruptedDedupFieldFailsInvariant`,
+`EventCodecExtRoundTripTest`, plus the `InMemorySnapshot.corruptFirstDedupUid`
+fixture.
+
+Upgrade note: F-13 widens the wire format (schema v5) and F-14/F-17 add reject
+paths, so all nodes, write clients, read replicas, and HA journal consumers must
+be upgraded together. Pre-v5 journal recordings decode via the legacy uint16
+index; new recordings carry the extension field. Snapshot and consensus-log
+formats are unchanged.
+
 ## P0 findings (fixed this round)
 
 ### F-01 - PLACE accepts negative size / price: money minting

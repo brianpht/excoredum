@@ -17,6 +17,7 @@ import io.aeron.cluster.service.ClusteredService;
 import io.aeron.cluster.service.ClusteredServiceContainer;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
+import java.nio.ByteBuffer;
 import java.util.Locale;
 import org.agrona.BitUtil;
 import org.agrona.BufferUtil;
@@ -54,6 +55,8 @@ public final class ClusterNode implements AutoCloseable {
     private final ClusteredMediaDriver clusteredMediaDriver;
     private final ClusteredServiceContainer container;
     private final CountersManager countersManager;
+    private final ByteBuffer countersValuesBuffer;
+    private final ByteBuffer countersMetadataBuffer;
     private final CoreMetrics metrics;
     private final Aeron journalAeron;
     private final AeronArchive journalArchive;
@@ -89,7 +92,17 @@ public final class ClusterNode implements AutoCloseable {
             final CoreConfig coreConfig,
             final boolean cleanStart,
             final ClusteredServiceFactory serviceFactory) {
-        this.countersManager = newCountersManager();
+        // Allocate the counters buffers manually (rather than via
+        // BufferUtil.allocateDirectAligned) so the ORIGINAL direct buffer is
+        // retained and can be freed on close: allocateDirectAligned returns a
+        // slice, which Unsafe.invokeCleaner rejects ("duplicate or slice").
+        final int valuesCapacity = counterCount() * CountersManager.COUNTER_LENGTH;
+        final int metadataCapacity = counterCount() * CountersManager.METADATA_LENGTH;
+        this.countersValuesBuffer = ByteBuffer.allocateDirect(valuesCapacity + BitUtil.CACHE_LINE_LENGTH);
+        this.countersMetadataBuffer = ByteBuffer.allocateDirect(metadataCapacity + BitUtil.CACHE_LINE_LENGTH);
+        this.countersManager = new CountersManager(
+                new UnsafeBuffer(alignedSlice(countersMetadataBuffer, metadataCapacity)),
+                new UnsafeBuffer(alignedSlice(countersValuesBuffer, valuesCapacity)));
         final AtomicCounter[] counters = allocateCounters(countersManager);
         this.metrics = new CoreMetrics(new AtomicCounterSink(counters, allocateGauges(countersManager)));
         final AtomicCounter journalRecorderErrors = counters[CounterSink.Counter.JOURNAL_RECORDER_ERRORS.ordinal()];
@@ -138,9 +151,10 @@ public final class ClusterNode implements AutoCloseable {
         try {
             this.container = ClusteredServiceContainer.launch(serviceContext);
         } catch (final RuntimeException e) {
-            // Do not leak the media driver (and its non-daemon agent threads) if
-            // the service container fails to start.
+            // Do not leak the media driver (and its non-daemon agent threads) or
+            // the counters buffers if the service container fails to start.
             clusteredMediaDriver.close();
+            freeCountersBuffers();
             throw e;
         }
 
@@ -185,6 +199,7 @@ public final class ClusterNode implements AutoCloseable {
                 CloseHelper.quietClose(aeronClient);
                 container.close();
                 clusteredMediaDriver.close();
+                freeCountersBuffers();
                 throw e;
             }
         }
@@ -221,15 +236,31 @@ public final class ClusterNode implements AutoCloseable {
         if (clusteredMediaDriver != null) {
             clusteredMediaDriver.close();
         }
+        freeCountersBuffers();
     }
 
-    private static CountersManager newCountersManager() {
-        final int maxCounters = CounterSink.Counter.COUNT + CounterSink.Gauge.COUNT;
-        final UnsafeBuffer valuesBuffer = new UnsafeBuffer(BufferUtil.allocateDirectAligned(
-                maxCounters * CountersManager.COUNTER_LENGTH, BitUtil.CACHE_LINE_LENGTH));
-        final UnsafeBuffer metadataBuffer = new UnsafeBuffer(BufferUtil.allocateDirectAligned(
-                maxCounters * CountersManager.METADATA_LENGTH, BitUtil.CACHE_LINE_LENGTH));
-        return new CountersManager(metadataBuffer, valuesBuffer);
+    private static int counterCount() {
+        return CounterSink.Counter.COUNT + CounterSink.Gauge.COUNT;
+    }
+
+    // Returns a cache-line-aligned slice of {@code original} covering
+    // {@code capacity} bytes, matching BufferUtil.allocateDirectAligned but
+    // leaving {@code original} available for a clean free().
+    private static ByteBuffer alignedSlice(final ByteBuffer original, final int capacity) {
+        final long address = BufferUtil.address(original);
+        final int remainder = (int) (address & (BitUtil.CACHE_LINE_LENGTH - 1L));
+        final int offset = BitUtil.CACHE_LINE_LENGTH - remainder;
+        original.limit(capacity + offset);
+        original.position(offset);
+        return original.slice();
+    }
+
+    // The counters are views into two direct buffers the manager does not free;
+    // release them explicitly here and on construction failure so the off-heap
+    // memory is not leaked.
+    private void freeCountersBuffers() {
+        BufferUtil.free(countersValuesBuffer);
+        BufferUtil.free(countersMetadataBuffer);
     }
 
     private static AtomicCounter[] allocateCounters(final CountersManager countersManager) {

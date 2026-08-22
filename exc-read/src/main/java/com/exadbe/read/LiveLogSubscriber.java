@@ -36,7 +36,9 @@ final class LiveLogSubscriber implements AutoCloseable {
 
     private static final int CONSENSUS_FRAMING_LENGTH =
             io.aeron.cluster.codecs.MessageHeaderDecoder.ENCODED_LENGTH + SessionMessageHeaderDecoder.BLOCK_LENGTH;
-    private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 10_000L;
+    // Bounded so a stuck endpoint resolution cannot freeze the replica's poll
+    // thread (and thus query serving) for the full default.
+    private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 2_000L;
 
     private final AeronArchive archive;
     private final MatchingEngine engine;
@@ -108,7 +110,8 @@ final class LiveLogSubscriber implements AutoCloseable {
     /**
      * Locates the consensus recording, verifies it covers {@code startPosition},
      * and starts a bounded replay plus the subscription that {@link #poll(int)}
-     * drains. Must be called on the polling thread.
+     * drains. Must be called on the polling thread. Endpoint resolution is
+     * bounded (not open-ended) so a stuck channel cannot freeze the poll thread.
      *
      * @return {@code true} when the replay started; {@code false} when no
      *     recording exists yet, the recording does not cover the requested
@@ -315,6 +318,6 @@ final class LiveLogSubscriber implements AutoCloseable {
                         out[2] = stopPos;
                     }
                 };
-        archive.listRecordings(0L, 200, consumer);
+        ArchiveRecordings.forEach(archive, consumer);
     }
 }

@@ -63,6 +63,7 @@ public final class DomainEventJournal {
         encoder.wrapAndApplyHeader(scratch, 0, headerEncoder)
                 .logPosition(logPosition)
                 .eventIndex(eventIndex)
+                .eventIndexExt(eventIndex)
                 .timestamp(timestamp)
                 .eventType(typeOf(e.kind()))
                 .symbolId(e.symbolId())

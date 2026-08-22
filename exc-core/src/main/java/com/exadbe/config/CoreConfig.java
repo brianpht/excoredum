@@ -65,6 +65,19 @@ public final class CoreConfig {
             final int eventBufferCapacity,
             final int journalSlotCount,
             final int journalSlotSize) {
+        requirePositive("symbolCapacity", symbolCapacity);
+        requirePositive("accountCapacity", accountCapacity);
+        requirePositive("dedupClientCapacity", dedupClientCapacity);
+        requirePowerOfTwo("dedupWindow", dedupWindow);
+        requirePositive("orderPoolCapacity", orderPoolCapacity);
+        requirePositive("priceBucketCapacity", priceBucketCapacity);
+        requirePositive("l2MaxLevels", l2MaxLevels);
+        requirePositive("eventBufferCapacity", eventBufferCapacity);
+        requirePowerOfTwo("journalSlotCount", journalSlotCount);
+        if (journalSlotSize <= 4) {
+            // A slot must hold at least the length header plus one byte.
+            throw new IllegalArgumentException("journalSlotSize must exceed 4, was: " + journalSlotSize);
+        }
         this.symbolCapacity = symbolCapacity;
         this.accountCapacity = accountCapacity;
         this.dedupClientCapacity = dedupClientCapacity;
@@ -75,6 +88,18 @@ public final class CoreConfig {
         this.eventBufferCapacity = eventBufferCapacity;
         this.journalSlotCount = journalSlotCount;
         this.journalSlotSize = journalSlotSize;
+    }
+
+    private static void requirePositive(final String name, final int value) {
+        if (value <= 0) {
+            throw new IllegalArgumentException(name + " must be positive, was: " + value);
+        }
+    }
+
+    private static void requirePowerOfTwo(final String name, final int value) {
+        if (value <= 0 || Integer.bitCount(value) != 1) {
+            throw new IllegalArgumentException(name + " must be a power of two, was: " + value);
+        }
     }
 
     public static CoreConfig defaults() {
@@ -89,6 +114,89 @@ public final class CoreConfig {
                 DEFAULT_EVENT_BUFFER_CAPACITY,
                 DEFAULT_JOURNAL_SLOT_COUNT,
                 DEFAULT_JOURNAL_SLOT_SIZE);
+    }
+
+    /** Starts a validated configuration from non-default capacities. */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /** Fluent builder with validation at {@link #build()}. */
+    public static final class Builder {
+        private int symbolCapacity = DEFAULT_SYMBOL_CAPACITY;
+        private int accountCapacity = DEFAULT_ACCOUNT_CAPACITY;
+        private int dedupClientCapacity = DEFAULT_DEDUP_CLIENT_CAPACITY;
+        private int dedupWindow = DEFAULT_DEDUP_WINDOW;
+        private int orderPoolCapacity = DEFAULT_ORDER_POOL_CAPACITY;
+        private int priceBucketCapacity = DEFAULT_PRICE_BUCKET_CAPACITY;
+        private int l2MaxLevels = DEFAULT_L2_MAX_LEVELS;
+        private int eventBufferCapacity = DEFAULT_EVENT_BUFFER_CAPACITY;
+        private int journalSlotCount = DEFAULT_JOURNAL_SLOT_COUNT;
+        private int journalSlotSize = DEFAULT_JOURNAL_SLOT_SIZE;
+
+        public Builder symbolCapacity(final int value) {
+            this.symbolCapacity = value;
+            return this;
+        }
+
+        public Builder accountCapacity(final int value) {
+            this.accountCapacity = value;
+            return this;
+        }
+
+        public Builder dedupClientCapacity(final int value) {
+            this.dedupClientCapacity = value;
+            return this;
+        }
+
+        public Builder dedupWindow(final int value) {
+            this.dedupWindow = value;
+            return this;
+        }
+
+        public Builder orderPoolCapacity(final int value) {
+            this.orderPoolCapacity = value;
+            return this;
+        }
+
+        public Builder priceBucketCapacity(final int value) {
+            this.priceBucketCapacity = value;
+            return this;
+        }
+
+        public Builder l2MaxLevels(final int value) {
+            this.l2MaxLevels = value;
+            return this;
+        }
+
+        public Builder eventBufferCapacity(final int value) {
+            this.eventBufferCapacity = value;
+            return this;
+        }
+
+        public Builder journalSlotCount(final int value) {
+            this.journalSlotCount = value;
+            return this;
+        }
+
+        public Builder journalSlotSize(final int value) {
+            this.journalSlotSize = value;
+            return this;
+        }
+
+        public CoreConfig build() {
+            return new CoreConfig(
+                    symbolCapacity,
+                    accountCapacity,
+                    dedupClientCapacity,
+                    dedupWindow,
+                    orderPoolCapacity,
+                    priceBucketCapacity,
+                    l2MaxLevels,
+                    eventBufferCapacity,
+                    journalSlotCount,
+                    journalSlotSize);
+        }
     }
 
     public int symbolCapacity() {

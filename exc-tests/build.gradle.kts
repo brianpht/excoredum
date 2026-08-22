@@ -2,7 +2,9 @@
 // injection, and integration tests. Hosts the test-only cluster client harness
 // via testFixtures (NOT a shipped Edge SDK).
 
+import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
+import org.gradle.testing.jacoco.tasks.JacocoReportBase
 
 plugins {
     `java-test-fixtures`
@@ -39,7 +41,7 @@ val integrationTest by tasks.registering(Test::class) {
     shouldRunAfter(tasks.named("test"))
 }
 
-// Multi-node cluster tests. Heavier; opt-in, NOT wired into `check`.
+// Multi-node cluster tests. Heavier; wired into `check`.
 val clusterTest by tasks.registering(Test::class) {
     description = "Runs multi-node Aeron cluster tests (leader election, catch-up)."
     group = "verification"
@@ -49,7 +51,7 @@ val clusterTest by tasks.registering(Test::class) {
     shouldRunAfter(integrationTest)
 }
 
-// Fault-injection tests (kill-leader mid-ACK). Opt-in, NOT wired into `check`.
+// Fault-injection tests (kill-leader mid-ACK). Wired into `check`.
 val faultTest by tasks.registering(Test::class) {
     description = "Runs fault-injection tests (leader kill, failover)."
     group = "verification"
@@ -106,16 +108,47 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 // Coverage: the suite lives here but exercises the production modules, so
-// attribute coverage of their main sources to this module's report.
-tasks.named<JacocoReport>("jacocoTestReport") {
-    val coveredProjects = listOf(":exc-core", ":exc-write-client", ":exc-launcher", ":exc-read", ":exc-read-client")
-    dependsOn("test", "integrationTest")
-    executionData(fileTree(layout.buildDirectory).include("jacoco/test.exec", "jacoco/integrationTest.exec"))
+// attribute coverage of their main sources to this module's report. All test
+// tasks contribute execution data (cluster/fault/soak when they have run), so
+// the report reflects the full suite, not just unit + integration.
+val coveredProjects = listOf(":exc-core", ":exc-write-client", ":exc-launcher", ":exc-read", ":exc-read-client")
+val coverageExecutionData = fileTree(layout.buildDirectory).include(
+    "jacoco/test.exec",
+    "jacoco/integrationTest.exec",
+    "jacoco/clusterTest.exec",
+    "jacoco/faultTest.exec",
+    "jacoco/soakTest.exec",
+)
+
+fun configureCoverageBase(base: JacocoReportBase) {
     coveredProjects.forEach { path ->
         val covered = project(path)
-        additionalSourceDirs(files(covered.projectDir.resolve("src/main/java")))
-        additionalClassDirs(fileTree(covered.layout.buildDirectory.dir("classes/java/main")) {
+        base.additionalSourceDirs(files(covered.projectDir.resolve("src/main/java")))
+        base.additionalClassDirs(fileTree(covered.layout.buildDirectory.dir("classes/java/main")) {
             exclude("**/generated/**")
         })
+    }
+}
+
+tasks.named<JacocoReport>("jacocoTestReport") {
+    dependsOn("test", "integrationTest", "clusterTest", "faultTest")
+    executionData(coverageExecutionData)
+    configureCoverageBase(this)
+}
+
+// Minimum line-coverage floor, run explicitly (not wired into `check`) so the
+// threshold can be raised as the suite grows without failing unrelated builds.
+tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
+    description = "Fails when line coverage of the covered production modules drops below the floor."
+    group = "verification"
+    dependsOn("test", "integrationTest", "clusterTest", "faultTest")
+    executionData(coverageExecutionData)
+    configureCoverageBase(this)
+    violationRules {
+        rule {
+            limit {
+                minimum = "0.60".toBigDecimal()
+            }
+        }
     }
 }

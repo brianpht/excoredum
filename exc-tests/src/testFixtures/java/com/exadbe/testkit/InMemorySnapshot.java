@@ -2,6 +2,7 @@ package com.exadbe.testkit;
 
 import com.exadbe.engine.MatchingEngine;
 import com.exadbe.protocol.BalanceRecordDecoder;
+import com.exadbe.protocol.DedupRecordDecoder;
 import com.exadbe.protocol.MessageHeaderDecoder;
 import com.exadbe.snapshot.SnapshotManager;
 import java.util.Arrays;
@@ -84,6 +85,27 @@ public final class InMemorySnapshot {
             offset = bodyOffset + recordLength;
         }
         throw new IllegalStateException("no BalanceRecord found to corrupt");
+    }
+
+    /**
+     * Flips a byte of the first dedup record's uid, simulating on-the-wire
+     * corruption confined to a dedup field so the loaded state no longer
+     * reconciles with the footer checksum (the checksum must cover dedup fields).
+     */
+    public void corruptFirstDedupUid() {
+        int offset = 0;
+        while (offset < length) {
+            final int recordLength = buffer.getInt(offset);
+            final int bodyOffset = offset + Integer.BYTES;
+            headerDecoder.wrap(buffer, bodyOffset);
+            if (headerDecoder.templateId() == DedupRecordDecoder.TEMPLATE_ID) {
+                final int uidIndex = bodyOffset + DedupRecordDecoder.uidEncodingOffset();
+                buffer.putByte(uidIndex, (byte) (buffer.getByte(uidIndex) ^ 0x01));
+                return;
+            }
+            offset = bodyOffset + recordLength;
+        }
+        throw new IllegalStateException("no DedupRecord found to corrupt");
     }
 
     /** Returns a copy of the raw serialized bytes for byte-identical comparisons. */

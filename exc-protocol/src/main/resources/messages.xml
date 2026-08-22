@@ -2,8 +2,8 @@
 <sbe:messageSchema xmlns:sbe="http://fixprotocol.io/2016/sbe"
                    package="com.exadbe.protocol"
                    id="1"
-                   version="4"
-                   semanticVersion="1.0"
+                   version="5"
+                   semanticVersion="2.0"
                    byteOrder="littleEndian"
                    description="excoredum wire and snapshot messages.">
 
@@ -138,6 +138,8 @@
         <!-- Matcher-event frames that will follow this result on the same session
              (L2MarketData not counted). Zero for duplicates: events are not re-emitted. -->
         <field name="eventCount"  id="7" type="uint16" presence="optional" sinceVersion="3"/>
+        <!-- Full event count when it exceeds the uint16 ceiling (added in v5). -->
+        <field name="eventCountExt" id="8" type="uint32" presence="optional" sinceVersion="5"/>
     </sbe:message>
 
     <!-- ============================ Egress events ============================ -->
@@ -154,6 +156,8 @@
         <field name="price"              id="9"  type="int64"/>
         <field name="size"               id="10" type="int64"/>
         <field name="makerOrderCompleted" id="11" type="uint8"/>
+        <!-- Full intra-command index when it exceeds the uint16 ceiling (added in v5). -->
+        <field name="eventIndexExt" id="12" type="uint32" presence="optional" sinceVersion="5"/>
     </sbe:message>
 
     <sbe:message name="ReduceEvent" id="21" description="A resting order was reduced or cancelled.">
@@ -169,6 +173,8 @@
         <field name="price"       id="9" type="int64" presence="optional" sinceVersion="3"/>
         <!-- 1 when the order was fully removed (cancel, or reduced to zero). -->
         <field name="orderCompleted" id="10" type="uint8" presence="optional" sinceVersion="3"/>
+        <!-- Full intra-command index when it exceeds the uint16 ceiling (added in v5). -->
+        <field name="eventIndexExt" id="11" type="uint32" presence="optional" sinceVersion="5"/>
     </sbe:message>
 
     <sbe:message name="RejectEvent" id="22" description="Unmatched size rejected (IOC / FOK / duplicate id).">
@@ -182,6 +188,8 @@
         <field name="rejectedSize" id="8" type="int64"/>
         <!-- Price of the rejected active order (the budget for FOK-BUDGET). -->
         <field name="price"        id="9" type="int64" presence="optional" sinceVersion="3"/>
+        <!-- Full intra-command index when it exceeds the uint16 ceiling (added in v5). -->
+        <field name="eventIndexExt" id="10" type="uint32" presence="optional" sinceVersion="5"/>
     </sbe:message>
 
     <sbe:message name="L2MarketData" id="30" description="L2 order book snapshot for ORDER_BOOK_REQUEST.">
@@ -318,6 +326,8 @@
         <field name="price"           id="9"  type="int64"/>
         <field name="size"            id="10" type="int64"/>
         <field name="makerCompleted"  id="11" type="uint8"/>
+        <!-- Full intra-command index when it exceeds the uint16 ceiling (added in v5). -->
+        <field name="eventIndexExt" id="12" type="uint32" presence="optional" sinceVersion="5"/>
     </sbe:message>
 
     <!-- ============================ Snapshot records ============================ -->

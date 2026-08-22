@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.exadbe.config.CoreConfig;
 import com.exadbe.core.CommandOutcome;
+import com.exadbe.protocol.CommandEnvelopeDecoder;
 import com.exadbe.protocol.CommandResultCode;
 import com.exadbe.telemetry.CoreMetrics;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,10 +27,12 @@ class InputValidationTest {
     private MatchingEngine engine;
     private CommandOutcome out;
     private Commands commands;
+    private CoreMetrics metrics;
 
     @BeforeEach
     void setUp() {
-        engine = new MatchingEngine(CoreConfig.defaults(), new CoreMetrics());
+        metrics = new CoreMetrics();
+        engine = new MatchingEngine(CoreConfig.defaults(), metrics);
         out = new CommandOutcome();
         commands = new Commands();
         engine.process(commands.addUser(1L, 1L, 1L, UID), 0L, out);
@@ -195,5 +198,94 @@ class InputValidationTest {
         assertEquals(baseBefore, engine.balance(UID, BASE), "self-trade conserves base");
         assertEquals(quoteBefore, engine.balance(UID, QUOTE), "self-trade conserves quote at zero fees");
         assertFalse(engine.userExists(0L), "no fees accrue at zero fee rates");
+    }
+
+    @Test
+    void uidCollidingWithUint64AbsentSentinelIsRejected() {
+        // -1 is the uint64 "absent" sentinel of CommandResult/DedupRecord; a real
+        // user with that id would be read back as "no uid" after a snapshot.
+        engine.process(commands.addUser(1L, 5L, 5L, com.exadbe.collections.DedupRing.EMPTY), 0L, out);
+
+        assertEquals(CommandResultCode.INVALID_AMOUNT, out.resultCode());
+        assertFalse(engine.userExists(com.exadbe.collections.DedupRing.EMPTY));
+    }
+
+    @Test
+    void uidCollidingWithStatusMapSentinelIsRejected() {
+        // Long.MIN_VALUE is the account-status map's missing sentinel; storing a
+        // user there would be rejected by the map (or read back as active).
+        engine.process(commands.addUser(1L, 5L, 5L, com.exadbe.collections.AccountStore.MISSING), 0L, out);
+
+        assertEquals(CommandResultCode.INVALID_AMOUNT, out.resultCode());
+        assertFalse(engine.userExists(com.exadbe.collections.AccountStore.MISSING));
+    }
+
+    @Test
+    void orderIdCollidingWithInt64AbsentSentinelIsRejected() {
+        final long orderId = CommandEnvelopeDecoder.orderIdNullValue();
+
+        engine.process(commands.placeGtc(1L, 5L, 5L, SYM, orderId, true, 100L, 1L, 0L, UID), 0L, out);
+
+        assertEquals(CommandResultCode.INVALID_AMOUNT, out.resultCode());
+        assertEquals(0, engine.orderCount(), "a sentinel order id must never rest");
+        assertEquals(1_000L, engine.balance(UID, BASE));
+    }
+
+    @Test
+    void scaleFactorAboveUpperBoundIsRejected() {
+        engine.process(
+                commands.addSymbol(
+                        1L,
+                        10L,
+                        10L,
+                        4,
+                        BASE,
+                        QUOTE,
+                        com.exadbe.engine.handlers.AddSymbolHandler.MAX_SCALE_K + 1L,
+                        1L,
+                        0L,
+                        0L),
+                0L,
+                out);
+
+        assertEquals(CommandResultCode.INVALID_AMOUNT, out.resultCode());
+        assertEquals(1, engine.symbolCount(), "an out-of-range scale factor must not register");
+    }
+
+    @Test
+    void feeAboveUpperBoundIsRejected() {
+        engine.process(
+                commands.addSymbol(
+                        1L,
+                        10L,
+                        10L,
+                        4,
+                        BASE,
+                        QUOTE,
+                        1L,
+                        1L,
+                        com.exadbe.engine.handlers.AddSymbolHandler.MAX_FEE + 1L,
+                        0L),
+                0L,
+                out);
+
+        assertEquals(CommandResultCode.INVALID_AMOUNT, out.resultCode());
+        assertEquals(1, engine.symbolCount(), "an out-of-range fee must not register");
+    }
+
+    @Test
+    void dedupEvictionIsCounted() {
+        final CoreMetrics smallMetrics = new CoreMetrics();
+        final MatchingEngine smallEngine =
+                new MatchingEngine(CoreConfig.builder().dedupWindow(4).build(), smallMetrics);
+        final CommandOutcome smallOut = new CommandOutcome();
+
+        // Five distinct sequences for one client into a four-slot window: the
+        // fifth evicts the first.
+        for (long seq = 1L; seq <= 5L; seq++) {
+            smallEngine.process(commands.addUser(1L, seq, seq, UID + seq), 0L, smallOut);
+        }
+
+        assertEquals(1L, smallMetrics.dedupEvictions());
     }
 }

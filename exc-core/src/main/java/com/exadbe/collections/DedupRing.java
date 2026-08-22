@@ -39,6 +39,11 @@ public final class DedupRing {
     private final byte[] flags;
 
     public DedupRing(final int capacity) {
+        if (capacity <= 0 || Integer.bitCount(capacity) != 1) {
+            // Ring indexing uses `seq & (capacity - 1)`, which requires a power of
+            // two; a non-power-of-two capacity would alias slots and corrupt dedup.
+            throw new IllegalArgumentException("dedup window must be a power of two, was: " + capacity);
+        }
         this.mask = capacity - 1;
         this.seqSlots = new long[capacity];
         this.commandIdHi = new long[capacity];

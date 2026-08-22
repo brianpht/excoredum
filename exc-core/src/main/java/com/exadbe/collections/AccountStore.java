@@ -74,7 +74,13 @@ public final class AccountStore {
 
     /** Sets the balance for {@code (uid, currency)}; the user must exist. */
     public void set(final long uid, final int currency, final long value) {
-        byUser.get(uid).put(currency, value);
+        final Long2LongHashMap balances = byUser.get(uid);
+        if (balances == null) {
+            // A balance for an unknown user is a corrupt store state, not a normal
+            // map miss; surface it cleanly instead of a bare NPE on the load path.
+            throw new IllegalStateException("balance for unknown user " + uid);
+        }
+        balances.put(currency, value);
     }
 
     /** Adds {@code delta} to {@code (uid, currency)} and returns the new balance; user must exist. */

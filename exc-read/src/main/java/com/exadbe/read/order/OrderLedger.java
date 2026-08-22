@@ -19,10 +19,11 @@ import org.agrona.collections.Long2ObjectHashMap;
  * replicated command log. Owned by the read replica's single polling thread;
  * it is updated as each command is applied and queried from the same thread.
  *
- * <p>Commands whose outcome is {@link CommandResultCode#DUPLICATE} are skipped:
- * the engine's dedup already decided they were re-delivered, so re-applying
- * them would double-count fills. A replicated RESET clears the ledger, mirroring
- * the engine's state reset.
+ * <p>Re-delivered commands are already deduplicated upstream: the engine replays
+ * the cached outcome verbatim, which carries zero matcher events, so
+ * {@link #applyEvents} has nothing to double-count, and {@link #applyPlace}
+ * guards on {@code ordersById} so a re-applied place cannot add a second record.
+ * A replicated RESET clears the ledger, mirroring the engine's state reset.
  *
  * <p>Memory is bounded: each user keeps at most {@link #MAX_ORDERS_PER_USER}
  * records (oldest terminal records are evicted; resting orders are already
@@ -51,14 +52,12 @@ public final class OrderLedger {
     private int tapeCount;
 
     /**
-     * Applies one applied command to the ledger. Skipped for re-delivered
-     * commands (deduped by the engine) and for commands with no order effect.
+     * Applies one applied command to the ledger. Re-delivered commands are
+     * deduplicated upstream (their cached outcome carries zero events), so no
+     * explicit duplicate guard is needed here.
      */
     public void applyCommand(
             final long timestamp, final CommandEnvelopeDecoder envelope, final CommandOutcome outcome) {
-        if (outcome.resultCode() == CommandResultCode.DUPLICATE) {
-            return;
-        }
         switch (envelope.commandType()) {
             case PLACE_ORDER -> applyPlace(timestamp, envelope, outcome);
             case MOVE_ORDER -> applyMove(timestamp, envelope, outcome);

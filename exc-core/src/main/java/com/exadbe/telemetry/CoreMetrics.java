@@ -27,6 +27,7 @@ public final class CoreMetrics {
     private long orderPoolExhaustions;
     private long priceBucketPoolExhaustions;
     private long journalBackpressureEvents;
+    private long dedupEvictions;
     private long lastSnapshotWriteMillis;
     private long lastSnapshotReadMillis;
 
@@ -99,6 +100,14 @@ public final class CoreMetrics {
         sink.increment(Counter.JOURNAL_BACKPRESSURE);
     }
 
+    // A command's dedup entry evicted a different, older sequence from a client's
+    // bounded window. A live resend of that evicted sequence would now be applied
+    // a second time; a rising count means a client's window is mis-sized.
+    public void onDedupEviction() {
+        dedupEvictions++;
+        sink.increment(Counter.DEDUP_EVICTIONS);
+    }
+
     public void snapshotWriteMillis(final long millis) {
         this.lastSnapshotWriteMillis = millis;
         sink.set(Gauge.SNAPSHOT_WRITE_MILLIS, millis);
@@ -147,6 +156,10 @@ public final class CoreMetrics {
 
     public long journalBackpressureEvents() {
         return journalBackpressureEvents;
+    }
+
+    public long dedupEvictions() {
+        return dedupEvictions;
     }
 
     public long lastSnapshotWriteMillis() {

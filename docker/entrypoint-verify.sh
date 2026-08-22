@@ -4,7 +4,8 @@
 set -eu
 
 QUERY="${EXC_QUERY:?EXC_QUERY is required}"
-EGRESS="aeron:udp?endpoint=$(hostname -i):0"
+_ip="$(hostname -i)"
+EGRESS="aeron:udp?endpoint=${_ip%% *}:0"
 OPS="${EXC_OPS:-100000}"
 USERS="${EXC_USERS:-100}"
 

@@ -35,8 +35,12 @@ import org.agrona.collections.LongHashSet;
 final class SnapshotSubscriber implements AutoCloseable {
 
     private static final int SNIFF_STREAM_ID = 47;
-    private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 10_000L;
-    private static final long SNIFF_TIMEOUT_MS = 10_000L;
+    // Bounded so a stuck endpoint resolution or stalled candidate sniff never
+    // freezes the replica's single poll thread (and thus query serving) for more
+    // than a couple of seconds; candidates are cached so each recording is
+    // sniffed at most once per replica lifetime.
+    private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 2_000L;
+    private static final long SNIFF_TIMEOUT_MS = 2_000L;
 
     /** Outcome of a snapshot load attempt. */
     enum Result {
@@ -283,7 +287,7 @@ final class SnapshotSubscriber implements AutoCloseable {
                         strippedChannel,
                         originalChannel,
                         sourceIdentity) -> out.add(new Recording(recordingId, startPosition, streamId));
-        archive.listRecordings(0L, 10_000, consumer);
+        ArchiveRecordings.forEach(archive, consumer);
         return out;
     }
 

@@ -57,4 +57,18 @@ class SnapshotIntegrityTest {
         assertTrue(readManager.loadComplete(), "footer still applied");
         assertFalse(readManager.verifyInvariant(), "checksum must not match after corruption");
     }
+
+    @Test
+    void corruptedDedupFieldFailsInvariant() {
+        final InMemorySnapshot snapshot = new InMemorySnapshot();
+        snapshot.writeFrom(new SnapshotManager(), funded(), 1L);
+        snapshot.corruptFirstDedupUid();
+
+        final MatchingEngine restored = new MatchingEngine(CoreConfig.defaults(), new CoreMetrics());
+        final SnapshotManager readManager = new SnapshotManager();
+        snapshot.readInto(readManager, restored);
+
+        assertTrue(readManager.loadComplete(), "footer still applied");
+        assertFalse(readManager.verifyInvariant(), "the checksum must cover dedup uid/orderId/filledSize");
+    }
 }

@@ -42,8 +42,11 @@ tasks.named<JavaCompile>("compileJava") {
     options.compilerArgs.add("-nowarn")
 }
 
-tasks.withType<Checkstyle>().configureEach {
-    enabled = false
+// Generated codecs are not written to be checkstyle-clean, so lint only the
+// hand-written sources (QueryStreams.java) rather than disabling checkstyle
+// module-wide and exempting them too.
+tasks.named<Checkstyle>("checkstyleMain") {
+    source = fileTree("src/main/java")
 }
 
 spotless {

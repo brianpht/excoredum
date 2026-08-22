@@ -100,6 +100,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     private long firstRetransmitIdLo = Long.MIN_VALUE;
     private long firstExpiredIdLo = Long.MIN_VALUE;
     private int reconnects;
+    private int reconnectFailures;
     private int leaderChanges;
     private int leaderMemberId = -1;
     private boolean retransmitAll;
@@ -214,10 +215,11 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             final long quoteScaleK,
             final long takerFee,
             final long makerFee) {
-        if (freeTop == 0 || queuedUnsent != null) {
+        if (windowFullForSubmit()) {
             backpressureEvents++;
             throw new BackpressureException("in-flight window full: " + config.maxInFlight());
         }
+
         final PendingCommand pc = pool[freeStack[--freeTop]];
         pc.inUse = true;
         pc.retries = 0;
@@ -414,11 +416,25 @@ public final class ExcClient implements EgressListener, AutoCloseable {
 
     private long encodeAndSubmit(
             final OrderCommandType type, final long uid, final int currency, final long balanceAmount) {
-        if (freeTop == 0 || queuedUnsent != null) {
+        if (windowFullForSubmit()) {
             backpressureEvents++;
             throw new BackpressureException("in-flight window full: " + config.maxInFlight());
         }
+        return encodeAndSubmitInner(type, uid, currency, balanceAmount);
+    }
 
+    // A fully-saturated window must not starve session liveness: when keepalives
+    // are enabled, one pool slot is reserved for the NOP keepalive (normal
+    // submits stop one slot early; submitKeepalive uses the reserved slot).
+    private boolean windowFullForSubmit() {
+        if (queuedUnsent != null) {
+            return true;
+        }
+        return config.keepaliveIntervalNs() > 0 ? freeTop <= 1 : freeTop == 0;
+    }
+
+    private long encodeAndSubmitInner(
+            final OrderCommandType type, final long uid, final int currency, final long balanceAmount) {
         final PendingCommand pc = pool[freeStack[--freeTop]];
         pc.inUse = true;
         pc.retries = 0;
@@ -473,7 +489,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             final long reserveBidPrice,
             final long size,
             final int userCookie) {
-        if (freeTop == 0 || queuedUnsent != null) {
+        if (windowFullForSubmit()) {
             backpressureEvents++;
             throw new BackpressureException("in-flight window full: " + config.maxInFlight());
         }
@@ -574,7 +590,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         }
         retransmitAll = false;
 
-        if (config.keepaliveIntervalNs() > 0 && freeTop > 0 && (now - nextKeepaliveNanos) >= 0) {
+        if (config.keepaliveIntervalNs() > 0 && (now - nextKeepaliveNanos) >= 0) {
             sendKeepalive(now);
             work++;
         }
@@ -584,9 +600,10 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     private void sendKeepalive(final long now) {
         final long commandIdLo;
         try {
-            commandIdLo = submit(OrderCommandType.NOP, 0L);
+            commandIdLo = submitKeepalive();
         } catch (final BackpressureException e) {
-            // Window full or an earlier command still unsent; try again next cycle.
+            // A queued head is still unsent (or the reserved slot is gone); try
+            // again next cycle rather than reordering against it.
             nextKeepaliveNanos = now + config.keepaliveIntervalNs();
             return;
         }
@@ -595,6 +612,20 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             pc.keepalive = true;
         }
         nextKeepaliveNanos = now + config.keepaliveIntervalNs();
+    }
+
+    // Uses the slot reserved by windowFullForSubmit so a fully-saturated window
+    // cannot starve the session-keepalive NOP.
+    private long submitKeepalive() {
+        if (queuedUnsent != null || freeTop == 0) {
+            backpressureEvents++;
+            throw new BackpressureException("in-flight window full: " + config.maxInFlight());
+        }
+        return encodeAndSubmitInner(
+                OrderCommandType.NOP,
+                0L,
+                CommandEnvelopeEncoder.currencyNullValue(),
+                CommandEnvelopeEncoder.balanceAmountNullValue());
     }
 
     private void reconnect(final long now) {
@@ -607,12 +638,17 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             // Best-effort teardown of the lost session.
         }
         try {
-            cluster = AeronCluster.connect(clusterContext(TimeUnit.SECONDS.toNanos(5)));
+            // Use the configured message timeout, matching the initial connect
+            // (a reconnect must not hardcode a shorter, easier-to-fail budget).
+            cluster = AeronCluster.connect(clusterContext(config.messageTimeoutNs()));
             sessionLost = false;
             retransmitAll = true;
             reconnects++;
             nextKeepaliveNanos = System.nanoTime() + config.keepaliveIntervalNs();
         } catch (final RuntimeException e) {
+            // Counted so repeated reconnect failures are observable; the next
+            // attempt is scheduled after a fixed backoff.
+            reconnectFailures++;
             nextReconnectNanos = now + TimeUnit.SECONDS.toNanos(1);
         }
     }
@@ -736,6 +772,12 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             final int length,
             final Header header) {
         headerDecoder.wrap(buffer, offset);
+        // A truncated frame (or one whose header lies about its block length)
+        // must be dropped rather than letting a decoder read past the buffer and
+        // throw out of the egress poll loop.
+        if (length < MessageHeaderDecoder.ENCODED_LENGTH + headerDecoder.blockLength()) {
+            return;
+        }
         final int templateId = headerDecoder.templateId();
         if (templateId == TradeEventDecoder.TEMPLATE_ID) {
             tradeDecoder.wrap(
@@ -746,7 +788,10 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             tradeListener.onTrade(
                     tradeDecoder.commandIdHi(),
                     tradeDecoder.commandIdLo(),
-                    tradeDecoder.eventIndex(),
+                    eventIndex(
+                            tradeDecoder.eventIndexExt(),
+                            TradeEventDecoder.eventIndexExtNullValue(),
+                            tradeDecoder.eventIndex()),
                     tradeDecoder.symbolId(),
                     tradeDecoder.makerOrderId(),
                     tradeDecoder.makerUid(),
@@ -782,7 +827,10 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             reduceListener.onReduce(
                     reduceDecoder.commandIdHi(),
                     reduceDecoder.commandIdLo(),
-                    reduceDecoder.eventIndex(),
+                    eventIndex(
+                            reduceDecoder.eventIndexExt(),
+                            ReduceEventDecoder.eventIndexExtNullValue(),
+                            reduceDecoder.eventIndex()),
                     reduceDecoder.symbolId(),
                     reduceDecoder.orderId(),
                     reduceDecoder.uid(),
@@ -803,7 +851,10 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             rejectListener.onReject(
                     rejectDecoder.commandIdHi(),
                     rejectDecoder.commandIdLo(),
-                    rejectDecoder.eventIndex(),
+                    eventIndex(
+                            rejectDecoder.eventIndexExt(),
+                            RejectEventDecoder.eventIndexExtNullValue(),
+                            rejectDecoder.eventIndex()),
                     rejectDecoder.symbolId(),
                     rejectDecoder.orderId(),
                     rejectDecoder.uid(),
@@ -844,9 +895,16 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         // Results precede their own events, so any open group is from an older command.
         flushTradeGroup();
         final long commandIdLo = resultDecoder.commandIdLo();
-        final int announced = resultDecoder.eventCount();
+        final long announcedExt = resultDecoder.eventCountExt();
+        final int announced;
+        if (announcedExt != CommandResultDecoder.eventCountExtNullValue()) {
+            announced = (int) announcedExt;
+        } else {
+            final int legacy = resultDecoder.eventCount();
+            announced = (legacy == CommandResultDecoder.eventCountNullValue()) ? -1 : legacy;
+        }
         eventStreamIdLo = commandIdLo;
-        eventStreamRemaining = (announced == CommandResultDecoder.eventCountNullValue()) ? -1 : announced;
+        eventStreamRemaining = announced;
         final PendingCommand pc = pending.remove(commandIdLo);
         final boolean hasUid = resultDecoder.uid() != CommandResultDecoder.uidNullValue();
         final boolean hasOrderId = resultDecoder.orderId() != CommandResultDecoder.orderIdNullValue();
@@ -896,6 +954,12 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 flushTradeGroup();
             }
         }
+    }
+
+    // Prefers the uint32 index extension added in v5; falls back to the legacy
+    // uint16 index for frames recorded before it (whose index never wrapped).
+    private static int eventIndex(final long ext, final long extNullValue, final int legacy) {
+        return ext == extNullValue ? legacy : (int) ext;
     }
 
     @Override
@@ -966,6 +1030,11 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     /** Sessions re-established after a loss (cluster restart, CLOSED / ERROR event). */
     public int reconnects() {
         return reconnects;
+    }
+
+    /** Reconnect attempts that failed to establish a session (swallowed errors, now counted). */
+    public int reconnectFailures() {
+        return reconnectFailures;
     }
 
     public int leaderChanges() {

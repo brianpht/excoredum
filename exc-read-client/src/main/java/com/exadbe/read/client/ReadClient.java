@@ -88,12 +88,12 @@ public final class ReadClient implements AutoCloseable {
     private long lastOfferResult;
     private long lastAppliedPosition;
 
-    // Single-threaded sync delivery slot: filled by onResponse when the
-    // completed request id is the one a blocking method is awaiting.
-    private long syncAwaitId;
-    private boolean syncDelivered;
-    private Object syncSlot;
-    private QueryException syncError;
+    // Single-threaded stack of sync delivery frames. A stack (not a single slot)
+    // lets a listener callback issue a nested synchronous query without
+    // overwriting the outer await's frame.
+    private static final int MAX_SYNC_NESTING = 8;
+    private final SyncFrame[] syncStack = new SyncFrame[MAX_SYNC_NESTING];
+    private int syncDepth;
 
     /**
      * @param config query endpoints and timing; a {@code null}
@@ -336,8 +336,9 @@ public final class ReadClient implements AutoCloseable {
         final PendingQuery pq = pool[freeStack[--freeTop]];
         pq.inUse = true;
         pq.retries = 0;
-        pq.requestId = nextRequestId++;
+        pq.requestId = nextRequestId();
         pq.type = type;
+        pq.submittedNanos = System.nanoTime();
 
         requestEncoder
                 .wrapAndApplyHeader(pq.buffer, 0, headerEncoder)
@@ -353,12 +354,20 @@ public final class ReadClient implements AutoCloseable {
                 .responseChannel(responseChannel);
         filler.fill(requestEncoder);
         pq.length = MessageHeaderEncoder.ENCODED_LENGTH + requestEncoder.encodedLength();
-        pq.deadlineNanos = System.nanoTime() + config.retryBackoffNs();
+        pq.deadlineNanos = pq.submittedNanos + config.retryBackoffNs();
 
         pending.put(pq.requestId, pq);
         submitted++;
         offer(pq);
         return pq.requestId;
+    }
+
+    // Request id 0 is reserved (it never collides with a live id after a wrap,
+    // since the id is always positive); wrap back to 1 rather than through 0.
+    private long nextRequestId() {
+        final long id = nextRequestId;
+        nextRequestId = (nextRequestId == Long.MAX_VALUE) ? 1L : nextRequestId + 1L;
+        return id;
     }
 
     private void offer(final PendingQuery pq) {
@@ -373,6 +382,13 @@ public final class ReadClient implements AutoCloseable {
         for (int i = 0; i < pool.length; i++) {
             final PendingQuery pq = pool[i];
             if (!pq.inUse || (now - pq.deadlineNanos) < 0) {
+                continue;
+            }
+            // An overall budget bounds every async query, even when maxRetries is 0
+            // (unbounded retries); without it a dead replica would retransmit
+            // forever and exhaust the in-flight window.
+            if (now - pq.submittedNanos > config.messageTimeoutNs()) {
+                expire(pq);
                 continue;
             }
             if (config.maxRetries() > 0 && pq.retries >= config.maxRetries()) {
@@ -398,7 +414,8 @@ public final class ReadClient implements AutoCloseable {
 
     private void onResponse(final DirectBuffer buffer, final int offset, final int length, final Header header) {
         headerDecoder.wrap(buffer, offset);
-        if (headerDecoder.templateId() != QueryResponseDecoder.TEMPLATE_ID
+        if (headerDecoder.schemaId() != MessageHeaderDecoder.SCHEMA_ID
+                || headerDecoder.templateId() != QueryResponseDecoder.TEMPLATE_ID
                 || length < MessageHeaderDecoder.ENCODED_LENGTH + headerDecoder.blockLength()) {
             return;
         }
@@ -415,18 +432,19 @@ public final class ReadClient implements AutoCloseable {
         decodeResponse(pq);
         lastAppliedPosition = pq.appliedPosition;
         pending.remove(requestId);
+        final SyncFrame frame = syncFrameFor(requestId);
         if (pq.status == QueryStatusCode.UNSUPPORTED) {
             if (listener != QueryListener.NONE) {
                 listener.onError(requestId, pq.type, pq.status);
             }
-            if (requestId == syncAwaitId) {
-                syncError = new QueryException(pq.status, "read service rejected query type: " + pq.type);
+            if (frame != null) {
+                frame.error = new QueryException(pq.status, "read service rejected query type: " + pq.type);
             }
         } else {
             deliver(pq);
-            if (requestId == syncAwaitId) {
-                syncSlot = pq.value;
-                syncDelivered = true;
+            if (frame != null) {
+                frame.value = pq.value;
+                frame.delivered = true;
             }
         }
         release(pq);
@@ -455,35 +473,73 @@ public final class ReadClient implements AutoCloseable {
 
     /**
      * Blocks (driving {@link #poll()}) until the submitted query is delivered
-     * or {@code messageTimeoutNs} elapses.
+     * or {@code messageTimeoutNs} elapses. The awaited request id is pushed on a
+     * stack, so a listener callback that issues its own synchronous query during
+     * {@link #poll()} does not corrupt this (outer) await.
      */
     @SuppressWarnings("unchecked")
     private <T> T await(final long requestId) {
-        syncAwaitId = requestId;
+        final SyncFrame frame = pushSyncFrame(requestId);
         final long deadline = System.nanoTime() + config.messageTimeoutNs();
         try {
             while (true) {
                 poll();
-                if (syncError != null) {
-                    final QueryException error = syncError;
-                    syncError = null;
+                if (frame.error != null) {
+                    final QueryException error = frame.error;
+                    frame.error = null;
                     throw error;
                 }
-                if (syncDelivered) {
-                    final T value = (T) syncSlot;
-                    syncSlot = null;
-                    syncDelivered = false;
+                if (frame.delivered) {
+                    final T value = (T) frame.value;
+                    frame.value = null;
+                    frame.delivered = false;
                     return value;
                 }
                 if (System.nanoTime() >= deadline) {
+                    // Release the abandoned query's window slot: a dead replica
+                    // must not keep the slot occupied by a never-answered query.
+                    cancel(requestId);
                     throw new QueryTimeoutException("no response for query requestId=" + requestId);
                 }
                 idle.idle(0);
             }
         } finally {
-            if (syncAwaitId == requestId) {
-                syncAwaitId = 0;
-            }
+            popSyncFrame();
+        }
+    }
+
+    private SyncFrame pushSyncFrame(final long requestId) {
+        if (syncDepth == MAX_SYNC_NESTING) {
+            throw new IllegalStateException("synchronous query nesting exceeds " + MAX_SYNC_NESTING);
+        }
+        SyncFrame frame = syncStack[syncDepth];
+        if (frame == null) {
+            frame = new SyncFrame();
+            syncStack[syncDepth] = frame;
+        }
+        frame.requestId = requestId;
+        frame.delivered = false;
+        frame.value = null;
+        frame.error = null;
+        syncDepth++;
+        return frame;
+    }
+
+    private void popSyncFrame() {
+        syncDepth--;
+    }
+
+    private SyncFrame syncFrameFor(final long requestId) {
+        if (syncDepth > 0 && syncStack[syncDepth - 1].requestId == requestId) {
+            return syncStack[syncDepth - 1];
+        }
+        return null;
+    }
+
+    private void cancel(final long requestId) {
+        final PendingQuery pq = pending.remove(requestId);
+        if (pq != null) {
+            release(pq);
         }
     }
 
@@ -647,6 +703,7 @@ public final class ReadClient implements AutoCloseable {
         pq.value = null;
         pq.status = QueryStatusCode.SUCCESS;
         pq.appliedPosition = 0L;
+        pq.submittedNanos = 0L;
         freeStack[freeTop++] = pq.poolIndex;
     }
 
@@ -660,6 +717,14 @@ public final class ReadClient implements AutoCloseable {
         }
     }
 
+    /** One frame of an in-progress synchronous await (see {@link #await}). */
+    private static final class SyncFrame {
+        long requestId;
+        boolean delivered;
+        Object value;
+        QueryException error;
+    }
+
     /** One in-flight query; pooled with a private request buffer so retransmits re-offer the same bytes. */
     private static final class PendingQuery {
         final UnsafeBuffer buffer = new UnsafeBuffer(new byte[REQUEST_BUFFER_CAPACITY]);
@@ -669,6 +734,7 @@ public final class ReadClient implements AutoCloseable {
         int length;
         int retries;
         long deadlineNanos;
+        long submittedNanos;
         boolean inUse;
         Object value;
         QueryStatusCode status;

@@ -5,7 +5,6 @@ import com.exadbe.journal.JournalStreams;
 import io.aeron.Aeron;
 import io.aeron.Subscription;
 import io.aeron.archive.client.AeronArchive;
-import io.aeron.archive.client.RecordingDescriptorConsumer;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
 import java.util.concurrent.TimeUnit;
@@ -23,9 +22,12 @@ import java.util.concurrent.TimeUnit;
 public final class HaJournalConsumer implements AutoCloseable {
 
     private static final int JOURNAL_REPLAY_STREAM_ID = 45;
-    private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 10_000L;
+    // Bounded so a stuck endpoint resolution cannot freeze the poll thread for
+    // the full default; connectNextSource retries the next member on timeout.
+    private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 2_000L;
     private static final long CONNECT_TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
     private static final long DEFAULT_LIVENESS_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(10);
+    private static final long RECONNECT_BACKOFF_MS = 250L;
 
     private final MediaDriver mediaDriver;
     private final Aeron aeron;
@@ -42,8 +44,11 @@ public final class HaJournalConsumer implements AutoCloseable {
     private int currentSource = -1;
     private boolean hadImage;
     private long recordingId = -1L;
+    private long lastRecordingId = -1L;
+    private long resumePosition;
     private long lastActivityMs;
     private long lastProbeMs;
+    private long nextConnectMs;
 
     public HaJournalConsumer(
             final String aeronDirectoryName,
@@ -96,7 +101,15 @@ public final class HaJournalConsumer implements AutoCloseable {
             closeArchive();
         }
         if (archive == null) {
+            if (System.currentTimeMillis() < nextConnectMs) {
+                return 0;
+            }
             connectNextSource();
+            if (consumer == null) {
+                // Every source is unreachable; back off rather than spin.
+                nextConnectMs = System.currentTimeMillis() + RECONNECT_BACKOFF_MS;
+                return 0;
+            }
         }
         if (consumer == null) {
             return 0;
@@ -110,6 +123,7 @@ public final class HaJournalConsumer implements AutoCloseable {
             closeArchive();
             connectNextSource();
             if (consumer == null) {
+                nextConnectMs = System.currentTimeMillis() + RECONNECT_BACKOFF_MS;
                 return 0;
             }
         }
@@ -117,6 +131,7 @@ public final class HaJournalConsumer implements AutoCloseable {
         if (fragments > 0) {
             lastActivityMs = now;
         }
+        resumePosition = consumer.lastPosition();
         if (subscription.imageCount() > 0) {
             hadImage = true;
         }
@@ -184,10 +199,15 @@ public final class HaJournalConsumer implements AutoCloseable {
                 candidate.close();
                 continue;
             }
+            // Resume from the last consumed position when reconnecting to the same
+            // recording (a transient image drop); a different member's recording
+            // has its own position space, so it is replayed from the start (the
+            // shared JournalDedup absorbs the overlap).
+            final long fromPosition = recordingId == lastRecordingId ? resumePosition : 0L;
             try {
                 candidate.startReplay(
                         recordingId,
-                        0L,
+                        fromPosition,
                         AeronArchive.NULL_LENGTH,
                         "aeron:udp?endpoint=" + endpoint,
                         JOURNAL_REPLAY_STREAM_ID);
@@ -198,9 +218,11 @@ public final class HaJournalConsumer implements AutoCloseable {
             this.archive = candidate;
             this.currentSource = idx;
             this.recordingId = recordingId;
+            this.lastRecordingId = recordingId;
             this.hadImage = false;
             this.lastActivityMs = System.currentTimeMillis();
             this.lastProbeMs = this.lastActivityMs;
+            this.nextConnectMs = 0L;
             return;
         }
     }
@@ -235,30 +257,7 @@ public final class HaJournalConsumer implements AutoCloseable {
     }
 
     private long findRecording(final AeronArchive archiveClient) {
-        final long[] latest = {-1L};
-        final RecordingDescriptorConsumer consumer =
-                (controlSessionId,
-                        correlationId,
-                        recId,
-                        startTimestamp,
-                        stopTimestamp,
-                        startPos,
-                        stopPos,
-                        initialTermId,
-                        segmentFileLength,
-                        termBufferLength,
-                        mtuLength,
-                        sessionId,
-                        streamId,
-                        strippedChannel,
-                        originalChannel,
-                        sourceIdentity) -> {
-                    if (streamId == JournalStreams.JOURNAL_STREAM_ID && recId > latest[0]) {
-                        latest[0] = recId;
-                    }
-                };
-        archiveClient.listRecordings(0L, 100, consumer);
-        return latest[0];
+        return ArchiveRecordings.latestRecordingId(archiveClient, JournalStreams.JOURNAL_STREAM_ID);
     }
 
     private static String awaitResolvedEndpoint(final Subscription subscription) {

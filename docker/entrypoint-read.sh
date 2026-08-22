@@ -7,8 +7,13 @@
 set -eu
 
 ARCHIVE="${EXC_ARCHIVE:?EXC_ARCHIVE is required}"
-HOST="${EXC_HOST:-$(hostname -i)}"
+# hostname -i may return several space-separated addresses; keep only the first.
+_ip="$(hostname -i)"
+HOST="${EXC_HOST:-${_ip%% *}}"
 QUERY="${EXC_QUERY:-aeron:udp?endpoint=0.0.0.0:44000}"
+
+# Record the PID so the healthcheck can probe liveness without pgrep.
+echo $$ > /data/excoredum-read.pid
 
 echo "excoredum read replica on ${HOST} following ${ARCHIVE}"
 exec java \

@@ -24,7 +24,7 @@ public final class JournalConsumer {
     public interface Listener {
         void onEvent(
                 long logPosition,
-                int eventIndex,
+                long eventIndex,
                 MatcherEventType type,
                 int symbolId,
                 long makerOrderId,
@@ -44,6 +44,7 @@ public final class JournalConsumer {
 
     private long unique;
     private long duplicates;
+    private long lastPosition;
 
     public JournalConsumer(final Subscription subscription, final Listener listener) {
         this(subscription, listener, new JournalDedup());
@@ -62,6 +63,7 @@ public final class JournalConsumer {
     }
 
     private void onFragment(final DirectBuffer buffer, final int offset, final int length, final Header header) {
+        lastPosition = header.position();
         headerDecoder.wrap(buffer, offset);
         if (headerDecoder.templateId() != JournalEventDecoder.TEMPLATE_ID) {
             return;
@@ -72,7 +74,7 @@ public final class JournalConsumer {
                 headerDecoder.blockLength(),
                 headerDecoder.version());
         final long logPosition = eventDecoder.logPosition();
-        final int eventIndex = eventDecoder.eventIndex();
+        final long eventIndex = eventIndex(eventDecoder);
         if (!dedup.accept(logPosition, eventIndex)) {
             duplicates++;
             return;
@@ -91,6 +93,13 @@ public final class JournalConsumer {
                 eventDecoder.makerCompleted() != 0);
     }
 
+    // Prefers the uint32 extension field added in v5; falls back to the legacy
+    // uint16 field for messages recorded before it (whose index never wrapped).
+    private static long eventIndex(final JournalEventDecoder eventDecoder) {
+        final long ext = eventDecoder.eventIndexExt();
+        return ext == JournalEventDecoder.eventIndexExtNullValue() ? eventDecoder.eventIndex() : ext;
+    }
+
     /** Count of unique events delivered to the listener. */
     public long unique() {
         return unique;
@@ -99,5 +108,10 @@ public final class JournalConsumer {
     /** Count of re-delivered events dropped by dedup. */
     public long duplicates() {
         return duplicates;
+    }
+
+    /** The recording position of the most recently consumed fragment, or 0 before the first. */
+    public long lastPosition() {
+        return lastPosition;
     }
 }
