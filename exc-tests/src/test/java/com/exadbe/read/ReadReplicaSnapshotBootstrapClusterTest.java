@@ -100,6 +100,27 @@ class ReadReplicaSnapshotBootstrapClusterTest {
                 assertEquals(1_000_400L, replica.balance(1L, QUOTE), "maker quote after the 4-unit fill");
                 assertEquals(1, replica.orderHistory(1L).size(), "user 1's resting ask history rebuilt");
                 assertEquals(1, replica.orderHistory(2L).size(), "user 2's filled bid history rebuilt");
+
+                // Regression for the orphaned-ledger bug: after the rebuilt
+                // ledger is swapped in, the live subscriber must be rebound to
+                // it, so orders placed after the bootstrap reach the ledger.
+                final long[] postBootstrap = {-1L};
+                final ResultHandler postHandler =
+                        (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) ->
+                                postBootstrap[0] = idLo;
+                try (ExcClient postClient = new ExcClient(
+                        ClientConfig.builder(2L, ClusterConfig.ingressEndpoints(NODES))
+                                .build(),
+                        postHandler)) {
+                    awaitLeader(postClient);
+                    submitWithResult(
+                            postClient, () -> postClient.placeGtc(SYM, 3L, true, 101L, 2L, 0L, 3L, 0), postBootstrap);
+                    pollReplica(
+                            replica,
+                            () -> replica.order(3L) != null
+                                    && replica.orderHistory(3L).size() == 1);
+                    assertEquals(2, replica.orderCount(), "both resting orders visible after the swap");
+                }
             }
         } finally {
             for (final ClusterNode node : nodes) {
@@ -175,6 +196,30 @@ class ReadReplicaSnapshotBootstrapClusterTest {
             }
         }
         throw new AssertionError("could not submit command within timeout");
+    }
+
+    private static void submitWithResult(final ExcClient client, final LongSupplier op, final long[] resultIdLo) {
+        long idLo = -1L;
+        final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
+        while (idLo < 0L) {
+            try {
+                idLo = op.getAsLong();
+            } catch (final BackpressureException e) {
+                if (System.currentTimeMillis() >= deadline) {
+                    throw new AssertionError("could not submit command within timeout");
+                }
+                client.poll();
+                Thread.onSpinWait();
+            }
+        }
+        while (System.currentTimeMillis() < deadline) {
+            client.poll();
+            if (resultIdLo[0] == idLo) {
+                return;
+            }
+            Thread.onSpinWait();
+        }
+        throw new AssertionError("no result for post-bootstrap command within timeout");
     }
 
     private static void drainUntil(final ExcClient client, final Set<Long> results, final int target) {

@@ -16,6 +16,17 @@ public final class Amounts {
         return ((a ^ r) & (b ^ r)) < 0L;
     }
 
+    /**
+     * Returns {@code true} if {@code a * b} overflows a signed 64-bit long.
+     * Branch-light: compares the high 64 bits of the 128-bit product against the
+     * sign extension of the low 64 bits (exact for every operand combination,
+     * including {@code Long.MIN_VALUE * -1}).
+     */
+    public static boolean mulOverflows(final long a, final long b) {
+        final long lo = a * b;
+        return Math.multiplyHigh(a, b) != (lo >> 63);
+    }
+
     /** Returns {@code true} if {@code amount} is strictly negative. */
     public static boolean isNegative(final long amount) {
         return amount < 0L;

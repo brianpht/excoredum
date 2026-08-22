@@ -29,7 +29,9 @@ public interface CounterSink {
         SNAPSHOTS_LOADED,
         EVENT_BUFFER_OVERFLOW,
         ORDER_POOL_EXHAUSTED,
-        PRICE_BUCKET_POOL_EXHAUSTED;
+        PRICE_BUCKET_POOL_EXHAUSTED,
+        JOURNAL_BACKPRESSURE,
+        JOURNAL_RECORDER_ERRORS;
 
         /** Number of distinct counters; useful for sizing off-heap buffers. */
         public static final int COUNT = values().length;

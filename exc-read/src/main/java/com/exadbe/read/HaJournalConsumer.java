@@ -25,6 +25,7 @@ public final class HaJournalConsumer implements AutoCloseable {
     private static final int JOURNAL_REPLAY_STREAM_ID = 45;
     private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 10_000L;
     private static final long CONNECT_TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
+    private static final long DEFAULT_LIVENESS_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(10);
 
     private final MediaDriver mediaDriver;
     private final Aeron aeron;
@@ -32,6 +33,7 @@ public final class HaJournalConsumer implements AutoCloseable {
     private final int archiveControlStreamId;
     private final String[] controlChannels;
     private final JournalConsumer.Listener listener;
+    private final long livenessTimeoutMs;
     private final JournalDedup dedup = new JournalDedup();
 
     private Subscription subscription;
@@ -39,6 +41,9 @@ public final class HaJournalConsumer implements AutoCloseable {
     private AeronArchive archive;
     private int currentSource = -1;
     private boolean hadImage;
+    private long recordingId = -1L;
+    private long lastActivityMs;
+    private long lastProbeMs;
 
     public HaJournalConsumer(
             final String aeronDirectoryName,
@@ -46,10 +51,27 @@ public final class HaJournalConsumer implements AutoCloseable {
             final int archiveControlStreamId,
             final String[] controlChannels,
             final JournalConsumer.Listener listener) {
+        this(
+                aeronDirectoryName,
+                localHost,
+                archiveControlStreamId,
+                controlChannels,
+                listener,
+                DEFAULT_LIVENESS_TIMEOUT_MS);
+    }
+
+    public HaJournalConsumer(
+            final String aeronDirectoryName,
+            final String localHost,
+            final int archiveControlStreamId,
+            final String[] controlChannels,
+            final JournalConsumer.Listener listener,
+            final long livenessTimeoutMs) {
         this.localHost = localHost;
         this.archiveControlStreamId = archiveControlStreamId;
         this.controlChannels = controlChannels.clone();
         this.listener = listener;
+        this.livenessTimeoutMs = livenessTimeoutMs;
 
         MediaDriver driver = null;
         Aeron aeronClient = null;
@@ -79,11 +101,45 @@ public final class HaJournalConsumer implements AutoCloseable {
         if (consumer == null) {
             return 0;
         }
+        final long now = System.currentTimeMillis();
+        probeIfDue(now);
+        if (archive != null && now - lastActivityMs > livenessTimeoutMs) {
+            // No fragments and no successful archive op within the window: the
+            // source is silent (dead process holding the publication open, or a
+            // blackholed network). Cycle to the next source.
+            closeArchive();
+            connectNextSource();
+            if (consumer == null) {
+                return 0;
+            }
+        }
         final int fragments = consumer.poll(limit);
+        if (fragments > 0) {
+            lastActivityMs = now;
+        }
         if (subscription.imageCount() > 0) {
             hadImage = true;
         }
         return fragments;
+    }
+
+    // A successful archive op counts as activity, so an idle but healthy source
+    // is never failed over; a failed probe starts the timeout countdown.
+    private void probeIfDue(final long now) {
+        if (archive == null || recordingId < 0L) {
+            return;
+        }
+        final long interval = Math.max(1L, livenessTimeoutMs / 2);
+        if (now - lastProbeMs < interval) {
+            return;
+        }
+        lastProbeMs = now;
+        try {
+            archive.getRecordingPosition(recordingId);
+            lastActivityMs = now;
+        } catch (final RuntimeException ignored) {
+            // The timeout check in poll() fails the source over if it stays silent.
+        }
     }
 
     /** Count of unique events delivered across all sources. */
@@ -141,7 +197,10 @@ public final class HaJournalConsumer implements AutoCloseable {
             }
             this.archive = candidate;
             this.currentSource = idx;
+            this.recordingId = recordingId;
             this.hadImage = false;
+            this.lastActivityMs = System.currentTimeMillis();
+            this.lastProbeMs = this.lastActivityMs;
             return;
         }
     }
@@ -171,6 +230,7 @@ public final class HaJournalConsumer implements AutoCloseable {
             archive.close();
             archive = null;
         }
+        recordingId = -1L;
         hadImage = false;
     }
 

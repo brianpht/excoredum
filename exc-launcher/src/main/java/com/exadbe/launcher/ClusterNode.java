@@ -90,8 +90,9 @@ public final class ClusterNode implements AutoCloseable {
             final boolean cleanStart,
             final ClusteredServiceFactory serviceFactory) {
         this.countersManager = newCountersManager();
-        this.metrics = new CoreMetrics(
-                new AtomicCounterSink(allocateCounters(countersManager), allocateGauges(countersManager)));
+        final AtomicCounter[] counters = allocateCounters(countersManager);
+        this.metrics = new CoreMetrics(new AtomicCounterSink(counters, allocateGauges(countersManager)));
+        final AtomicCounter journalRecorderErrors = counters[CounterSink.Counter.JOURNAL_RECORDER_ERRORS.ordinal()];
 
         final String localControlChannel = "aeron:ipc?term-length=64k";
 
@@ -160,9 +161,22 @@ public final class ClusterNode implements AutoCloseable {
                         .controlResponseChannel(localControlChannel));
                 archiveClient.startRecording(JOURNAL_CHANNEL, JOURNAL_STREAM_ID, SourceLocation.LOCAL);
                 publication = aeronClient.addExclusivePublication(JOURNAL_CHANNEL, JOURNAL_STREAM_ID);
+                final Aeron recorderAeron = aeronClient;
                 eventRecorder = new EventJournalRecorder(
-                        matchingService.journal(), publication, new BackoffIdleStrategy(), JOURNAL_FRAGMENT_LIMIT);
-                runner = new AgentRunner(new BackoffIdleStrategy(), Throwable::printStackTrace, null, eventRecorder);
+                        matchingService.journal(),
+                        publication,
+                        () -> recorderAeron.addExclusivePublication(JOURNAL_CHANNEL, JOURNAL_STREAM_ID),
+                        journalRecorderErrors::incrementOrdered,
+                        new BackoffIdleStrategy(),
+                        JOURNAL_FRAGMENT_LIMIT);
+                // Unexpected throwables are counted off-heap (never formatted); the
+                // recorder re-offers the same ring batch on the next work cycle, so
+                // nothing is dropped by an error.
+                runner = new AgentRunner(
+                        new BackoffIdleStrategy(),
+                        throwable -> journalRecorderErrors.incrementOrdered(),
+                        null,
+                        eventRecorder);
                 AgentRunner.startOnThread(runner);
             } catch (final RuntimeException e) {
                 CloseHelper.quietClose(runner);

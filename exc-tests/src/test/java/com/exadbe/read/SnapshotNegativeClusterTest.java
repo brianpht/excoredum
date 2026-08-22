@@ -155,20 +155,23 @@ class SnapshotNegativeClusterTest {
 
                     // Fabricate a snapshot with a NEWER logPosition but a broken
                     // checksum: the guard passes it, the integrity check rejects
-                    // it, and the replica rebuilds from the log start.
+                    // it, and the replica rebuilds from the log start. Wait for
+                    // the rejection before growing the log: once the applied
+                    // position reaches the fabricated position the advance-only
+                    // guard would skip the fake without ever checking it.
                     try (AeronArchive archive = harness.connect(config.archiveControlChannel())) {
                         fabricateSnapshot(archive, harness.aeron(), position + 100L, true);
                     }
+                    drain(client, replica, () -> replica.health().integrityFailures() >= 1L);
 
-                    // Batch 2 grows the log past the fabricated position, so once
-                    // the corrupt snapshot is discarded the rebuild converges
-                    // beyond it and later snapshot polls skip the fake.
+                    // Batch 2 grows the log past the fabricated position, so the
+                    // rebuild converges beyond it and later snapshot polls skip
+                    // the (remembered-corrupt) fake.
                     for (long uid = 6L; uid <= 10L; uid++) {
                         final long u = uid;
                         submit(client, () -> client.addUser(u));
                         submit(client, () -> client.adjustBalance(u, BASE, 1_000L));
                     }
-                    drain(client, replica, () -> replica.health().integrityFailures() >= 1L);
                     drain(
                             client,
                             replica,
@@ -477,6 +480,13 @@ class SnapshotNegativeClusterTest {
             }
             Thread.onSpinWait();
         }
-        throw new AssertionError("replica never reached the expected state");
+        throw new AssertionError("replica never reached the expected state: users=" + replica.userCount()
+                + " orders=" + replica.orderCount()
+                + " applied=" + replica.appliedPosition()
+                + " healthy=" + replica.isHealthy()
+                + " integrityFailures=" + replica.health().integrityFailures()
+                + " snapshotsLoaded=" + replica.health().snapshotsLoaded()
+                + " failovers=" + replica.health().failovers()
+                + " source=" + replica.currentSource());
     }
 }

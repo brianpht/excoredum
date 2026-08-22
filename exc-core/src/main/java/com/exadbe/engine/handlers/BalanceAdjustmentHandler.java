@@ -28,7 +28,14 @@ public final class BalanceAdjustmentHandler {
             out.resultCode(CommandResultCode.OVERFLOW);
             return;
         }
-        accounts.set(uid, currency, base + delta);
+        final long updated = base + delta;
+        if (updated == AccountStore.MISSING) {
+            // The result aliases the balance map's absent-value sentinel; storing
+            // it would either be rejected by the map or read back as zero.
+            out.resultCode(CommandResultCode.OVERFLOW);
+            return;
+        }
+        accounts.set(uid, currency, updated);
         out.resultCode(CommandResultCode.SUCCESS);
     }
 }

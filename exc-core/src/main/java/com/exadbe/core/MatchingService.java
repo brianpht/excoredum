@@ -7,6 +7,7 @@ import com.exadbe.journal.DomainEventJournal;
 import com.exadbe.journal.EventJournalRing;
 import com.exadbe.protocol.CommandEnvelopeDecoder;
 import com.exadbe.protocol.CommandResultEncoder;
+import com.exadbe.protocol.JournalEventEncoder;
 import com.exadbe.protocol.L2MarketDataEncoder;
 import com.exadbe.protocol.MessageHeaderDecoder;
 import com.exadbe.protocol.MessageHeaderEncoder;
@@ -76,7 +77,13 @@ public final class MatchingService implements ClusteredService {
         this.outcome = new CommandOutcome(config.eventBufferCapacity());
         this.l2Buffer = new UnsafeBuffer(new byte[128 + config.l2MaxLevels() * 48]);
         this.journal = new EventJournalRing(config.journalSlotCount(), config.journalSlotSize());
-        this.domainJournal = new DomainEventJournal(journal);
+        if (journal.maxPayloadLength() < JournalEventEncoder.BLOCK_LENGTH + MessageHeaderEncoder.ENCODED_LENGTH) {
+            // A slot that cannot hold one JournalEvent would turn every trade into
+            // a hot-path exception; fail fast at construction instead.
+            throw new IllegalArgumentException(
+                    "journalSlotSize too small for a JournalEvent: " + config.journalSlotSize());
+        }
+        this.domainJournal = new DomainEventJournal(journal, metrics);
     }
 
     @Override
@@ -129,7 +136,8 @@ public final class MatchingService implements ClusteredService {
             }
             // Every node records the same committed events, keyed for dedup, so the
             // journal survives a leader loss and consumers merge archives idempotently.
-            domainJournal.emit(outcome, cluster.logPosition(), timestamp);
+            // The emit blocks (idling) while the ring is full, so events are never dropped.
+            domainJournal.emit(outcome, cluster.logPosition(), timestamp, idleStrategy);
         }
     }
 

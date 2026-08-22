@@ -26,6 +26,7 @@ public final class CoreMetrics {
     private long eventBufferOverflows;
     private long orderPoolExhaustions;
     private long priceBucketPoolExhaustions;
+    private long journalBackpressureEvents;
     private long lastSnapshotWriteMillis;
     private long lastSnapshotReadMillis;
 
@@ -90,6 +91,14 @@ public final class CoreMetrics {
         sink.increment(Counter.PRICE_BUCKET_POOL_EXHAUSTED);
     }
 
+    // The journal ring was full when the service offered a domain event, so the
+    // producer idled until the journaler drained a slot. Events are never
+    // dropped; a rising count means the journaler cannot keep up.
+    public void onJournalBackpressure() {
+        journalBackpressureEvents++;
+        sink.increment(Counter.JOURNAL_BACKPRESSURE);
+    }
+
     public void snapshotWriteMillis(final long millis) {
         this.lastSnapshotWriteMillis = millis;
         sink.set(Gauge.SNAPSHOT_WRITE_MILLIS, millis);
@@ -134,6 +143,10 @@ public final class CoreMetrics {
 
     public long priceBucketPoolExhaustions() {
         return priceBucketPoolExhaustions;
+    }
+
+    public long journalBackpressureEvents() {
+        return journalBackpressureEvents;
     }
 
     public long lastSnapshotWriteMillis() {

@@ -8,6 +8,7 @@ import com.exadbe.journal.EventJournalRing;
 import com.exadbe.protocol.JournalEventDecoder;
 import com.exadbe.protocol.MatcherEventType;
 import com.exadbe.protocol.MessageHeaderDecoder;
+import com.exadbe.telemetry.CoreMetrics;
 import io.aeron.Aeron;
 import io.aeron.ExclusivePublication;
 import io.aeron.Subscription;
@@ -42,16 +43,21 @@ class EventJournalRecorderIntegrationTest {
             awaitConnected(publication, subscription);
 
             final EventJournalRing ring = new EventJournalRing(64, 128);
-            final DomainEventJournal journal = new DomainEventJournal(ring);
-            final EventJournalRecorder recorder =
-                    new EventJournalRecorder(ring, publication, new YieldingIdleStrategy(), 16);
+            final DomainEventJournal journal = new DomainEventJournal(ring, new CoreMetrics());
+            final EventJournalRecorder recorder = new EventJournalRecorder(
+                    ring,
+                    publication,
+                    () -> aeron.addExclusivePublication(CHANNEL, STREAM_ID),
+                    () -> {},
+                    new YieldingIdleStrategy(),
+                    16);
 
             final CommandOutcome out = new CommandOutcome();
             out.reset(0L, 1L);
             out.addTrade(SYM, 100L, 11L, 22L, 500L, 3L, true, false, 0L, true, 600L);
             out.addReduce(SYM, 101L, 33L, 4L, true, 600L, 550L, false);
             out.addReject(SYM, 102L, 44L, 5L, 560L);
-            journal.emit(out, 7_000L, 42L);
+            journal.emit(out, 7_000L, 42L, new YieldingIdleStrategy());
 
             long drained = 0;
             final long drainDeadline = System.currentTimeMillis() + 5_000L;

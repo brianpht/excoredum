@@ -36,9 +36,13 @@ public final class DirectExchangeRisk {
 
     /**
      * Speculatively reserves {@code amount} of {@code currency} from {@code uid};
-     * reverts and returns {@code false} if it would overdraw.
+     * reverts and returns {@code false} if it would overdraw. A negative amount is
+     * always refused - reserving it would credit the balance.
      */
     public boolean reserve(final long uid, final int currency, final long amount) {
+        if (amount < 0L) {
+            return false;
+        }
         final long newBalance = accounts.addToValue(uid, currency, -amount);
         if (newBalance < 0L) {
             accounts.addToValue(uid, currency, amount);

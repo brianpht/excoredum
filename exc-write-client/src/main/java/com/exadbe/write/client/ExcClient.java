@@ -85,6 +85,11 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     private long nextClientSeq;
     private long nextCommandIdLo = 1L;
 
+    // The oldest submitted command the driver has not accepted yet. Submission
+    // order must equal cluster delivery order, so while it is queued every later
+    // submit is backpressured and poll() re-offers it before anything else.
+    private PendingCommand queuedUnsent;
+
     private long submitted;
     private long completed;
     private long expired;
@@ -141,6 +146,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             }
             throw e;
         }
+        this.nextClientSeq = config.initialClientSeq();
         this.nextKeepaliveNanos = System.nanoTime() + config.keepaliveIntervalNs();
     }
 
@@ -208,7 +214,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             final long quoteScaleK,
             final long takerFee,
             final long makerFee) {
-        if (freeTop == 0) {
+        if (freeTop == 0 || queuedUnsent != null) {
             backpressureEvents++;
             throw new BackpressureException("in-flight window full: " + config.maxInFlight());
         }
@@ -408,7 +414,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
 
     private long encodeAndSubmit(
             final OrderCommandType type, final long uid, final int currency, final long balanceAmount) {
-        if (freeTop == 0) {
+        if (freeTop == 0 || queuedUnsent != null) {
             backpressureEvents++;
             throw new BackpressureException("in-flight window full: " + config.maxInFlight());
         }
@@ -467,7 +473,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             final long reserveBidPrice,
             final long size,
             final int userCookie) {
-        if (freeTop == 0) {
+        if (freeTop == 0 || queuedUnsent != null) {
             backpressureEvents++;
             throw new BackpressureException("in-flight window full: " + config.maxInFlight());
         }
@@ -555,6 +561,10 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 continue;
             }
             offer(pc);
+            if (pc == queuedUnsent && pc.deadlineNanos != 0L) {
+                // The driver accepted the queued head; later submits may proceed.
+                queuedUnsent = null;
+            }
             pc.retries++;
             if (firstRetransmitIdLo == Long.MIN_VALUE) {
                 firstRetransmitIdLo = pc.commandIdLo;
@@ -572,7 +582,14 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     }
 
     private void sendKeepalive(final long now) {
-        final long commandIdLo = submit(OrderCommandType.NOP, 0L);
+        final long commandIdLo;
+        try {
+            commandIdLo = submit(OrderCommandType.NOP, 0L);
+        } catch (final BackpressureException e) {
+            // Window full or an earlier command still unsent; try again next cycle.
+            nextKeepaliveNanos = now + config.keepaliveIntervalNs();
+            return;
+        }
         final PendingCommand pc = pending.get(commandIdLo);
         if (pc != null) {
             pc.keepalive = true;
@@ -602,6 +619,9 @@ public final class ExcClient implements EgressListener, AutoCloseable {
 
     private void expire(final PendingCommand pc) {
         pending.remove(pc.commandIdLo);
+        if (pc == queuedUnsent) {
+            queuedUnsent = null;
+        }
         if (!pc.keepalive) {
             handler.onExpired(pc.commandIdHi, pc.commandIdLo);
         }
@@ -615,18 +635,21 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     private long lastOfferResult;
 
     /**
-     * Offers a command and does not return until the driver accepted it, so
-     * submission order equals cluster delivery order. A transient negative
-     * offer result (backpressure, admin action, not-yet-connected) is retried
-     * in place: if submit returned while the command sat pending, a later
-     * retry would land at the end of the ingress queue and be processed after
-     * subsequent commands, silently reordering the caller's sequence (a cancel
-     * could then arrive before the order it targets).
+     * Offers a command and retries transient negative offer results (backpressure,
+     * admin action, not-yet-connected) in place up to the retry backoff, so
+     * submission order equals cluster delivery order: if submit returned while the
+     * command sat pending, a later retry would land at the end of the ingress
+     * queue and be processed after subsequent commands, silently reordering the
+     * caller's sequence (a cancel could then arrive before the order it targets).
+     * Still unsent after the bound, the command becomes the queued-unsent head:
+     * poll() re-offers it before any later command is accepted.
      */
     private void offerUntilSent(final PendingCommand pc) {
+        final long deadline = System.nanoTime() + config.retryBackoffNs();
         for (; ; ) {
             if (sessionLost) {
                 backpressureEvents++;
+                queueUnsent(pc);
                 return;
             }
             final long result = cluster.offer(pc.buffer, 0, pc.length);
@@ -643,9 +666,21 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             }
             if (result == Publication.CLOSED) {
                 sessionLost = true;
+                queueUnsent(pc);
+                return;
+            }
+            if (System.nanoTime() >= deadline) {
+                queueUnsent(pc);
                 return;
             }
             Thread.onSpinWait();
+        }
+    }
+
+    private void queueUnsent(final PendingCommand pc) {
+        pc.deadlineNanos = 0L;
+        if (queuedUnsent == null) {
+            queuedUnsent = pc;
         }
     }
 

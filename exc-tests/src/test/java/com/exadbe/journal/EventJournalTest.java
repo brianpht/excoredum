@@ -8,6 +8,7 @@ import com.exadbe.core.CommandOutcome;
 import com.exadbe.protocol.JournalEventDecoder;
 import com.exadbe.protocol.MatcherEventType;
 import com.exadbe.protocol.MessageHeaderDecoder;
+import com.exadbe.telemetry.CoreMetrics;
 import java.util.ArrayList;
 import java.util.List;
 import org.agrona.DirectBuffer;
@@ -58,7 +59,7 @@ class EventJournalTest {
     @Test
     void journalEncodesEventsWithIdempotencyKey() {
         final EventJournalRing ring = new EventJournalRing(16, 128);
-        final DomainEventJournal journal = new DomainEventJournal(ring);
+        final DomainEventJournal journal = new DomainEventJournal(ring, new CoreMetrics());
 
         final CommandOutcome out = new CommandOutcome();
         out.reset(0L, 1L);
@@ -67,7 +68,7 @@ class EventJournalTest {
         out.addReject(SYM, 102L, 44L, 5L, 560L);
 
         final long logPosition = 9_000L;
-        assertTrue(journal.emit(out, logPosition, 1234L));
+        journal.emit(out, logPosition, 1234L, new org.agrona.concurrent.NoOpIdleStrategy());
 
         final List<Decoded> events = drain(ring);
         assertEquals(3, events.size());

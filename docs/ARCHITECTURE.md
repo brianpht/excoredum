@@ -393,7 +393,11 @@ clients must also use a client identity whose `clientSeq` never replays the
 cluster's dedup window: a restarted client that reuses a `clientId` with
 `clientSeq` starting at zero gets stale cached results instead of fresh applies.
 Boundary clients that embed the SDK must derive a per-process unique `clientId`
-for this reason.
+for this reason, or advance `ClientConfig.initialClientSeq` per incarnation.
+Note that a duplicate always replays the cached result verbatim, carrying the
+ORIGINAL command's id, so a re-sent command correlates under its first
+submission's id. The all-ones `clientSeq` (`0xFFFFFFFFFFFFFFFF`) is reserved
+by the dedup ring's empty-slot sentinel and is rejected with `INVALID_AMOUNT`.
 
 ### exc-read - Read Replica (CQRS)
 
@@ -638,7 +642,7 @@ idempotency possible without the engine knowing any real user identity.
 | Field                | Role                                                            |
 |----------------------|----------------------------------------------------------------|
 | `clientId`           | Session identity assigned by the client / edge                 |
-| `clientSeq`          | Monotonic per-client sequence; drives the dedup window         |
+| `clientSeq`          | Monotonic per-client sequence; drives the dedup window (all-ones is reserved and rejected) |
 | `commandId` (hi, lo) | Globally unique 128-bit id minted by the client                |
 | `commandType`        | PLACE_ORDER, CANCEL_ORDER, MOVE_ORDER, REDUCE_ORDER, ORDER_BOOK_REQUEST, ADD_USER, BALANCE_ADJUSTMENT, ADD_SYMBOL, SUSPEND_USER, RESUME_USER, RESET, NOP |
 | `uid`                | Account id the command acts on                                 |
@@ -697,6 +701,10 @@ by the current engine.
 `OrderBookNaive` implements strict price-time priority, ported from
 exchange-core's naive order book onto Agrona structures (no `TreeMap`, no streams).
 
+Self-trading is allowed: matching never compares uids, so one user's bid can
+fill against their own ask (same as upstream exchange-core). Value is still
+conserved across a self-trade; a unit test pins the behavior.
+
 - Each side (`OrderBookSide`) is a doubly-linked list of `PriceBucket`s kept in
   best-first order, with a `Long2ObjectHashMap` for O(1) price lookup. Each bucket
   is a FIFO queue of `OrderNode`s.
@@ -727,6 +735,16 @@ warmup. Matcher events accumulate into the
 fees. Fees are charged per lot in quote currency and accrue to a reserved fee
 account (uid 0). Margin is out of scope.
 
+All money math is overflow-checked (`Amounts`, boolean returns, never thrown):
+orders are validated up front (`size > 0`, `price > 0`, and every hold /
+worst-case credit product must fit), so a command that could overflow is
+rejected with `OVERFLOW` or `INVALID_AMOUNT` before any state mutation; the
+settle path re-checks every credit and aggregate in a first pass before
+touching any balance. `ADD_SYMBOL` likewise validates the spec (positive scale
+factors, non-negative fees with maker not exceeding taker, distinct base /
+quote currencies), because every bound in the risk path depends on it. MOVE
+applies the same price positivity and ask fee-floor checks as PLACE.
+
 - **Reserve on place** - a bid holds `size * (reserveBidPrice * quoteScaleK +
   takerFee)` quote (or `budget * quoteScaleK + size * takerFee` for FOK-BUDGET),
   covering the worst-case taker fee; an ask holds `size * baseScaleK` base and is
@@ -742,7 +760,9 @@ account (uid 0). Margin is out of scope.
 
 All amounts are signed 64-bit `long` with a fixed scale; `Amounts` provides
 overflow-checked helpers (returning booleans, never wrapping silently), and the
-engine surfaces overflow as the `OVERFLOW` result code. The fee account
+engine surfaces overflow as the `OVERFLOW` result code. A balance adjustment
+whose result would equal the balance map's absent-value sentinel
+(`Long.MIN_VALUE`) is also rejected as `OVERFLOW`. The fee account
 is reserved: `ADD_USER(0)` and placing as uid 0 are rejected.
 
 ---
@@ -756,9 +776,13 @@ It is decoupled from the hot path and highly available.
 - **Zero-alloc emission** - at apply time `MatchingService` encodes each matcher
   event into an off-heap `EventJournalRing` (single-producer). The producer cost
   is one `memcpy` plus a release store; a JMH `-prof gc` run confirms zero
-  steady-state allocation. A full ring rejects offers (the producer must apply
-  back-pressure); the recorder drains continuously, and the current producer
-  path counts and drops on overflow rather than stalling the consensus thread.
+  steady-state allocation. Events are never dropped: a full ring makes the
+  producer idle until the recorder drains a slot (the journaler runs on the
+  same node and drains continuously, so stalls are brief unless the recorder
+  itself has failed), and every stall increments the `journalBackpressure`
+  counter. The recorder self-recovers a lost publication and counts failures
+  off-heap (`journalRecorderErrors`) instead of throwing, so a transient
+  archive fault cannot wedge the ring or spam stderr.
 - **Off the consensus thread** - a dedicated `EventJournalRecorder` agent drains
   the ring and offers each event to an Aeron publication that the node's Archive
   records (stream 200). No journal I/O ever touches the Raft thread.
@@ -1061,8 +1085,8 @@ read counter values with release ordering, never touching the hot path.
 
 Counters: commands processed, duplicates, backpressure, unsupported commands,
 snapshots taken / loaded, event-buffer overflows, order-pool and price-bucket-pool
-exhaustions. Gauges: snapshot write / read time. The hot path only increments a
-counter.
+exhaustions, journal backpressure stalls, and journal recorder errors. Gauges:
+snapshot write / read time. The hot path only increments a counter.
 
 ---
 
@@ -1071,10 +1095,13 @@ counter.
 | Suite                                | Type        | What it covers                                          |
 |--------------------------------------|-------------|---------------------------------------------------------|
 | `MatchingEngineTest`                 | Unit        | Dedup, account handlers, suspend / resume, result codes |
+| `InputValidationTest`                | Unit        | Size / price / budget positivity, overflow pre-checks, balance sentinel, spec sanity, reserved clientSeq sentinel, self-trade conservation |
 | `OrderBookConformanceTest`           | Unit        | GTC / IOC / FOK-BUDGET, cancel / move / reduce, L2      |
 | `SpotRiskTest`                       | Unit        | Reserve / settle / release, value conservation          |
 | `FeeTest`                            | Unit        | Maker / taker fees, fee account, conservation with fees |
 | `EventJournalTest`                   | Unit        | Journal ring order / back-pressure, encoding, dedup     |
+| `JournalBackpressureTest`            | Unit        | Journal producer blocks on a full ring until drained; never drops; stalls counted |
+| `DedupRingTest`                      | Unit + Property | Dedup ring windowing, eviction, per-client isolation, EMPTY sentinel rejection |
 | `EngineDeterminismTest`              | Property    | Replay determinism and sum-of-deltas (jqwik)            |
 | `SnapshotRoundTripTest`              | Unit        | Byte-identical snapshot round trip and checksum         |
 | `SnapshotIntegrityTest`              | Unit        | Truncation and corruption are rejected                  |
@@ -1095,7 +1122,8 @@ counter.
 | `ReadReplicaCheckpointClusterTest`   | Cluster    | Warm start loads the local checkpoint and resumes the log without replaying history |
 | `ReplicaCrashRecoveryClusterTest`    | Cluster    | Restart from a stale checkpoint (tail lost to a crash) re-applies the lost tail from the log exactly once - no duplicate users or trades |
 | `ReplicaRebuildPathClusterTest`      | Cluster    | Restart from a checkpoint no reachable source can serve rebuilds from the log start (state cleared, converged below the checkpoint position) |
-| `ReadReplicaSnapshotBootstrapClusterTest` | Cluster | Cold start bootstraps the engine from a cluster snapshot and rebuilds the ledger by full-log replay |
+| `ReadReplicaSnapshotBootstrapClusterTest` | Cluster | Cold start bootstraps the engine from a cluster snapshot, rebuilds the ledger by log replay to the applied position, and orders placed after the swap reach the swapped-in ledger |
+| `DedupSurvivesWarmRestartClusterTest` | Cluster   | Snapshot + warm restart keeps the dedup table: a re-sent (clientId, clientSeq) replays the cached result without re-applying (no double hold) |
 | `SnapshotNegativeClusterTest`        | Cluster    | Fabricated snapshot recordings: a stale snapshot is skipped by the advance-only guard (state untouched); a corrupt one is discarded and the state rebuilt from the log |
 | `ReadReplicaFailoverIntegrationTest` | Fault       | Replica fails over by resuming from the applied position (monotonic, no rebuild); recovers when every source returns |
 | `ReplicaMidStreamFailoverFaultTest`  | Fault       | The source is killed while a burst is still being consumed; buffered fragments drain, then failover resumes, and the trade tape holds every trade exactly once |
@@ -1109,6 +1137,7 @@ counter.
 | `JournalReplayIntegrationTest`       | Integration | Archive replay decodes trades; repeated replay dedups   |
 | `SnapshotWarmRestartIntegrationTest` | Cluster     | Warm restart recovers state from a native snapshot      |
 | `LeaderKillFailoverTest`             | Fault       | Three-node leader kill; exactly-once, no loss or dup    |
+| `InFlightRetryAcrossFailoverFaultTest` | Fault     | Leader killed with a command batch still in flight; idempotent retry delivers every command exactly once (one result per id, one hold per balance) |
 | `JournalHaFailoverTest`              | Fault       | Journal survives a leader kill; trades exactly-once     |
 | `JournalLiveFailoverTest`            | Fault       | Live consumer fails over to a survivor without loss     |
 | `ChaosSoakTest`                      | Soak        | Long-running mixed workload (full / partial GTC-IOC matching, cancel / reduce, balance credit / debit, non-zero fees); asserts every command completes with no rejection, p99.9 latency budget, bounded GC |

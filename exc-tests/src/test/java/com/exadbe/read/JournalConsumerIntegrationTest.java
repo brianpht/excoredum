@@ -7,6 +7,7 @@ import com.exadbe.journal.DomainEventJournal;
 import com.exadbe.journal.EventJournalRing;
 import com.exadbe.launcher.EventJournalRecorder;
 import com.exadbe.protocol.MatcherEventType;
+import com.exadbe.telemetry.CoreMetrics;
 import io.aeron.Aeron;
 import io.aeron.ExclusivePublication;
 import io.aeron.Subscription;
@@ -42,9 +43,14 @@ class JournalConsumerIntegrationTest {
             awaitConnected(publication, subscription);
 
             final EventJournalRing ring = new EventJournalRing(64, 128);
-            final DomainEventJournal journal = new DomainEventJournal(ring);
-            final EventJournalRecorder recorder =
-                    new EventJournalRecorder(ring, publication, new YieldingIdleStrategy(), 16);
+            final DomainEventJournal journal = new DomainEventJournal(ring, new CoreMetrics());
+            final EventJournalRecorder recorder = new EventJournalRecorder(
+                    ring,
+                    publication,
+                    () -> aeron.addExclusivePublication(CHANNEL, STREAM_ID),
+                    () -> {},
+                    new YieldingIdleStrategy(),
+                    16);
 
             final List<Long> tradePrices = new ArrayList<>();
             final JournalConsumer consumer = new JournalConsumer(
@@ -62,14 +68,14 @@ class JournalConsumerIntegrationTest {
             out.addReject(SYM, 102L, 44L, 5L, 560L);
 
             // First delivery: three unique committed events.
-            journal.emit(out, LOG_POSITION, 42L);
+            journal.emit(out, LOG_POSITION, 42L, new YieldingIdleStrategy());
             pump(recorder, consumer, 3L, () -> consumer.unique() >= 3L);
             assertEquals(3L, consumer.unique());
             assertEquals(1, tradePrices.size());
             assertEquals(500L, tradePrices.get(0));
 
             // A failover re-publishes the same committed events with identical keys.
-            journal.emit(out, LOG_POSITION, 42L);
+            journal.emit(out, LOG_POSITION, 42L, new YieldingIdleStrategy());
             pump(recorder, consumer, 6L, () -> consumer.duplicates() >= 3L);
             assertEquals(3L, consumer.unique(), "dedup must keep exactly-once delivery");
             assertEquals(3L, consumer.duplicates());

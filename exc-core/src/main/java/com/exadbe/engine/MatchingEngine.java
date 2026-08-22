@@ -23,6 +23,7 @@ import com.exadbe.protocol.OrderAction;
 import com.exadbe.protocol.OrderType;
 import com.exadbe.snapshot.SnapshotManager;
 import com.exadbe.telemetry.CoreMetrics;
+import com.exadbe.util.Amounts;
 import java.util.Arrays;
 import org.agrona.collections.Int2ObjectHashMap;
 
@@ -82,6 +83,16 @@ public final class MatchingEngine {
     public boolean process(final CommandEnvelopeDecoder cmd, final long timestamp, final CommandOutcome out) {
         final long clientId = cmd.clientId();
         final long clientSeq = cmd.clientSeq();
+
+        if (clientSeq == DedupRing.EMPTY) {
+            // The all-ones uint64 is wire-legal but collides with the ring's
+            // unoccupied-slot sentinel: it could never be deduplicated and storing
+            // it would erase a colliding sequence's record. Reject without caching.
+            out.reset(cmd.commandIdHi(), cmd.commandIdLo());
+            out.resultCode(CommandResultCode.INVALID_AMOUNT);
+            metrics.onCommandProcessed();
+            return false;
+        }
 
         final DedupRing ring = dedup.ringFor(clientId);
         if (ring != null && ring.contains(clientSeq)) {
@@ -189,22 +200,58 @@ public final class MatchingEngine {
         final long price = cmd.price();
         final long reserveBidPrice = cmd.reserveBidPrice();
 
+        // Non-positive operands would mint money: a negative size produces a
+        // negative hold, and reserving a negative amount credits the balance.
+        // The price field doubles as the budget for FOK-BUDGET orders.
+        if (size <= 0L || price <= 0L) {
+            out.resultCode(CommandResultCode.INVALID_AMOUNT);
+            return;
+        }
+        // Every balance credit this order can ever produce is overflow-checked up
+        // front (before any reservation), so the match and settle paths below can
+        // never fail arithmetically for this order's own operands.
+        if (Amounts.mulOverflows(size, spec.baseScaleK())) {
+            out.resultCode(CommandResultCode.OVERFLOW);
+            return;
+        }
+
         final int holdCurrency;
         final long holdAmount;
         if (ask) {
-            // An ask must fill for at least its taker fee, or proceeds could go negative.
-            if (price * spec.quoteScaleK() < spec.takerFee()) {
+            // An ask must fill for at least its taker fee, or proceeds could go
+            // negative. Overflow-safe: with positive operands an overflowing
+            // product exceeds any fitting fee, so the floor holds.
+            if (!Amounts.mulOverflows(price, spec.quoteScaleK()) && price * spec.quoteScaleK() < spec.takerFee()) {
                 out.resultCode(CommandResultCode.RISK_ASK_PRICE_LOWER_THAN_FEE);
+                return;
+            }
+            // Worst-case sell proceeds and fee debit, checked before the hold.
+            if (Amounts.mulOverflows(size, price)
+                    || Amounts.mulOverflows(size * price, spec.quoteScaleK())
+                    || Amounts.mulOverflows(spec.takerFee(), size)) {
+                out.resultCode(CommandResultCode.OVERFLOW);
                 return;
             }
             holdCurrency = spec.baseCurrency();
             holdAmount = DirectExchangeRisk.askHold(spec, size);
         } else if (type == OrderType.FOK_BUDGET) {
+            if (Amounts.mulOverflows(price, spec.quoteScaleK())
+                    || Amounts.mulOverflows(size, spec.takerFee())
+                    || Amounts.addOverflows(price * spec.quoteScaleK(), size * spec.takerFee())) {
+                out.resultCode(CommandResultCode.OVERFLOW);
+                return;
+            }
             holdCurrency = spec.quoteCurrency();
             holdAmount = DirectExchangeRisk.bidBudgetHold(spec, size, price);
         } else {
             if (reserveBidPrice < price) {
                 out.resultCode(CommandResultCode.RISK_INVALID_RESERVE_PRICE);
+                return;
+            }
+            if (Amounts.mulOverflows(reserveBidPrice, spec.quoteScaleK())
+                    || Amounts.addOverflows(reserveBidPrice * spec.quoteScaleK(), spec.takerFee())
+                    || Amounts.mulOverflows(size, reserveBidPrice * spec.quoteScaleK() + spec.takerFee())) {
+                out.resultCode(CommandResultCode.OVERFLOW);
                 return;
             }
             holdCurrency = spec.quoteCurrency();
@@ -266,7 +313,7 @@ public final class MatchingEngine {
             out.resultCode(CommandResultCode.MATCHING_UNKNOWN_ORDER_ID);
             return;
         }
-        final CommandResultCode code = book.move(orderId, uid, cmd.price(), out);
+        final CommandResultCode code = book.move(orderId, uid, cmd.price(), symbols.get(symbolId), out);
         if (code == CommandResultCode.SUCCESS) {
             settleFills(symbols.get(symbolId), out, false, 0L);
         }
@@ -293,8 +340,17 @@ public final class MatchingEngine {
 
     // Settles maker fills at the actual price and the taker in aggregate, releasing
     // any over-reserved quote. Used by both PLACE and a marketable MOVE.
+    //
+    // Two passes: the first overflow-checks every credit and aggregate before any
+    // balance is touched, so an arithmetic failure surfaces as OVERFLOW with all
+    // balances intact. Placement validation bounds each order's own operands, so a
+    // failure here requires a cross-maker aggregate beyond any realistic supply.
     private void settleFills(
             final SymbolSpec spec, final CommandOutcome out, final boolean fokBudget, final long budget) {
+        if (!settleAmountsFit(spec, out, fokBudget, budget)) {
+            out.resultCode(CommandResultCode.OVERFLOW);
+            return;
+        }
         long sizeSum = 0L;
         long sizePriceSum = 0L;
         long takerReserve = 0L;
@@ -325,6 +381,85 @@ public final class MatchingEngine {
             risk.settleTakerSell(spec, takerUid, sizePriceSum, sizeSum);
         }
         risk.collectFee(spec, (spec.takerFee() + spec.makerFee()) * sizeSum);
+    }
+
+    // Overflow-checks every amount settleFills will credit, without mutating state.
+    private boolean settleAmountsFit(
+            final SymbolSpec spec, final CommandOutcome out, final boolean fokBudget, final long budget) {
+        long sizeSum = 0L;
+        long sizePriceSum = 0L;
+        long takerReserve = 0L;
+        boolean takerBid = false;
+        boolean anyTrade = false;
+        final int n = out.eventCount();
+        for (int i = 0; i < n; i++) {
+            final CommandOutcome.EventRecord e = out.event(i);
+            if (e.kind() != CommandOutcome.EventKind.TRADE) {
+                continue;
+            }
+            if (e.makerBid()) {
+                // Base credit plus the quote refund; the per-lot refund stays
+                // non-negative because price <= reserveBidPrice and
+                // makerFee <= takerFee (both enforced at validation).
+                if (Amounts.mulOverflows(e.size(), spec.baseScaleK())) {
+                    return false;
+                }
+                if (Amounts.mulOverflows(e.makerReserveBidPrice() - e.price(), spec.quoteScaleK())) {
+                    return false;
+                }
+                final long perLotRefund = (e.makerReserveBidPrice() - e.price()) * spec.quoteScaleK()
+                        + (spec.takerFee() - spec.makerFee());
+                if (Amounts.mulOverflows(e.size(), perLotRefund)) {
+                    return false;
+                }
+            } else {
+                if (Amounts.mulOverflows(e.size(), e.price())
+                        || Amounts.mulOverflows(e.size() * e.price(), spec.quoteScaleK())
+                        || Amounts.mulOverflows(spec.makerFee(), e.size())) {
+                    return false;
+                }
+            }
+            if (Amounts.mulOverflows(e.size(), e.price()) || Amounts.addOverflows(sizeSum, e.size())) {
+                return false;
+            }
+            sizeSum += e.size();
+            if (Amounts.addOverflows(sizePriceSum, e.size() * e.price())) {
+                return false;
+            }
+            sizePriceSum += e.size() * e.price();
+            takerBid = e.takerBid();
+            takerReserve = e.takerReserveBidPrice();
+            anyTrade = true;
+        }
+        if (!anyTrade) {
+            return true;
+        }
+        if (takerBid) {
+            final long heldPriceSum;
+            if (fokBudget) {
+                heldPriceSum = budget;
+            } else {
+                if (Amounts.mulOverflows(takerReserve, sizeSum)) {
+                    return false;
+                }
+                heldPriceSum = takerReserve * sizeSum;
+            }
+            if (Amounts.mulOverflows(sizeSum, spec.baseScaleK())) {
+                return false;
+            }
+            if (Amounts.mulOverflows(heldPriceSum - sizePriceSum, spec.quoteScaleK())) {
+                return false;
+            }
+        } else {
+            if (Amounts.mulOverflows(sizePriceSum, spec.quoteScaleK())
+                    || Amounts.mulOverflows(spec.takerFee(), sizeSum)) {
+                return false;
+            }
+        }
+        if (Amounts.addOverflows(spec.takerFee(), spec.makerFee())) {
+            return false;
+        }
+        return !Amounts.mulOverflows(spec.takerFee() + spec.makerFee(), sizeSum);
     }
 
     // Releases the taker's hold for any rejected (unmatched) size.

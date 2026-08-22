@@ -26,6 +26,7 @@ public final class ReadReplicaConfig {
     private static final long DEFAULT_ARCHIVE_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(2);
     private static final long DEFAULT_LIVENESS_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(10);
     private static final long DEFAULT_SNAPSHOT_POLL_MS = TimeUnit.SECONDS.toMillis(5);
+    private static final long DEFAULT_SNAPSHOT_LOAD_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(60);
     private static final long DEFAULT_CHECKPOINT_INTERVAL_MS = TimeUnit.SECONDS.toMillis(30);
 
     private final String aeronDirectoryName;
@@ -38,6 +39,7 @@ public final class ReadReplicaConfig {
     private final long archiveMessageTimeoutMs;
     private final long livenessTimeoutMs;
     private final long snapshotPollIntervalMs;
+    private final long snapshotLoadTimeoutMs;
     private final Path checkpointFile;
     private final long checkpointIntervalMs;
 
@@ -52,6 +54,7 @@ public final class ReadReplicaConfig {
         this.archiveMessageTimeoutMs = builder.archiveMessageTimeoutMs;
         this.livenessTimeoutMs = builder.livenessTimeoutMs;
         this.snapshotPollIntervalMs = builder.snapshotPollIntervalMs;
+        this.snapshotLoadTimeoutMs = builder.snapshotLoadTimeoutMs;
         this.checkpointFile = builder.checkpointFile;
         this.checkpointIntervalMs = builder.checkpointIntervalMs;
     }
@@ -180,6 +183,15 @@ public final class ReadReplicaConfig {
         return snapshotPollIntervalMs;
     }
 
+    /**
+     * Maximum time an in-flight snapshot load may take before it is treated as
+     * stalled and aborted into a failover. Bounds the wedge a truncated or
+     * never-completing snapshot recording would otherwise cause.
+     */
+    public long snapshotLoadTimeoutMs() {
+        return snapshotLoadTimeoutMs;
+    }
+
     /** Local checkpoint file for warm restarts, or {@code null} to disable checkpoints. */
     public Path checkpointFile() {
         return checkpointFile;
@@ -202,6 +214,7 @@ public final class ReadReplicaConfig {
         private long archiveMessageTimeoutMs = DEFAULT_ARCHIVE_TIMEOUT_MS;
         private long livenessTimeoutMs = DEFAULT_LIVENESS_TIMEOUT_MS;
         private long snapshotPollIntervalMs = DEFAULT_SNAPSHOT_POLL_MS;
+        private long snapshotLoadTimeoutMs = DEFAULT_SNAPSHOT_LOAD_TIMEOUT_MS;
         private Path checkpointFile;
         private long checkpointIntervalMs = DEFAULT_CHECKPOINT_INTERVAL_MS;
 
@@ -247,6 +260,12 @@ public final class ReadReplicaConfig {
 
         public Builder snapshotPollIntervalMs(final long value) {
             this.snapshotPollIntervalMs = value;
+            return this;
+        }
+
+        /** Maximum duration of one snapshot load before it aborts into a failover. */
+        public Builder snapshotLoadTimeoutMs(final long value) {
+            this.snapshotLoadTimeoutMs = value;
             return this;
         }
 

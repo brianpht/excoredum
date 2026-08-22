@@ -3,6 +3,7 @@ package com.exadbe.xcorebench;
 import com.exadbe.core.CommandOutcome;
 import com.exadbe.engine.orderbook.L2View;
 import com.exadbe.engine.orderbook.OrderBookNaive;
+import com.exadbe.engine.risk.SymbolSpec;
 import com.exadbe.protocol.CommandResultCode;
 
 /** Replays a {@link Workload} through excoredum's {@link OrderBookNaive}. */
@@ -14,6 +15,9 @@ public final class ExcBookRunner {
     public static BookStats replay(final Workload workload, final int symbolId) {
         final OrderBookNaive book = new OrderBookNaive(symbolId);
         final CommandOutcome outcome = new CommandOutcome(1024);
+        // MOVE validation only consults the spec's fee floor and overflow bounds;
+        // unit scales and zero fees keep the replay's behavior unchanged.
+        final SymbolSpec spec = new SymbolSpec(symbolId, 0, 1, 1L, 1L, 0L, 0L);
 
         long trades = 0;
         long tradeVolume = 0;
@@ -61,7 +65,7 @@ public final class ExcBookRunner {
             } else if (type == Workload.CANCEL) {
                 require(book.cancel(workload.orderId(i), workload.uid(i), outcome), "cancel", i);
             } else if (type == Workload.MOVE) {
-                require(book.move(workload.orderId(i), workload.uid(i), workload.price(i), outcome), "move", i);
+                require(book.move(workload.orderId(i), workload.uid(i), workload.price(i), spec, outcome), "move", i);
             } else {
                 require(book.reduce(workload.orderId(i), workload.uid(i), workload.size(i), outcome), "reduce", i);
             }

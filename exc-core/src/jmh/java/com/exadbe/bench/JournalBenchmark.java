@@ -3,7 +3,10 @@ package com.exadbe.bench;
 import com.exadbe.core.CommandOutcome;
 import com.exadbe.journal.DomainEventJournal;
 import com.exadbe.journal.EventJournalRing;
+import com.exadbe.telemetry.CoreMetrics;
 import java.util.concurrent.TimeUnit;
+import org.agrona.concurrent.IdleStrategy;
+import org.agrona.concurrent.NoOpIdleStrategy;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -35,13 +38,15 @@ public class JournalBenchmark {
     private DomainEventJournal journal;
     private CommandOutcome outcome;
     private EventJournalRing.EventHandler drain;
+    private IdleStrategy idle;
     private long logPosition;
 
     @Setup(Level.Trial)
     public void setup() {
         ring = new EventJournalRing(1 << 12, 128);
-        journal = new DomainEventJournal(ring);
+        journal = new DomainEventJournal(ring, new CoreMetrics());
         drain = (buffer, offset, length) -> {};
+        idle = new NoOpIdleStrategy();
         outcome = new CommandOutcome(64);
         outcome.reset(0L, 1L);
         // A representative command that swept four resting makers.
@@ -52,7 +57,7 @@ public class JournalBenchmark {
 
     @Benchmark
     public void emitAndDrain() {
-        journal.emit(outcome, logPosition++, 1_234L);
+        journal.emit(outcome, logPosition++, 1_234L, idle);
         ring.poll(drain, 8);
     }
 }

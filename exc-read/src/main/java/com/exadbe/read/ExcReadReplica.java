@@ -70,9 +70,12 @@ public final class ExcReadReplica implements AutoCloseable {
     private String currentChannel;
 
     private SnapshotSubscriber snapshotSubscriber;
+    private long snapshotLoadStartMs;
+    private long rejectedSnapshotPosition = -1L;
     private LedgerRebuilder ledgerRebuilder;
     private boolean ledgerRebuildNeeded;
     private long nextSnapshotPollMs;
+    private long nextLedgerRebuildMs;
     private long nextCheckpointMs;
     private long lastCheckpointPosition = -1L;
 
@@ -169,11 +172,13 @@ public final class ExcReadReplica implements AutoCloseable {
      */
     private void pollForNewSnapshot(final long now) {
         if (snapshotSubscriber == null) {
-            if (now < nextSnapshotPollMs || archive == null || ledgerRebuilder != null) {
+            // A rebuild needs the archive to itself (and the engine state is
+            // frozen meanwhile), so snapshot polling waits for it to finish.
+            if (now < nextSnapshotPollMs || archive == null || ledgerRebuilder != null || ledgerRebuildNeeded) {
                 return;
             }
             snapshotSubscriber = new SnapshotSubscriber(engine, localHost);
-            if (snapshotSubscriber.start(archive, appliedPosition)) {
+            if (snapshotSubscriber.start(archive, Math.max(appliedPosition, rejectedSnapshotPosition))) {
                 restartLiveLog();
             } else {
                 snapshotSubscriber.close();
@@ -185,11 +190,21 @@ public final class ExcReadReplica implements AutoCloseable {
             snapshotSubscriber.poll(FRAGMENT_LIMIT);
             if (snapshotSubscriber.isComplete()) {
                 finishSnapshotLoad();
+            } else if (snapshotSubscriber.isLoadStarted()) {
+                if (snapshotLoadStartMs == 0L) {
+                    snapshotLoadStartMs = now;
+                } else if (now - snapshotLoadStartMs > config.snapshotLoadTimeoutMs()) {
+                    // A truncated or stalled snapshot load must not wedge the
+                    // replica: abort and fail over to the next source.
+                    snapshotLoadStartMs = 0L;
+                    failover();
+                }
             }
         }
     }
 
     private void finishSnapshotLoad() {
+        snapshotLoadStartMs = 0L;
         switch (snapshotSubscriber.result()) {
             case LOADED -> {
                 health.recordSnapshotLoaded();
@@ -204,6 +219,11 @@ public final class ExcReadReplica implements AutoCloseable {
             }
             case CORRUPT -> {
                 health.recordIntegrityFailure();
+                // Remember the rejected snapshot's position so a later poll
+                // never reloads the same corrupt recording (it would reset the
+                // replica in a loop). Positions are cluster-global, so the
+                // rejection holds across failovers.
+                rejectedSnapshotPosition = Math.max(rejectedSnapshotPosition, snapshotSubscriber.loadedLogPosition());
                 resetReplication();
             }
             default -> {
@@ -215,20 +235,41 @@ public final class ExcReadReplica implements AutoCloseable {
         restartLiveLog();
     }
 
-    /** Advances the full-log ledger rebuild; swaps in the complete ledger when done. */
+    /**
+     * Advances the ledger rebuild and swaps in the complete ledger when done.
+     * The live log stays stopped for the whole rebuild, so the applied position
+     * is frozen at the snapshot position and the rebuild covers exactly the
+     * prefix the engine holds; the live log restarted after the swap feeds the
+     * engine and the new ledger the identical tail with no overlap.
+     */
     private void pollLedgerRebuild() {
-        if (!ledgerRebuildNeeded || archive == null) {
+        if (!ledgerRebuildNeeded || System.currentTimeMillis() < nextLedgerRebuildMs) {
+            return;
+        }
+        // The live log is off during a rebuild, so ensureLiveLog never runs and
+        // the archive connection is owned here (a failover closes it).
+        if (archive == null && !connectArchiveForRebuild()) {
+            nextLedgerRebuildMs = System.currentTimeMillis() + config.failoverBackoffMs();
             return;
         }
         if (ledgerRebuilder == null) {
             ledgerRebuilder = new LedgerRebuilder(coreConfig, localHost);
-            if (!ledgerRebuilder.start(archive)) {
+            if (!ledgerRebuilder.start(archive, appliedPosition)) {
                 ledgerRebuilder.close();
                 ledgerRebuilder = null;
+                nextLedgerRebuildMs = System.currentTimeMillis() + config.failoverBackoffMs();
                 return;
             }
         }
         ledgerRebuilder.poll(FRAGMENT_LIMIT);
+        if (ledgerRebuilder.replayLost()) {
+            // The replay image closed before the prefix was covered; a partial
+            // ledger is never swapped in. Retry after a backoff.
+            ledgerRebuilder.close();
+            ledgerRebuilder = null;
+            nextLedgerRebuildMs = System.currentTimeMillis() + config.failoverBackoffMs();
+            return;
+        }
         if (ledgerRebuilder.isCaughtUp()) {
             ledger = ledgerRebuilder.ledger();
             ledgerRebuilder.close();
@@ -236,6 +277,9 @@ public final class ExcReadReplica implements AutoCloseable {
             ledgerRebuildNeeded = false;
             // The ledger just became complete; persist it immediately.
             writeCheckpoint();
+            // Rebind the live path to the new ledger: the subscriber captures
+            // its ledger at construction, so it must be restarted.
+            restartLiveLog();
         }
     }
 
@@ -270,10 +314,30 @@ public final class ExcReadReplica implements AutoCloseable {
         nextConnectMs = 0L;
     }
 
+    /** Connects to any reachable source archive for a ledger rebuild. */
+    private boolean connectArchiveForRebuild() {
+        for (int attempt = 0; attempt < archiveControlChannels.length; attempt++) {
+            final int idx = (currentSource + attempt) % archiveControlChannels.length;
+            closeArchive();
+            if (connectArchive(idx)) {
+                currentSource = idx;
+                lastActivityMs = System.currentTimeMillis();
+                return true;
+            }
+        }
+        closeArchive();
+        return false;
+    }
+
     private void ensureLiveLog() {
         // A snapshot load feeds the same engine, so the live log must not run
-        // concurrently with it.
-        if (liveLog != null || snapshotSubscriber != null || System.currentTimeMillis() < nextConnectMs) {
+        // concurrently with it. A pending or running ledger rebuild also needs
+        // the applied position frozen, so the live log stays off until the
+        // rebuilt ledger is swapped in.
+        if (liveLog != null
+                || snapshotSubscriber != null
+                || ledgerRebuildNeeded
+                || System.currentTimeMillis() < nextConnectMs) {
             return;
         }
         boolean anyArchiveConnected = false;

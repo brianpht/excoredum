@@ -8,6 +8,7 @@ import com.exadbe.core.CommandOutcome;
 import com.exadbe.core.CommandOutcome.EventKind;
 import com.exadbe.engine.orderbook.L2View;
 import com.exadbe.engine.orderbook.OrderBookNaive;
+import com.exadbe.engine.risk.SymbolSpec;
 import com.exadbe.protocol.CommandResultCode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,9 @@ class OrderBookConformanceTest {
     private static final long MAKER = 501L;
     private static final long TAKER = 502L;
     private static final long HIGH_RESERVE = 1_000_000L;
+
+    /** Unit scales, zero fees: MOVE validation passes for every book-level test. */
+    private static final SymbolSpec SPEC = new SymbolSpec(SYM, 0, 1, 1L, 1L, 0L, 0L);
 
     private OrderBookNaive book;
     private CommandOutcome out;
@@ -138,7 +142,7 @@ class OrderBookConformanceTest {
         placeGtc(2L, false, 90L, 5L, TAKER);
 
         out.reset(0L, 0L);
-        final CommandResultCode code = book.move(2L, TAKER, 100L, out);
+        final CommandResultCode code = book.move(2L, TAKER, 100L, SPEC, out);
 
         assertEquals(CommandResultCode.SUCCESS, code);
         assertEquals(1, out.eventCount());
@@ -153,7 +157,7 @@ class OrderBookConformanceTest {
         book.placeGtc(1L, false, 90L, 5L, 95L, TAKER, 0L, out);
 
         out.reset(0L, 0L);
-        final CommandResultCode code = book.move(1L, TAKER, 100L, out);
+        final CommandResultCode code = book.move(1L, TAKER, 100L, SPEC, out);
 
         assertEquals(CommandResultCode.MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT, code);
     }

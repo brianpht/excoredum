@@ -44,6 +44,7 @@ final class LiveLogSubscriber implements AutoCloseable {
     private final OrderLedger ledger;
     private final ReplicaCommandListener listener;
     private final long startPosition;
+    private final long stopPosition;
     private final String localHost;
     private final int replayStreamId;
     private final io.aeron.cluster.codecs.MessageHeaderDecoder consensusHeader =
@@ -56,6 +57,7 @@ final class LiveLogSubscriber implements AutoCloseable {
     private Subscription subscription;
     private long lastPosition;
     private boolean hadImage;
+    private boolean reachedStop;
     private long recordingId = -1L;
     private long recordingEndPosition = -1L;
 
@@ -79,12 +81,26 @@ final class LiveLogSubscriber implements AutoCloseable {
             final long startPosition,
             final String localHost,
             final int replayStreamId) {
+        this(archive, engine, outcome, ledger, listener, startPosition, -1L, localHost, replayStreamId);
+    }
+
+    LiveLogSubscriber(
+            final AeronArchive archive,
+            final MatchingEngine engine,
+            final CommandOutcome outcome,
+            final OrderLedger ledger,
+            final ReplicaCommandListener listener,
+            final long startPosition,
+            final long stopPosition,
+            final String localHost,
+            final int replayStreamId) {
         this.archive = archive;
         this.engine = engine;
         this.outcome = outcome;
         this.ledger = ledger;
         this.listener = listener == null ? ReplicaCommandListener.NONE : listener;
         this.startPosition = startPosition;
+        this.stopPosition = stopPosition;
         this.localHost = localHost;
         this.replayStreamId = replayStreamId;
     }
@@ -156,7 +172,7 @@ final class LiveLogSubscriber implements AutoCloseable {
     }
 
     int poll(final int fragmentLimit) {
-        if (subscription == null) {
+        if (subscription == null || reachedStop) {
             return 0;
         }
         if (!isCaughtUp()) {
@@ -178,6 +194,15 @@ final class LiveLogSubscriber implements AutoCloseable {
      */
     boolean isCaughtUp() {
         return isReplayEnded() || (recordingEndPosition >= 0L && lastPosition >= recordingEndPosition);
+    }
+
+    /**
+     * Whether the subscriber stopped applying at {@code stopPosition}: the next
+     * fragment ends past the boundary, so everything at or before it was applied
+     * and nothing after it was touched. Always false without a stop position.
+     */
+    boolean reachedStop() {
+        return reachedStop;
     }
 
     private long queryRecordingEndPosition(final long id) {
@@ -213,6 +238,12 @@ final class LiveLogSubscriber implements AutoCloseable {
 
     private void onFragment(
             final DirectBuffer buffer, final int offset, final int length, final io.aeron.logbuffer.Header header) {
+        if (stopPosition >= 0L && header.position() > stopPosition) {
+            // Past the requested boundary: leave it for the live replay so the
+            // engine and ledger stay aligned on exactly the same prefix.
+            reachedStop = true;
+            return;
+        }
         lastPosition = header.position();
         if (length < CONSENSUS_FRAMING_LENGTH) {
             return;

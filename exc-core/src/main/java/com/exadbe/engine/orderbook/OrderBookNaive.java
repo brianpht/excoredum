@@ -1,7 +1,9 @@
 package com.exadbe.engine.orderbook;
 
 import com.exadbe.core.CommandOutcome;
+import com.exadbe.engine.risk.SymbolSpec;
 import com.exadbe.protocol.CommandResultCode;
+import com.exadbe.util.Amounts;
 import org.agrona.collections.Long2ObjectHashMap;
 
 /**
@@ -147,14 +149,34 @@ public final class OrderBookNaive {
     }
 
     /** Moves a resting order to a new price; may become marketable and match immediately. */
-    public CommandResultCode move(final long orderId, final long uid, final long newPrice, final CommandOutcome out) {
+    public CommandResultCode move(
+            final long orderId, final long uid, final long newPrice, final SymbolSpec spec, final CommandOutcome out) {
         final OrderNode node = idMap.get(orderId);
         if (node == null || node.uid != uid) {
             return CommandResultCode.MATCHING_UNKNOWN_ORDER_ID;
         }
+        if (newPrice <= 0L) {
+            return CommandResultCode.INVALID_AMOUNT;
+        }
         // A bid cannot move above its reserved price: the hold would be insufficient.
         if (!node.ask && newPrice > node.reserveBidPrice) {
             return CommandResultCode.MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT;
+        }
+        if (node.ask) {
+            // The same fee floor as PLACE: a lower price would settle to negative
+            // proceeds. Overflow-safe: an overflowing product exceeds any fitting fee.
+            if (!Amounts.mulOverflows(newPrice, spec.quoteScaleK())
+                    && newPrice * spec.quoteScaleK() < spec.takerFee()) {
+                return CommandResultCode.RISK_ASK_PRICE_LOWER_THAN_FEE;
+            }
+            // Bound the credits a fill at the new price can produce before the book
+            // is mutated, mirroring the PLACE pre-checks for a selling order.
+            final long remaining = node.remaining();
+            if (Amounts.mulOverflows(remaining, newPrice)
+                    || Amounts.mulOverflows(remaining * newPrice, spec.quoteScaleK())
+                    || Amounts.mulOverflows(spec.takerFee(), remaining)) {
+                return CommandResultCode.OVERFLOW;
+            }
         }
         final OrderBookSide side = ownSide(node.ask);
         final PriceBucket bucket = side.find(node.price);
@@ -252,9 +274,19 @@ public final class OrderBookNaive {
             final long available = bucket.totalVolume;
             if (remaining > available) {
                 remaining -= available;
+                // Checked accumulation: a book deep enough to overflow the walked
+                // cost cannot satisfy any fitting budget, so report unavailable.
+                if (Amounts.mulOverflows(available, bucket.price)
+                        || Amounts.addOverflows(budget, available * bucket.price)) {
+                    return BUDGET_UNAVAILABLE;
+                }
                 budget += available * bucket.price;
                 bucket = bucket.worse;
             } else {
+                if (Amounts.mulOverflows(remaining, bucket.price)
+                        || Amounts.addOverflows(budget, remaining * bucket.price)) {
+                    return BUDGET_UNAVAILABLE;
+                }
                 return budget + remaining * bucket.price;
             }
         }

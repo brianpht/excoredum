@@ -72,6 +72,11 @@ public final class DedupRing {
             final boolean hasOrderId,
             final long filledSizeValue,
             final boolean hasFilledSize) {
+        if (seq == EMPTY) {
+            // The sentinel is reserved for unoccupied slots; writing it would erase
+            // whatever sequence shares this slot. The engine rejects such seqs.
+            return false;
+        }
         final int idx = (int) (seq & mask);
         final long prior = seqSlots[idx];
         final boolean evicted = prior != EMPTY && prior != seq;

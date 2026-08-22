@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 public final class ClientConfig {
 
     private final long clientId;
+    private final long initialClientSeq;
     private final String ingressEndpoints;
     private final String aeronDirectoryName;
     private final String egressChannel;
@@ -24,6 +25,7 @@ public final class ClientConfig {
 
     private ClientConfig(final Builder builder) {
         this.clientId = builder.clientId;
+        this.initialClientSeq = builder.initialClientSeq;
         this.ingressEndpoints = builder.ingressEndpoints;
         this.aeronDirectoryName = builder.aeronDirectoryName;
         this.egressChannel = builder.egressChannel;
@@ -41,6 +43,18 @@ public final class ClientConfig {
 
     public long clientId() {
         return clientId;
+    }
+
+    /**
+     * The first per-client sequence this incarnation submits. The engine dedups
+     * on {@code (clientId, clientSeq)} and those records survive restarts via
+     * snapshot, so a restarted process that reuses a {@code clientId} with
+     * {@code initialClientSeq} zero receives the OLD cached results instead of
+     * fresh applies against a warm cluster. Long-lived deployments must advance
+     * this epoch per incarnation (or use a fresh clientId).
+     */
+    public long initialClientSeq() {
+        return initialClientSeq;
     }
 
     public String ingressEndpoints() {
@@ -98,6 +112,7 @@ public final class ClientConfig {
     public static final class Builder {
         private final long clientId;
         private final String ingressEndpoints;
+        private long initialClientSeq;
         private String aeronDirectoryName;
         private String egressChannel = "aeron:udp?endpoint=localhost:0";
         private long messageTimeoutNs = TimeUnit.SECONDS.toNanos(30);
@@ -115,6 +130,15 @@ public final class ClientConfig {
         /** Attach to an existing media driver rather than launching an embedded one. */
         public Builder aeronDirectoryName(final String value) {
             this.aeronDirectoryName = value;
+            return this;
+        }
+
+        /**
+         * First client sequence for this incarnation; see
+         * {@link ClientConfig#initialClientSeq()} for the warm-restart hazard.
+         */
+        public Builder initialClientSeq(final long value) {
+            this.initialClientSeq = value;
             return this;
         }
 

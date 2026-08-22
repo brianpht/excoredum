@@ -1,6 +1,7 @@
 package com.exadbe.read;
 
 import com.exadbe.engine.MatchingEngine;
+import com.exadbe.journal.JournalStreams;
 import com.exadbe.protocol.MessageHeaderDecoder;
 import com.exadbe.protocol.SnapshotHeaderDecoder;
 import com.exadbe.snapshot.SnapshotManager;
@@ -177,9 +178,9 @@ final class SnapshotSubscriber implements AutoCloseable {
         snapshotManager.onRecord(buffer, offset);
         if (snapshotManager.loadComplete()) {
             complete = true;
+            loadedLogPosition = snapshotManager.loadedLogPosition();
             if (snapshotManager.verifyInvariant()) {
                 result = Result.LOADED;
-                loadedLogPosition = snapshotManager.loadedLogPosition();
             } else {
                 engine.clearState();
                 result = Result.CORRUPT;
@@ -197,7 +198,10 @@ final class SnapshotSubscriber implements AutoCloseable {
                 continue;
             }
             sniffedRecordings.add(recording.id);
-            if (recording.streamId == ReadStreams.CONSENSUS_LOG_STREAM_ID) {
+            // Never sniff live non-snapshot recordings: replaying one streams
+            // its traffic until the sniff deadline and blocks the poll thread.
+            if (recording.streamId == ReadStreams.CONSENSUS_LOG_STREAM_ID
+                    || recording.streamId == JournalStreams.JOURNAL_STREAM_ID) {
                 continue;
             }
             final long logPosition = sniffLogPosition(archive, recording);
