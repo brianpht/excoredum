@@ -2,6 +2,8 @@ package com.exadbe.gateway.write;
 
 import com.exadbe.gateway.dto.WriteResultDto;
 import com.exadbe.gateway.http.ApiException;
+import com.exadbe.gateway.stream.EgressStream;
+import com.exadbe.gateway.stream.StreamBroadcaster;
 import com.exadbe.write.client.BackpressureException;
 import com.exadbe.write.client.ExcClient;
 import com.exadbe.write.client.config.ClientConfig;
@@ -24,6 +26,7 @@ public final class WritePump implements AutoCloseable {
 
     private final ExcClient client;
     private final WriteResultBridge bridge = new WriteResultBridge();
+    private final EgressStream egress;
     private final ConcurrentLinkedQueue<Submit> queue = new ConcurrentLinkedQueue<>();
     private final IdleStrategy idle = new BackoffIdleStrategy();
     private final Thread thread;
@@ -31,7 +34,16 @@ public final class WritePump implements AutoCloseable {
     private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
 
     public WritePump(final ClientConfig config) {
+        this(config, new StreamBroadcaster());
+    }
+
+    public WritePump(final ClientConfig config, final StreamBroadcaster broadcaster) {
         this.client = new ExcClient(config, bridge);
+        this.egress = new EgressStream(broadcaster);
+        this.client.tradeListener(egress);
+        this.client.reduceListener(egress);
+        this.client.rejectListener(egress);
+        this.client.orderBookListener(egress);
         this.thread = new Thread(this::pumpLoop, "exc-gateway-write-pump");
         this.thread.setDaemon(true);
         this.thread.start();

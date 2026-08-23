@@ -1,6 +1,7 @@
 package com.exadbe.gateway;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.exadbe.config.CoreConfig;
@@ -8,6 +9,7 @@ import com.exadbe.gateway.config.GatewayConfig;
 import com.exadbe.gateway.http.HttpServer;
 import com.exadbe.gateway.http.Router;
 import com.exadbe.gateway.read.ReadPump;
+import com.exadbe.gateway.stream.StreamBroadcaster;
 import com.exadbe.gateway.write.WritePump;
 import com.exadbe.launcher.ClusterConfig;
 import com.exadbe.launcher.ClusterNode;
@@ -22,8 +24,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.WebSocket;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import org.agrona.concurrent.BackoffIdleStrategy;
 import org.junit.jupiter.api.Tag;
@@ -94,13 +102,16 @@ class GatewayEndToEndIntegrationTest {
                         .adminUid(MAKER)
                         .symbol(new GatewayConfig.Symbol(SYM, "BTC/USDT", BASE, QUOTE, 1L, 1L))
                         .build();
+                final StreamBroadcaster broadcaster = new StreamBroadcaster();
                 try (ReadPump read = new ReadPump(ReadClientConfig.builder().build());
-                        WritePump write = new WritePump(ClientConfig.builder(7L, ClusterConfig.ingressEndpoints(1))
-                                .maxRetries(5)
-                                .build())) {
+                        WritePump write = new WritePump(
+                                ClientConfig.builder(7L, ClusterConfig.ingressEndpoints(1))
+                                        .maxRetries(5)
+                                        .build(),
+                                broadcaster)) {
                     final Router router = new Router(read, write, gatewayConfig);
                     final HttpServer server =
-                            new HttpServer(gatewayConfig.httpHost(), gatewayConfig.httpPort(), router);
+                            new HttpServer(gatewayConfig.httpHost(), gatewayConfig.httpPort(), router, broadcaster);
                     server.start();
                     try {
                         exercise(server.boundPort());
@@ -140,6 +151,10 @@ class GatewayEndToEndIntegrationTest {
         assertTrue(health.contains("\"appliedPosition\""), health);
         assertTrue(health.contains("\"stateHash\""), health);
 
+        // WebSocket: open a subscriber, then place a crossing order and assert a
+        // TRADE event streams back through the gateway's egress.
+        final BlockingQueue<String> frames = new LinkedBlockingQueue<>();
+        final WebSocket ws = openWebSocket(port, frames);
         // Write path: a taker GTC bid at 100 crosses the resting ask and fills.
         final String placed = post(
                 client,
@@ -148,6 +163,17 @@ class GatewayEndToEndIntegrationTest {
                 "{\"symbolId\":1,\"orderId\":9,\"ask\":false,\"type\":\"GTC\",\"price\":100,"
                         + "\"size\":1,\"reserveBidPrice\":100,\"uid\":812,\"userCookie\":0}");
         assertTrue(placed.contains("\"resultCode\":\"SUCCESS\""), placed);
+
+        String tradeFrame = null;
+        final long deadline = System.currentTimeMillis() + 15_000L;
+        while (System.currentTimeMillis() < deadline && tradeFrame == null) {
+            final String frame = frames.poll(1, TimeUnit.SECONDS);
+            if (frame != null && frame.contains("\"type\":\"TRADE\"")) {
+                tradeFrame = frame;
+            }
+        }
+        assertNotNull(tradeFrame, "no TRADE event streamed over the WebSocket");
+        ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").join();
 
         // Admin write path: an admin (X-User-Id in the allow-list) adds a symbol.
         final String added = post(
@@ -206,6 +232,26 @@ class GatewayEndToEndIntegrationTest {
 
     private static HttpResponse<String> send(final HttpClient client, final HttpRequest request) throws Exception {
         return client.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static WebSocket openWebSocket(final int port, final BlockingQueue<String> frames) {
+        return HttpClient.newHttpClient()
+                .newWebSocketBuilder()
+                .buildAsync(URI.create("ws://127.0.0.1:" + port + "/ws"), new WebSocket.Listener() {
+                    @Override
+                    public void onOpen(final WebSocket webSocket) {
+                        webSocket.request(1);
+                    }
+
+                    @Override
+                    public CompletionStage<?> onText(
+                            final WebSocket webSocket, final CharSequence data, final boolean last) {
+                        frames.add(data.toString());
+                        webSocket.request(1);
+                        return CompletableFuture.completedFuture(null);
+                    }
+                })
+                .join();
     }
 
     // ---- replica service loop (mirrors ReadServiceLauncher) ----

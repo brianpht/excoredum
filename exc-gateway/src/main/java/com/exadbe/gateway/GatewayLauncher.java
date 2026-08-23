@@ -4,6 +4,8 @@ import com.exadbe.gateway.config.GatewayConfig;
 import com.exadbe.gateway.http.HttpServer;
 import com.exadbe.gateway.http.Router;
 import com.exadbe.gateway.read.ReadPump;
+import com.exadbe.gateway.stream.MarketPump;
+import com.exadbe.gateway.stream.StreamBroadcaster;
 import com.exadbe.gateway.write.WritePump;
 import com.exadbe.read.client.config.ReadClientConfig;
 import com.exadbe.write.client.config.ClientConfig;
@@ -41,14 +43,22 @@ public final class GatewayLauncher {
                 .build();
 
         final ReadPump read = new ReadPump(readConfig);
-        final WritePump write = new WritePump(writeConfig);
-        final HttpServer server = new HttpServer(config.httpHost(), config.httpPort(), new Router(read, write, config));
+        final StreamBroadcaster broadcaster = new StreamBroadcaster();
+        final WritePump write = new WritePump(writeConfig, broadcaster);
+        final HttpServer server =
+                new HttpServer(config.httpHost(), config.httpPort(), new Router(read, write, config), broadcaster);
+        final MarketPump marketPump =
+                new MarketPump(read, broadcaster, config.symbols(), config.marketPumpIntervalMs());
         try {
             server.start();
+            if (config.marketPumpIntervalMs() > 0 && !config.symbols().isEmpty()) {
+                marketPump.start();
+            }
             System.out.println("exc-gateway listening on " + config.httpHost() + ":" + config.httpPort());
             Runtime.getRuntime()
                     .addShutdownHook(new Thread(
                             () -> {
+                                marketPump.close();
                                 server.stop();
                                 write.close();
                                 read.close();
@@ -57,6 +67,7 @@ public final class GatewayLauncher {
             // Block the main thread until the process is terminated.
             new CountDownLatch(1).await();
         } finally {
+            marketPump.close();
             write.close();
             read.close();
         }

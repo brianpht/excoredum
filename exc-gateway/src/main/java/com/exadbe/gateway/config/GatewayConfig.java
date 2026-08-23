@@ -31,6 +31,7 @@ public final class GatewayConfig {
     private final String writeIngressEndpoints;
     private final String writeEgressChannel;
     private final String writeAeronDir;
+    private final long marketPumpIntervalMs;
     private final List<Long> adminUids;
     private final List<Symbol> symbols;
 
@@ -46,6 +47,7 @@ public final class GatewayConfig {
         this.writeIngressEndpoints = b.writeIngressEndpoints;
         this.writeEgressChannel = b.writeEgressChannel;
         this.writeAeronDir = b.writeAeronDir;
+        this.marketPumpIntervalMs = b.marketPumpIntervalMs;
         this.adminUids = List.copyOf(b.adminUids);
         this.symbols = List.copyOf(b.symbols);
     }
@@ -71,6 +73,8 @@ public final class GatewayConfig {
         b.writeIngressEndpoints(p.getProperty("gateway.write.ingressEndpoints", "localhost:20100"));
         b.writeEgressChannel(p.getProperty("gateway.write.egressChannel", "aeron:udp?endpoint=localhost:0"));
         b.writeAeronDir(p.getProperty("gateway.write.aeronDir"));
+        b.marketPumpIntervalMs(
+                parseLong(p.getProperty("gateway.marketPump.intervalMs", "1000"), "gateway.marketPump.intervalMs"));
         for (final String uid : p.getProperty("gateway.admin.uids", "").split(",")) {
             if (!uid.isBlank()) {
                 b.adminUid(parseLong(uid.trim(), "gateway.admin.uids"));
@@ -163,6 +167,11 @@ public final class GatewayConfig {
         return writeAeronDir;
     }
 
+    /** WebSocket market snapshot interval in ms; 0 disables the market pump. */
+    public long marketPumpIntervalMs() {
+        return marketPumpIntervalMs;
+    }
+
     public List<Long> adminUids() {
         return adminUids;
     }
@@ -184,6 +193,7 @@ public final class GatewayConfig {
         private String writeIngressEndpoints = "localhost:20100";
         private String writeEgressChannel = "aeron:udp?endpoint=localhost:0";
         private String writeAeronDir;
+        private long marketPumpIntervalMs = 1000L;
         private final List<Long> adminUids = new ArrayList<>();
         private final List<Symbol> symbols = new ArrayList<>();
 
@@ -239,6 +249,11 @@ public final class GatewayConfig {
 
         public Builder writeAeronDir(final String v) {
             this.writeAeronDir = v;
+            return this;
+        }
+
+        public Builder marketPumpIntervalMs(final long v) {
+            this.marketPumpIntervalMs = v;
             return this;
         }
 
