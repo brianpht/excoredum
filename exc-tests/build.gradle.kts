@@ -16,6 +16,7 @@ dependencies {
     testImplementation(project(":exc-write-client"))
     testImplementation(project(":exc-read"))
     testImplementation(project(":exc-read-client"))
+    testImplementation(project(":exc-gateway"))
     testImplementation(project(":exc-bench"))
     testImplementation(project(":exc-xcore-bench"))
     testImplementation(libs.bundles.aeron)
@@ -111,7 +112,7 @@ tasks.withType<JavaCompile>().configureEach {
 // attribute coverage of their main sources to this module's report. All test
 // tasks contribute execution data (cluster/fault/soak when they have run), so
 // the report reflects the full suite, not just unit + integration.
-val coveredProjects = listOf(":exc-core", ":exc-write-client", ":exc-launcher", ":exc-read", ":exc-read-client")
+val coveredProjects = listOf(":exc-core", ":exc-write-client", ":exc-launcher", ":exc-read", ":exc-read-client", ":exc-gateway")
 val coverageExecutionData = fileTree(layout.buildDirectory).include(
     "jacoco/test.exec",
     "jacoco/integrationTest.exec",
