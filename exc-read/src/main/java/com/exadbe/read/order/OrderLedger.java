@@ -38,6 +38,17 @@ public final class OrderLedger {
     /** Cap on the global market trade tape; oldest trades are overwritten. */
     public static final int MAX_MARKET_TRADES = 65536;
 
+    // Tape indexing uses `(head + i) & (MAX_MARKET_TRADES - 1)`, which requires a
+    // power-of-two capacity; a non-power-of-two cap would alias slots and corrupt
+    // the newest-first ordering. Mirrors the DedupRing / EventJournalRing guards.
+    static {
+        if (Integer.bitCount(MAX_MARKET_TRADES) != 1) {
+            throw new ExceptionInInitializerError("MAX_MARKET_TRADES must be a power of two");
+        }
+    }
+
+    private static final int TAPE_MASK = MAX_MARKET_TRADES - 1;
+
     private static final float LOAD_FACTOR = 0.65f;
 
     private static final class UserHistory {
@@ -99,7 +110,7 @@ public final class OrderLedger {
         }
         out.writeInt(tapeCount);
         for (int i = 0; i < tapeCount; i++) {
-            final MarketTrade trade = tape[(tapeHead + i) % MAX_MARKET_TRADES];
+            final MarketTrade trade = tape[(tapeHead + i) & TAPE_MASK];
             out.writeLong(trade.timestamp());
             out.writeInt(trade.symbolId());
             out.writeLong(trade.price());
@@ -293,18 +304,18 @@ public final class OrderLedger {
             final long makerUid,
             final long takerUid) {
         if (tapeCount < MAX_MARKET_TRADES) {
-            tape[(tapeHead + tapeCount) % MAX_MARKET_TRADES] =
+            tape[(tapeHead + tapeCount) & TAPE_MASK] =
                     new MarketTrade(timestamp, symbolId, price, size, makerOrderId, makerUid, takerUid);
             tapeCount++;
         } else {
             tape[tapeHead] = new MarketTrade(timestamp, symbolId, price, size, makerOrderId, makerUid, takerUid);
-            tapeHead = (tapeHead + 1) % MAX_MARKET_TRADES;
+            tapeHead = (tapeHead + 1) & TAPE_MASK;
         }
     }
 
     private void forEachNewestFirst(final java.util.function.Consumer<MarketTrade> visitor) {
         for (int i = 0; i < tapeCount; i++) {
-            final int index = (tapeHead + tapeCount - 1 - i) % MAX_MARKET_TRADES;
+            final int index = (tapeHead + tapeCount - 1 - i) & TAPE_MASK;
             visitor.accept(tape[index]);
         }
     }

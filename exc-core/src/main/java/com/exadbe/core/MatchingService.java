@@ -115,7 +115,8 @@ public final class MatchingService implements ClusteredService {
             final Header header) {
 
         messageHeaderDecoder.wrap(buffer, offset);
-        if (messageHeaderDecoder.templateId() != CommandEnvelopeDecoder.TEMPLATE_ID) {
+        if (messageHeaderDecoder.schemaId() != MessageHeaderDecoder.SCHEMA_ID
+                || messageHeaderDecoder.templateId() != CommandEnvelopeDecoder.TEMPLATE_ID) {
             // Not a command we recognise; ignore rather than corrupt state.
             return;
         }

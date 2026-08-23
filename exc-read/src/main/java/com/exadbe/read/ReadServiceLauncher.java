@@ -63,6 +63,7 @@ public final class ReadServiceLauncher {
         final ReadReplicaConfig config = builder.build();
 
         final IdleStrategy idle = new BackoffIdleStrategy();
+        long pollFailures = 0L;
         try (ExcReadReplica replica = new ExcReadReplica(config, CoreConfig.defaults());
                 QueryResponder responder = new QueryResponder(replica, config)) {
             System.out.println("exc-read replica following " + archiveControlChannels + ", serving queries on "
@@ -74,7 +75,12 @@ public final class ReadServiceLauncher {
                 } catch (final RuntimeException e) {
                     // A transient failure must not kill the read service: the
                     // replica keeps serving its last known state and retries.
-                    e.printStackTrace();
+                    // Report the first failure and then every 1024th so a
+                    // flapping source cannot spam the console with stack traces.
+                    if (pollFailures == 0L || pollFailures >= 1024L) {
+                        System.err.println("read poll failed (" + pollFailures + " total): " + e);
+                    }
+                    pollFailures++;
                     idle.idle();
                 }
             }

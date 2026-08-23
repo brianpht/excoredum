@@ -277,6 +277,30 @@ final class OrderLedgerTest {
         assertTrue(ledger.marketTrades(SYMBOL, 10).isEmpty());
     }
 
+    @Test
+    void tapeWrapsAndKeepsNewestTrades() {
+        final int capacity = OrderLedger.MAX_MARKET_TRADES;
+        // Push past the tape capacity so the oldest trades are overwritten; the
+        // ring head wraps and the newest-first ordering must hold across it.
+        for (long i = 1L; i <= capacity + 3L; i++) {
+            outcome.reset(0L, i);
+            outcome.uid(TAKER);
+            outcome.orderId(i);
+            outcome.resultCode(CommandResultCode.SUCCESS);
+            outcome.addTrade(SYMBOL, i, MAKER, TAKER, 100L, 1L, true, false, 0L, true, 100L);
+            ledger.applyCommand(
+                    i * 10L,
+                    encode(i, OrderCommandType.NOP, TAKER, i, OrderAction.NULL_VAL, OrderType.NULL_VAL, 0L, 0L, 0),
+                    outcome);
+        }
+
+        final List<MarketTrade> trades = ledger.marketTrades(SYMBOL, 10);
+        assertEquals(10, trades.size());
+        assertEquals(capacity + 3L, trades.get(0).makerOrderId(), "newest trade first");
+        assertEquals(capacity - 6L, trades.get(9).makerOrderId(), "wrapped tape serves the retained tail");
+        assertEquals(capacity, ledger.marketTrades(SYMBOL, capacity).size(), "oldest three trades overwritten");
+    }
+
     private void applyPlace(
             final long clientSeq,
             final long orderId,

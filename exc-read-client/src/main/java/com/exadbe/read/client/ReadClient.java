@@ -378,6 +378,10 @@ public final class ReadClient implements AutoCloseable {
     }
 
     private int retransmit(final long now) {
+        if (freeTop == pool.length) {
+            // Nothing in flight: the per-cycle pool scan would be pure waste.
+            return 0;
+        }
         int work = 0;
         for (int i = 0; i < pool.length; i++) {
             final PendingQuery pq = pool[i];

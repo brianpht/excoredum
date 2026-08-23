@@ -20,10 +20,8 @@ import io.aeron.FragmentAssembler;
 import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.logbuffer.Header;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Map;
 import org.agrona.DirectBuffer;
 import org.agrona.concurrent.UnsafeBuffer;
 
@@ -45,7 +43,12 @@ public final class QueryResponder implements AutoCloseable {
     private static final int FRAGMENT_LIMIT = 64;
     private static final int RESPONSE_BUFFER_CAPACITY = 256 * 1024;
     private static final int MAX_RESPONSE_PUBLICATIONS = 64;
+    private static final int RESPONSE_PUBLICATIONS_MASK = MAX_RESPONSE_PUBLICATIONS - 1;
+    private static final int MAX_CHANNEL_LENGTH = 64;
     private static final int GROUP_SIZE_ENCODING_LENGTH = 4;
+
+    private static final byte[] UDP_CHANNEL_PREFIX = {'a', 'e', 'r', 'o', 'n', ':', 'u', 'd', 'p'};
+    private static final byte[] IPC_CHANNEL_PREFIX = {'a', 'e', 'r', 'o', 'n', ':', 'i', 'p', 'c'};
 
     private final ExcReadReplica replica;
     private final Aeron aeron;
@@ -57,7 +60,18 @@ public final class QueryResponder implements AutoCloseable {
     private final QueryResponseEncoder responseEncoder = new QueryResponseEncoder();
     private final UnsafeBuffer responseBuffer = new UnsafeBuffer(new byte[RESPONSE_BUFFER_CAPACITY]);
     private final L2View l2View = new L2View(CoreConfig.DEFAULT_L2_MAX_LEVELS);
-    private final Map<String, Publication> responsePublications = new LinkedHashMap<>(16, 0.75f, true);
+
+    // Bounded LRU of response publications, keyed by a composite of the channel
+    // bytes and stream id, so answering a query allocates nothing (the old
+    // String decode + concat key churned per request). The channel bytes are
+    // retained for collision-safe verification; the String form is decoded only
+    // when a new publication must be created.
+    private final long[] publicationKeys = new long[MAX_RESPONSE_PUBLICATIONS];
+    private final byte[][] publicationChannels = new byte[MAX_RESPONSE_PUBLICATIONS][];
+    private final Publication[] publicationSlots = new Publication[MAX_RESPONSE_PUBLICATIONS];
+    private final byte[] channelScratch = new byte[MAX_CHANNEL_LENGTH];
+    private int publicationHead;
+    private int publicationCount;
 
     private long replies;
     private long dropped;
@@ -114,8 +128,8 @@ public final class QueryResponder implements AutoCloseable {
                 headerDecoder.version());
         received++;
 
-        final String responseChannel = requestDecoder.responseChannel();
-        if (responseChannel == null || responseChannel.isEmpty() || !isAllowedChannel(responseChannel)) {
+        final int channelLength = validChannelLength();
+        if (channelLength == 0) {
             return;
         }
         // The uint32 stream id narrows to a Java int; a value whose top bit is set
@@ -129,7 +143,7 @@ public final class QueryResponder implements AutoCloseable {
         if (responseLength <= 0) {
             return;
         }
-        final Publication publication = responsePublication(responseChannel, responseStreamId);
+        final Publication publication = responsePublication(responseStreamId, channelLength);
         if (publication == null) {
             dropped++;
             return;
@@ -140,6 +154,61 @@ public final class QueryResponder implements AutoCloseable {
         } else {
             replies++;
         }
+    }
+
+    /**
+     * Copies the response channel into {@link #channelScratch} and returns its
+     * length, or {@code 0} when the channel is empty, oversized, or not a
+     * supported scheme. No String is allocated for validation.
+     */
+    private int validChannelLength() {
+        final int length = requestDecoder.responseChannelLength();
+        if (length == 0 || length > MAX_CHANNEL_LENGTH) {
+            return 0;
+        }
+        requestDecoder.getResponseChannel(channelScratch, 0, length);
+        return hasPrefix(UDP_CHANNEL_PREFIX, length) || hasPrefix(IPC_CHANNEL_PREFIX, length) ? length : 0;
+    }
+
+    private boolean hasPrefix(final byte[] prefix, final int length) {
+        if (length < prefix.length) {
+            return false;
+        }
+        for (int i = 0; i < prefix.length; i++) {
+            if (channelScratch[i] != prefix[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** A deterministic composite key of the channel bytes and stream id. */
+    private long channelKey(final int length, final int streamId) {
+        long hash = 0xcbf29ce484222325L;
+        for (int i = 0; i < length; i++) {
+            hash ^= channelScratch[i] & 0xFF;
+            hash *= 0x100000001b3L;
+        }
+        return (hash << 32) ^ (streamId & 0xFFFFFFFFL);
+    }
+
+    private boolean channelMatches(final int slot, final int length) {
+        final byte[] stored = publicationChannels[slot];
+        if (stored == null || stored.length != length) {
+            return false;
+        }
+        for (int i = 0; i < length; i++) {
+            if (stored[i] != channelScratch[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private byte[] channelBytesCopy(final int length) {
+        final byte[] copy = new byte[length];
+        System.arraycopy(channelScratch, 0, copy, 0, length);
+        return copy;
     }
 
     private int encodeResponse() {
@@ -417,43 +486,71 @@ public final class QueryResponder implements AutoCloseable {
         }
     }
 
-    // The replica only ever publishes responses over UDP (or IPC). Anything else
-    // (TCP, exotic schemes) is rejected so a malformed client cannot open an
-    // arbitrary publication or cause addPublication to throw out of poll().
-    private static boolean isAllowedChannel(final String channel) {
-        return channel.startsWith("aeron:udp") || channel.startsWith("aeron:ipc");
-    }
-
-    private Publication responsePublication(final String channel, final int streamId) {
-        final String key = channel + '\u0000' + streamId;
-        Publication publication = responsePublications.get(key);
-        if (publication != null) {
-            return publication;
+    // The channel bytes are still in channelScratch (single-threaded poll); the
+    // String form is decoded only on a miss, when a publication must be created.
+    private Publication responsePublication(final int streamId, final int channelLength) {
+        final long key = channelKey(channelLength, streamId);
+        for (int i = 0; i < publicationCount; i++) {
+            final int index = (publicationHead + i) & RESPONSE_PUBLICATIONS_MASK;
+            if (publicationKeys[index] == key && channelMatches(index, channelLength)) {
+                if (i != publicationCount - 1) {
+                    // Access-order LRU: move the hit to the tail so the oldest
+                    // *used* entry is evicted when the cache is full.
+                    final Publication publication = publicationSlots[index];
+                    final long storedKey = publicationKeys[index];
+                    final byte[] storedChannel = publicationChannels[index];
+                    for (int j = i + 1; j < publicationCount; j++) {
+                        final int src = (publicationHead + j) & RESPONSE_PUBLICATIONS_MASK;
+                        final int dst = (publicationHead + j - 1) & RESPONSE_PUBLICATIONS_MASK;
+                        publicationKeys[dst] = publicationKeys[src];
+                        publicationChannels[dst] = publicationChannels[src];
+                        publicationSlots[dst] = publicationSlots[src];
+                    }
+                    final int tail = (publicationHead + publicationCount - 1) & RESPONSE_PUBLICATIONS_MASK;
+                    publicationKeys[tail] = storedKey;
+                    publicationChannels[tail] = storedChannel;
+                    publicationSlots[tail] = publication;
+                }
+                return publicationSlots[(publicationHead + publicationCount - 1) & RESPONSE_PUBLICATIONS_MASK];
+            }
         }
+        Publication publication;
         try {
+            final String channel = new String(channelScratch, 0, channelLength, StandardCharsets.UTF_8);
             publication = aeron.addPublication(channel, streamId);
         } catch (final RuntimeException e) {
             // A malformed channel must not kill the poll loop; skip the reply.
             return null;
         }
-        if (responsePublications.size() >= MAX_RESPONSE_PUBLICATIONS) {
-            final Iterator<Map.Entry<String, Publication>> iterator =
-                    responsePublications.entrySet().iterator();
-            if (iterator.hasNext()) {
-                iterator.next().getValue().close();
-                iterator.remove();
-            }
+        if (publicationCount == MAX_RESPONSE_PUBLICATIONS) {
+            // Full: evict the oldest entry before inserting the newest.
+            final int evicted = publicationHead;
+            publicationSlots[evicted].close();
+            publicationSlots[evicted] = null;
+            publicationKeys[evicted] = 0L;
+            publicationChannels[evicted] = null;
+            publicationHead = (publicationHead + 1) & RESPONSE_PUBLICATIONS_MASK;
+            publicationCount--;
         }
-        responsePublications.put(key, publication);
+        final int slot = (publicationHead + publicationCount) & RESPONSE_PUBLICATIONS_MASK;
+        publicationKeys[slot] = key;
+        publicationChannels[slot] = channelBytesCopy(channelLength);
+        publicationSlots[slot] = publication;
+        publicationCount++;
         return publication;
     }
 
     @Override
     public void close() {
-        for (final Publication publication : responsePublications.values()) {
-            publication.close();
+        for (int i = 0; i < publicationCount; i++) {
+            final int index = (publicationHead + i) & RESPONSE_PUBLICATIONS_MASK;
+            final Publication publication = publicationSlots[index];
+            if (publication != null) {
+                publication.close();
+            }
         }
-        responsePublications.clear();
+        publicationHead = 0;
+        publicationCount = 0;
         requests.close();
         aeron.close();
     }

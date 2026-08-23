@@ -466,3 +466,70 @@ sentinel.
   and snapshot backpressure handling, write-client dedup-window expiry guard
   and bounded correlation map, replica position-monotonic failover,
   checkpoint atomicity, query buffer budgeting with `TRUNCATED` degradation.
+
+---
+
+## Tidy round (2026-08-23)
+
+Aeron/Agrona pattern-conformance pass over the whole tree after the P2/P3
+round. No behavior changes; every change either aligns the code with a stated
+convention or removes avoidable per-event churn. Full pre-commit gate green
+(spotless, checkstyle, `-Werror` compile, `test integrationTest clusterTest
+faultTest`), JMH quickBench within the 10% gate.
+
+### Findings and fixes
+
+- **T-01** (rule violation, read apply path) - `OrderLedger`'s trade tape
+  indexed with `% MAX_MARKET_TRADES` at four sites
+  (`exc-read/.../read/order/OrderLedger.java`), violating "ALL ring / sequence
+  buffer indices MUST use `seq & (capacity - 1)`" on the per-trade apply path.
+  `MAX_MARKET_TRADES` is a power of two, so the mask is equivalent; replaced
+  with `& TAPE_MASK` and added a static power-of-two guard mirroring
+  `DedupRing` / `EventJournalRing`. New unit test
+  `OrderLedgerTest.tapeWrapsAndKeepsNewestTrades` pushes past the tape
+  capacity and asserts newest-first ordering across the wrap (13/13 green).
+- **T-02** (consistency) - `MatchingService.onSessionMessage` validated only
+  `templateId`, while the query protocol (F-23) also validates `schemaId`; a
+  message from a foreign schema is now ignored on the command path too. One
+  extra int read + predictable branch on the decode path; quickBench
+  before/after shows no regression.
+- **T-03** (per-request churn, read side) - `QueryResponder` decoded the SBE
+  `responseChannel` varData into a `String` and built a
+  `channel + '\u0000' + streamId` concat key on every request. It now reads
+  the channel bytes into a reusable scratch buffer, validates the scheme
+  prefix on bytes (no allocation), and caches publications in a fixed 64-slot
+  array LRU keyed by a composite long (FNV-1a of the channel bytes + stream
+  id) with byte-comparison collision safety; the `String` is decoded only
+  when a new publication must be created. `ReadQueryIntegrationTest` now runs
+  a second SDK client on a distinct response channel and asserts the answers
+  stay per-channel.
+- **T-04** (per-cycle churn, read side) - `ReadClient.retransmit` scanned the
+  whole in-flight pool every poll cycle even when idle; it now returns
+  immediately when nothing is in flight (`freeTop == pool.length`).
+- **T-05** (error path) - `ReadServiceLauncher` printed a full stack trace on
+  every poll failure; it now counts failures and reports the first and then
+  every 1024th (class + message, no stack trace).
+
+### Not changed (deliberate)
+
+- `OrderLedger` per-event POJO allocation and `ArrayList.remove` eviction on
+  the replay path (F-37): the read side is explicitly exempt from the
+  allocation rules and the records are returned to callers by reference.
+- `ExcClient`'s three similar encode paths and `ReportGenerator`'s O(users +
+  orders) scans: boundary/cold code, sanctioned by the budget.
+- `SnapshotSubscriber`'s `Comparator.comparingLong(r -> -r.id)` was flagged in
+  the audit as boxing; it does not (the lambda is a `ToLongFunction`), so it
+  was left untouched.
+
+### JMH quickBench (single iteration, no error bars; run-to-run noise dominates)
+
+| Benchmark                          | Baseline | After   | Delta    |
+|------------------------------------|----------|---------|----------|
+| CodecBenchmark.decodeEnvelope      | 2.023    | 2.051   | +1.4%    |
+| CodecBenchmark.encodeEnvelope      | 3.866    | 3.805   | -1.6%    |
+| JournalBenchmark.emitAndDrain      | 45.105   | 44.166  | -2.1%    |
+| MatchingEngineBenchmark.placeThenCancel | 88.656 | 89.778 | +1.3% |
+| OrderBookBenchmark.iocMatch        | 6.135    | 6.183   | +0.8%    |
+| OrderBookBenchmark.restingPlaceCancel | 23.048 | 21.758 | -5.6%  |
+
+All within the 10% regression gate.

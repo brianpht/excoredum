@@ -86,13 +86,17 @@ class ReadQueryIntegrationTest {
                     ReadClient readClient = new ReadClient(ReadClientConfig.builder()
                             .messageTimeoutNs(TimeUnit.SECONDS.toNanos(2))
                             .maxRetries(10)
+                            .build());
+                    ReadClient secondClient = new ReadClient(ReadClientConfig.builder()
+                            .messageTimeoutNs(TimeUnit.SECONDS.toNanos(2))
+                            .maxRetries(10)
                             .build())) {
                 // The read service owns the replica and responder on one thread
                 // (as ReadServiceLauncher does); the SDK client is a separate
                 // connection that blocks on its own thread per query.
                 final Thread serviceThread = startServiceLoop(replica, responder);
                 try {
-                    runQueries(replica, readClient, responder);
+                    runQueries(replica, readClient, secondClient, responder);
                 } catch (final QueryTimeoutException e) {
                     throw new AssertionError(
                             "query timeout: lastOffer=" + readClient.lastOfferResult()
@@ -107,7 +111,11 @@ class ReadQueryIntegrationTest {
         }
     }
 
-    private void runQueries(final ExcReadReplica replica, final ReadClient readClient, final QueryResponder responder) {
+    private void runQueries(
+            final ExcReadReplica replica,
+            final ReadClient readClient,
+            final ReadClient secondClient,
+            final QueryResponder responder) {
         pollUntil(() -> replica.order(1L) != null && replica.order(2L) != null && replica.order(3L) != null);
 
         assertTrue(readClient.userExists(MAKER));
@@ -198,7 +206,12 @@ class ReadQueryIntegrationTest {
 
         runAsyncQueries(readClient);
 
-        assertTrue(responder.replies() >= 23L, "every SDK query was answered");
+        // A second SDK client binds a distinct response channel; the responder
+        // caches a separate publication for it and keeps the answers isolated.
+        assertEquals(990L, secondClient.balance(MAKER, BASE).balance());
+        assertTrue(secondClient.userExists(MAKER));
+
+        assertTrue(responder.replies() >= 25L, "every SDK query was answered");
     }
 
     /** Exercises the asynchronous path: submit without blocking, deliver via the listener. */
