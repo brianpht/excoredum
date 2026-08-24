@@ -20,16 +20,24 @@ public final class Mapper {
     }
 
     public static OrderBookDto orderBook(final L2Snapshot snapshot) {
+        // A symbol the engine does not know reports found=false; its levels are
+        // not meaningful (the read side may return uninitialised buckets under
+        // concurrent in-flight queries), so surface an empty book instead.
+        final boolean found = snapshot.found();
         return new OrderBookDto(
                 snapshot.symbolId(),
-                snapshot.found(),
+                found,
                 snapshot.appliedPosition(),
-                snapshot.asks().stream()
-                        .map(l -> new OrderBookDto.Level(l.price(), l.size(), l.orders()))
-                        .toList(),
-                snapshot.bids().stream()
-                        .map(l -> new OrderBookDto.Level(l.price(), l.size(), l.orders()))
-                        .toList());
+                found
+                        ? snapshot.asks().stream()
+                                .map(l -> new OrderBookDto.Level(l.price(), l.size(), l.orders()))
+                                .toList()
+                        : java.util.List.of(),
+                found
+                        ? snapshot.bids().stream()
+                                .map(l -> new OrderBookDto.Level(l.price(), l.size(), l.orders()))
+                                .toList()
+                        : java.util.List.of());
     }
 
     public static TradeDto trade(final MarketTradeResult trade) {

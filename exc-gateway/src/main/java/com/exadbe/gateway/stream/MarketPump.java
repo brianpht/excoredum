@@ -67,7 +67,10 @@ public final class MarketPump implements AutoCloseable {
     }
 
     private void publishBook(final L2Snapshot snapshot) {
-        if (snapshot == null) {
+        // A symbol not registered in the engine is reported as not found; do not
+        // broadcast it (the holder may carry stale/uninitialised levels) or the
+        // UI would render a garbage book.
+        if (snapshot == null || !snapshot.found()) {
             return;
         }
         final Map<String, Object> e = new LinkedHashMap<>();
