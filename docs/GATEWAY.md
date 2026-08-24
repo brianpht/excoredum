@@ -185,7 +185,8 @@ Launcher reads a properties file via `--config=<path>` (or `--config <path>`):
 | `gateway.write.egressChannel`               | `aeron:udp?endpoint=localhost:0`               | Write egress channel                     |
 | `gateway.write.aeronDir`                    | (embedded media driver)                        | Shared Aeron dir, if any                 |
 | `gateway.admin.uids`                        | (empty)                                        | Admin `X-User-Id` allow-list             |
-| `gateway.symbols`                           | (empty)                                        | `id\|name\|base\|quote\|baseScaleK\|quoteScaleK`, comma separated |
+| `gateway.symbols`                           | (empty)                                        | `id\|name\|base\|quote\|baseScaleK\|quoteScaleK[|makerFee|takerFee]`, comma separated |
+| `gateway.currencies`                        | (empty)                                        | `id\|code\|scaleK`, comma separated (UI balance naming/scaling) |
 | `gateway.marketPump.intervalMs`             | `1000`                                         | Market snapshot interval (0 disables)    |
 
 ---
@@ -224,7 +225,8 @@ gateway.read.requestChannel=aeron:udp?endpoint=localhost:44000
 gateway.write.clientId=42
 gateway.write.ingressEndpoints=localhost:20100,localhost:20200,localhost:20300
 gateway.admin.uids=1,2,811
-gateway.symbols=1|BTC/USDT|10|20|1000000|100000,2|ETH/USDT|10|20|1000000|100000
+gateway.symbols=1|BTC/USDT|10|20|1000000|100000|1000|5000,2|ETH/USDT|10|20|1000000|100000|1000|5000
+gateway.currencies=10|BTC|1000000,20|USDT|100000
 gateway.marketPump.intervalMs=1000
 ```
 

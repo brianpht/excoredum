@@ -100,7 +100,9 @@ class GatewayEndToEndIntegrationTest {
                         .writeClientId(7L)
                         .writeIngressEndpoints(ClusterConfig.ingressEndpoints(1))
                         .adminUid(MAKER)
-                        .symbol(new GatewayConfig.Symbol(SYM, "BTC/USDT", BASE, QUOTE, 1L, 1L))
+                        .symbol(new GatewayConfig.Symbol(SYM, "BTC/USDT", BASE, QUOTE, 1L, 1L, 0L, 0L))
+                        .currency(new GatewayConfig.Currency(BASE, "BTC", 1L))
+                        .currency(new GatewayConfig.Currency(QUOTE, "USDT", 1L))
                         .build();
                 final StreamBroadcaster broadcaster = new StreamBroadcaster();
                 try (ReadPump read = new ReadPump(ReadClientConfig.builder().build());
@@ -136,6 +138,15 @@ class GatewayEndToEndIntegrationTest {
         // Symbols are served from the config-driven registry.
         final String symbols = get(client, port, "/api/v1/symbols");
         assertTrue(symbols.contains("\"name\":\"BTC/USDT\""), symbols);
+
+        // The bundled UI is served from the gateway root.
+        final String index = get(client, port, "/");
+        assertTrue(index.contains("<html"), index);
+
+        // The config-driven currency registry names balances for the UI.
+        final String currencies = get(client, port, "/api/v1/currencies");
+        assertTrue(currencies.contains("\"code\":\"USDT\""), currencies);
+        assertTrue(currencies.contains("\"scaleK\":1"), currencies);
 
         // Single-user report: the maker still holds 990 base available.
         final String report = get(client, port, "/api/v1/users/811/balances");

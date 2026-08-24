@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>excoredum · Spot Matching Engine</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">excoredum <span class="sub">· Spot Matching Engine</span></div>
+    <nav id="nav" aria-label="primary">
+      <button class="tab" data-view="markets">Markets</button>
+      <button class="tab" data-view="spot">Spot</button>
+      <button class="tab" data-view="portfolio">Portfolio</button>
+      <button class="tab" data-view="admin">Admin</button>
+      <button class="tab" data-view="ops">Ops</button>
+    </nav>
+    <div class="ident">
+      <label>User <input id="uid" type="number" min="0" value="1"></label>
+      <label>Admin <input id="adminUid" type="number" min="0" placeholder="allow-list"></label>
+      <div id="conn" class="conn conn-down">connecting…</div>
+    </div>
+  </header>
+  <main id="view"></main>
+  <div id="toast" class="toast hidden"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

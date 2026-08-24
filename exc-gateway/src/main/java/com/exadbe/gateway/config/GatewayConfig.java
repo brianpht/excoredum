@@ -18,7 +18,20 @@ public final class GatewayConfig {
 
     /** One config-driven spot symbol. {@code name} is display-only (UI naming). */
     public record Symbol(
-            int symbolId, String name, int baseCurrency, int quoteCurrency, long baseScaleK, long quoteScaleK) {}
+            int symbolId,
+            String name,
+            int baseCurrency,
+            int quoteCurrency,
+            long baseScaleK,
+            long quoteScaleK,
+            long makerFee,
+            long takerFee) {}
+
+    /**
+     * One config-driven currency. {@code code} is display-only (UI naming) and
+     * {@code scaleK} is the fixed-point divisor used to render amounts.
+     */
+    public record Currency(int id, String code, long scaleK) {}
 
     private final String httpHost;
     private final int httpPort;
@@ -34,6 +47,7 @@ public final class GatewayConfig {
     private final long marketPumpIntervalMs;
     private final List<Long> adminUids;
     private final List<Symbol> symbols;
+    private final List<Currency> currencies;
 
     private GatewayConfig(final Builder b) {
         this.httpHost = b.httpHost;
@@ -50,6 +64,7 @@ public final class GatewayConfig {
         this.marketPumpIntervalMs = b.marketPumpIntervalMs;
         this.adminUids = List.copyOf(b.adminUids);
         this.symbols = List.copyOf(b.symbols);
+        this.currencies = List.copyOf(b.currencies);
     }
 
     public static Builder builder() {
@@ -86,15 +101,22 @@ public final class GatewayConfig {
                 b.symbol(parseSymbol(token));
             }
         }
+        final String currencies = p.getProperty("gateway.currencies", "");
+        if (!currencies.isBlank()) {
+            for (final String token : currencies.split(",")) {
+                b.currency(parseCurrency(token));
+            }
+        }
         return b.build();
     }
 
-    /** Parses one {@code id,name,base,quote,baseScaleK,quoteScaleK} symbol token. */
+    /** Parses one {@code id,name,base,quote,baseScaleK,quoteScaleK[|makerFee|takerFee]} symbol token. */
     private static Symbol parseSymbol(final String token) {
         final String[] f = token.trim().split("\\|");
-        if (f.length != 6) {
+        if (f.length != 6 && f.length != 8) {
             throw new IllegalArgumentException(
-                    "invalid gateway.symbols token (want id|name|base|quote|baseScaleK|quoteScaleK): " + token);
+                    "invalid gateway.symbols token (want id|name|base|quote|baseScaleK|quoteScaleK[|makerFee|takerFee]): "
+                            + token);
         }
         return new Symbol(
                 parseInt(f[0], "symbol.id"),
@@ -102,7 +124,23 @@ public final class GatewayConfig {
                 parseInt(f[2], "symbol.base"),
                 parseInt(f[3], "symbol.quote"),
                 parseLong(f[4], "symbol.baseScaleK"),
-                parseLong(f[5], "symbol.quoteScaleK"));
+                parseLong(f[5], "symbol.quoteScaleK"),
+                f.length == 8 ? parseLong(f[6], "symbol.makerFee") : 0L,
+                f.length == 8 ? parseLong(f[7], "symbol.takerFee") : 0L);
+    }
+
+    /** Parses one {@code id,code,scaleK} currency token. */
+    private static Currency parseCurrency(final String token) {
+        final String[] f = token.trim().split("\\|");
+        if (f.length != 3) {
+            throw new IllegalArgumentException("invalid gateway.currencies token (want id|code|scaleK): " + token);
+        }
+        final String code = f[1];
+        final long scaleK = parseLong(f[2], "currency.scaleK");
+        if (code.isBlank() || scaleK <= 0L) {
+            throw new IllegalArgumentException("invalid gateway.currencies token: " + token);
+        }
+        return new Currency(parseInt(f[0], "currency.id"), code, scaleK);
     }
 
     private static int parseInt(final String s, final String key) {
@@ -180,6 +218,10 @@ public final class GatewayConfig {
         return symbols;
     }
 
+    public List<Currency> currencies() {
+        return currencies;
+    }
+
     /** Fluent builder with conservative local defaults. */
     public static final class Builder {
         private String httpHost = "0.0.0.0";
@@ -196,6 +238,7 @@ public final class GatewayConfig {
         private long marketPumpIntervalMs = 1000L;
         private final List<Long> adminUids = new ArrayList<>();
         private final List<Symbol> symbols = new ArrayList<>();
+        private final List<Currency> currencies = new ArrayList<>();
 
         public Builder httpHost(final String v) {
             this.httpHost = v;
@@ -264,6 +307,11 @@ public final class GatewayConfig {
 
         public Builder symbol(final Symbol v) {
             this.symbols.add(v);
+            return this;
+        }
+
+        public Builder currency(final Currency v) {
+            this.currencies.add(v);
             return this;
         }
 

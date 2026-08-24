@@ -78,6 +78,7 @@ public final class Router {
         // ---- read: market + portfolio + health ----
         route(HttpMethod.GET, "/api/v1/health", this::health);
         route(HttpMethod.GET, "/api/v1/symbols", req -> CompletableFuture.completedFuture(symbols.ordered()));
+        route(HttpMethod.GET, "/api/v1/currencies", req -> CompletableFuture.completedFuture(config.currencies()));
         route(HttpMethod.GET, "/api/v1/orderbook", this::orderBook);
         route(HttpMethod.GET, "/api/v1/markettrades", this::marketTrades);
         route(HttpMethod.GET, "/api/v1/report/conservation", this::conservation);

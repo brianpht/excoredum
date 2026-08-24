@@ -18,6 +18,7 @@ class GatewayConfigTest {
         p.setProperty("gateway.write.ingressEndpoints", "localhost:20100,localhost:20200");
         p.setProperty("gateway.admin.uids", "1,2");
         p.setProperty("gateway.symbols", "1|BTC|10|20|100000000|1000000,2|ETH|10|20|100000000|1000000");
+        p.setProperty("gateway.currencies", "10|BTC|100000000,20|USDT|1000000");
 
         final GatewayConfig config = GatewayConfig.fromProperties(p);
         assertEquals("0.0.0.0", config.httpHost());
@@ -28,6 +29,20 @@ class GatewayConfigTest {
         assertEquals(2, config.symbols().size());
         assertEquals("BTC", config.symbols().get(0).name());
         assertEquals(1_000_000L, config.symbols().get(0).quoteScaleK());
+        assertEquals(2, config.currencies().size());
+        assertEquals("BTC", config.currencies().get(0).code());
+        assertEquals(100_000_000L, config.currencies().get(0).scaleK());
+    }
+
+    @Test
+    void parsesSymbolWithFees() {
+        final Properties p = new Properties();
+        p.setProperty("gateway.symbols", "1|BTC/USDT|10|20|100000000|1000000|1000|5000");
+
+        final GatewayConfig config = GatewayConfig.fromProperties(p);
+        assertEquals(1, config.symbols().size());
+        assertEquals(1_000L, config.symbols().get(0).makerFee());
+        assertEquals(5_000L, config.symbols().get(0).takerFee());
     }
 
     @Test
@@ -52,6 +67,15 @@ class GatewayConfigTest {
         assertThrows(IllegalArgumentException.class, () -> {
             final Properties p = new Properties();
             p.setProperty("gateway.symbols", "1|BTC");
+            GatewayConfig.fromProperties(p);
+        });
+    }
+
+    @Test
+    void rejectsMalformedCurrencyToken() {
+        assertThrows(IllegalArgumentException.class, () -> {
+            final Properties p = new Properties();
+            p.setProperty("gateway.currencies", "10|BTC");
             GatewayConfig.fromProperties(p);
         });
     }
