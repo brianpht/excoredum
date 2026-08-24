@@ -146,7 +146,11 @@ class ReplicaCrashRecoveryClusterTest {
             return false;
         }
         try {
-            return ReplicaCheckpoint.peek(file).logPosition() == position;
+            // The checkpoint is written with the live appliedPosition, which can
+            // land on a fragment boundary at or past the captured position; the
+            // backup must cover batch-1, so "at least" is the contract (a stale
+            // checkpoint behind the boundary still keeps the poll waiting).
+            return ReplicaCheckpoint.peek(file).logPosition() >= position;
         } catch (final Exception e) {
             return false;
         }
