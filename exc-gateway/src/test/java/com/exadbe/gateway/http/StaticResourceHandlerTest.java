@@ -31,6 +31,7 @@ class StaticResourceHandlerTest {
         final FullHttpResponse response = channel.readOutbound();
         assertNotNull(response);
         assertEquals(HttpResponseStatus.OK, response.status());
+        assertTrue(response.headers().get(HttpHeaderNames.CONTENT_TYPE).startsWith("text/html"));
         response.release();
     }
 

@@ -62,11 +62,28 @@ final class StaticResourceHandler extends ChannelInboundHandlerAdapter {
             if (resource == null) {
                 writeJson(ctx, HttpResponseStatus.NOT_FOUND, "not found: " + path);
             } else {
-                write(ctx, HttpResponseStatus.OK, contentType(path), resource);
+                write(ctx, HttpResponseStatus.OK, contentTypeFor(path), resource);
             }
         } finally {
             ReferenceCountUtil.release(request);
         }
+    }
+
+    /**
+     * Content type for a request path, based on the resolved resource name (so
+     * {@code /} maps to {@code index.html} and is served as {@code text/html}
+     * rather than losing its extension and becoming an application download).
+     */
+    private static String contentTypeFor(final String path) {
+        final String relative;
+        if (path.equals("/") || path.equals("/index.html")) {
+            relative = "index.html";
+        } else if (path.startsWith("/")) {
+            relative = path.substring(1);
+        } else {
+            relative = path;
+        }
+        return contentType(relative);
     }
 
     /** Maps a request path to a classpath resource under {@code static/}. */

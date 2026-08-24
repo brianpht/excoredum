@@ -120,12 +120,15 @@ export function render(root, deps) {
       box.append(el('div', { class: 'empty' }, 'No data for this uid'));
     } else {
       const status = report.suspended ? 'SUSPENDED' : Number(uid) === 0 ? 'FEE ACCT' : 'ACTIVE';
-      const row = el('table', {}, el('thead', {}, el('tr', {}, [el('th', {}, 'UID'), el('th', { class: 'num' }, 'BALANCE QUOTE'), el('th', { class: 'num' }, 'BALANCE BASE'), el('th', {}, 'STATUS')])), el('tbody', {}, el('tr', {}, [
-        el('td', {}, String(uid)),
-        el('td', { class: 'num' }, balanceOf(report, 'quote')),
-        el('td', { class: 'num' }, balanceOf(report, 'base')),
-        el('td', {}, el('span', { class: 'tag ' + status }, status)),
-      ])));
+      const row = el('table', {}, [
+        el('thead', {}, el('tr', {}, [el('th', {}, 'UID'), el('th', { class: 'num' }, 'BALANCE QUOTE'), el('th', { class: 'num' }, 'BALANCE BASE'), el('th', {}, 'STATUS')])),
+        el('tbody', {}, el('tr', {}, [
+          el('td', {}, String(uid)),
+          el('td', { class: 'num' }, balanceOf(report, 'quote')),
+          el('td', { class: 'num' }, balanceOf(report, 'base')),
+          el('td', {}, el('span', { class: 'tag ' + status }, status)),
+        ])),
+      ]);
       box.append(row);
     }
     box.append(actionRow(uid));

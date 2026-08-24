@@ -96,14 +96,20 @@ export function render(root, deps) {
       el('h2', {}, 'Live Egress Events'),
       el('p', { class: 'sub' }, 'WebSocket broadcast · trades / reduces / rejects'),
       el('div', { style: 'max-height:280px;overflow:auto' }, events.slice(0, 60).length
-        ? el('table', {}, el('thead', {}, el('tr', {}, [el('th', {}, 'TIME'), el('th', {}, 'TYPE'), el('th', {}, 'SYM'), el('th', {}, 'ORDER'), el('th', { class: 'num' }, 'PRICE'), el('th', { class: 'num' }, 'SIZE')])), el('tbody', {}, events.slice(0, 60).map((e) => el('tr', {}, [
-          el('td', {}, time(e.ts)),
-          el('td', { class: e.type === 'TRADE' ? 'green' : e.type === 'REJECT' ? 'red' : 'cyan' }, e.type),
-          el('td', {}, e.symbolId),
-          el('td', {}, e.orderId != null ? String(e.orderId) : (e.makerOrderId != null ? String(e.makerOrderId) : '—')),
-          el('td', { class: 'num' }, e.price != null ? fmt(e.price, 1) : '—'),
-          el('td', { class: 'num' }, e.size != null ? fmt(e.size, 1) : (e.reducedBy != null ? fmt(e.reducedBy, 1) : '—')),
-        ])))))
+        ? el('table', {}, [
+            el('thead', {}, el('tr', {}, [
+              el('th', {}, 'TIME'), el('th', {}, 'TYPE'), el('th', {}, 'SYM'), el('th', {}, 'ORDER'),
+              el('th', { class: 'num' }, 'PRICE'), el('th', { class: 'num' }, 'SIZE'),
+            ])),
+            el('tbody', {}, events.slice(0, 60).map((e) => el('tr', {}, [
+              el('td', {}, time(e.ts)),
+              el('td', { class: e.type === 'TRADE' ? 'green' : e.type === 'REJECT' ? 'red' : 'cyan' }, e.type),
+              el('td', {}, e.symbolId),
+              el('td', {}, e.orderId != null ? String(e.orderId) : (e.makerOrderId != null ? String(e.makerOrderId) : '—')),
+              el('td', { class: 'num' }, e.price != null ? fmt(e.price, 1) : '—'),
+              el('td', { class: 'num' }, e.size != null ? fmt(e.size, 1) : (e.reducedBy != null ? fmt(e.reducedBy, 1) : '—')),
+            ]))),
+          ])
         : el('div', { class: 'empty' }, 'No events yet — place an order to stream egress')),
     ]));
   }

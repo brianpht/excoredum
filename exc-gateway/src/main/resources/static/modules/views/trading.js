@@ -3,7 +3,7 @@
 // FOK-BUDGET), and the user's open orders with cancel / move / reduce actions.
 
 import { el, clear } from '../dom.js';
-import { store, selectedSymbol, on, l2For, tapeFor } from '../store.js';
+import { store, selectedSymbol, on, l2For, tapeFor, setL2, appendTape } from '../store.js';
 import * as api from '../api.js';
 import { price, size, fmt, time, esc, sideClass } from '../fmt.js';
 
@@ -160,14 +160,17 @@ export function render(root, deps) {
       body.append(el('div', { class: 'empty' }, 'No trades yet'));
       return;
     }
-    body.append(el('table', {}, el('thead', {}, el('tr', {}, [
-      el('th', {}, 'Time'), el('th', { class: 'num' }, 'Price'), el('th', { class: 'num' }, 'Size'), el('th', {}, 'Side'),
-    ])), el('tbody', {}, list.slice(0, 80).map((t) => el('tr', {}, [
-      el('td', {}, time(t.timestamp)),
-      el('td', { class: 'num' }, price(t.price, selectedSymbol())),
-      el('td', { class: 'num' }, size(t.size, selectedSymbol())),
-      el('td', { class: t.side === 'SELL' ? 'red' : 'green' }, t.side || (t.makerUid && t.takerUid ? 'TAKE' : '—')),
-    ])))));
+    body.append(el('table', {}, [
+      el('thead', {}, el('tr', {}, [
+        el('th', {}, 'Time'), el('th', { class: 'num' }, 'Price'), el('th', { class: 'num' }, 'Size'), el('th', {}, 'Side'),
+      ])),
+      el('tbody', {}, list.slice(0, 80).map((t) => el('tr', {}, [
+        el('td', {}, time(t.timestamp)),
+        el('td', { class: 'num' }, price(t.price, selectedSymbol())),
+        el('td', { class: 'num' }, size(t.size, selectedSymbol())),
+        el('td', { class: t.side === 'SELL' ? 'red' : 'green' }, t.side || (t.makerUid && t.takerUid ? 'TAKE' : '—')),
+      ]))),
+    ]));
   }
 
   // ---- chart rendering ----
@@ -241,20 +244,24 @@ export function render(root, deps) {
       body.append(el('div', { class: 'empty' }, 'No open orders'));
       return;
     }
-    body.append(el('table', {}, el('thead', {}, el('tr', {}, [
-      el('th', {}, 'ID'), el('th', {}, 'Side'), el('th', { class: 'num' }, 'Price'),
-      el('th', { class: 'num' }, 'Size'), el('th', { class: 'num' }, 'Filled'), el('th', {}, ''),
-    ])), el('tbody', {}, list.map((o) => el('tr', {}, [
-      el('td', {}, String(o.orderId)),
-      el('td', { class: sideClass(o.side) }, o.side),
-      el('td', { class: 'num' }, price(o.price, symFor(o.symbolId))),
-      el('td', { class: 'num' }, size(o.size, symFor(o.symbolId))),
-      el('td', { class: 'num' }, size(o.filled, symFor(o.symbolId))),
-      el('td', {},
-        el('button', { class: 'btn ghost', 'data-cancel': o.orderId }, 'X'),
-        el('button', { class: 'btn ghost', 'data-move': o.orderId }, 'Move'),
-        el('button', { class: 'btn ghost', 'data-reduce': o.orderId }, 'Reduce')),
-    ])))));
+    body.append(el('table', {}, [
+      el('thead', {}, el('tr', {}, [
+        el('th', {}, 'ID'), el('th', {}, 'Side'), el('th', { class: 'num' }, 'Price'),
+        el('th', { class: 'num' }, 'Size'), el('th', { class: 'num' }, 'Filled'), el('th', {}, ''),
+      ])),
+      el('tbody', {}, list.map((o) => el('tr', {}, [
+        el('td', {}, String(o.orderId)),
+        el('td', { class: sideClass(o.side) }, o.side),
+        el('td', { class: 'num' }, price(o.price, symFor(o.symbolId))),
+        el('td', { class: 'num' }, size(o.size, symFor(o.symbolId))),
+        el('td', { class: 'num' }, size(o.filled, symFor(o.symbolId))),
+        el('td', {}, [
+          el('button', { class: 'btn ghost', 'data-cancel': o.orderId }, 'X'),
+          el('button', { class: 'btn ghost', 'data-move': o.orderId }, 'Move'),
+          el('button', { class: 'btn ghost', 'data-reduce': o.orderId }, 'Reduce'),
+        ]),
+      ]))),
+    ]));
     body.onclick = (e) => {
       const c = e.target.closest('[data-cancel]');
       if (c) return doCancel(Number(c.dataset.cancel));
@@ -377,12 +384,12 @@ export function render(root, deps) {
     if (!s) return;
     api.getOrderBook(s.symbolId, 32)
       .then((book) => {
-        if (book) store.setL2(s.symbolId, book);
+        if (book) setL2(s.symbolId, book);
       })
       .catch(() => {});
     api.getMarketTrades(s.symbolId, 100)
       .then((tape) => {
-        if (tape && tape.length) store.appendTape(s.symbolId, tape);
+        if (tape && tape.length) appendTape(s.symbolId, tape);
       })
       .catch(() => {});
     refreshOpenOrders();

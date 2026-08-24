@@ -29,6 +29,8 @@ dependencies {
     testImplementation(libs.hdrhistogram)
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.jqwik)
+    // Browser smoke for the bundled gateway UI (opt-in `uiTest` suite).
+    testImplementation(libs.playwright)
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
@@ -72,9 +74,34 @@ val soakTest by tasks.registering(Test::class) {
     shouldRunAfter(faultTest)
 }
 
+// Browser smoke for the bundled gateway UI (headless Chromium via Playwright).
+// Opt-in only: it needs browser binaries (`installPlaywrightBrowsers`) and is NOT
+// wired into `check`, so the fast, JS-free gate stays unchanged.
+val uiTest by tasks.registering(Test::class) {
+    description = "Drives the bundled gateway UI in headless Chromium (Playwright)."
+    group = "verification"
+    useJUnitPlatform {
+        includeTags("ui")
+    }
+    shouldRunAfter(faultTest)
+    // Playwright launches a native browser process; give it room under the env.
+    systemProperty("exc.ui.headless", "true")
+}
+
+// Downloads the Playwright browser binaries used by `uiTest`. Run once before
+// `uiTest` on a fresh machine (e.g. `./gradlew :exc-tests:installPlaywrightBrowsers`).
+// The smoke suite drives Chromium only, so we install just that browser engine.
+val installPlaywrightBrowsers by tasks.registering(JavaExec::class) {
+    description = "Downloads Playwright Chromium for the UI smoke suite."
+    group = "verification"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.microsoft.playwright.CLI")
+    args("install", "chromium")
+}
+
 tasks.named<Test>("test") {
     useJUnitPlatform {
-        excludeTags("integration", "cluster", "fault", "soak")
+        excludeTags("integration", "cluster", "fault", "soak", "ui")
     }
 }
 

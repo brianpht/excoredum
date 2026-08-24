@@ -69,14 +69,17 @@ export function render(root, deps) {
       el('span', { class: 'bar green' }),
       el('h2', {}, 'Balances'),
       el('p', { class: 'sub' }, 'available / reserved / total · singleUserReport'),
-      el('table', {}, el('thead', {}, el('tr', {}, [
-        el('th', {}, 'CUR'), el('th', { class: 'num' }, 'AVAILABLE'), el('th', { class: 'num' }, 'RESERVED'), el('th', { class: 'num' }, 'TOTAL'),
-      ])), el('tbody', {}, rows.map((r) => el('tr', {}, [
-        el('td', {}, esc(r.code)),
-        el('td', { class: 'num' }, fmt(r.available, r.scaleK)),
-        el('td', { class: 'num amber' }, fmt(r.reserved, r.scaleK)),
-        el('td', { class: 'num' }, fmt(r.available + r.reserved, r.scaleK)),
-      ]))))),
+      el('table', {}, [
+        el('thead', {}, el('tr', {}, [
+          el('th', {}, 'CUR'), el('th', { class: 'num' }, 'AVAILABLE'), el('th', { class: 'num' }, 'RESERVED'), el('th', { class: 'num' }, 'TOTAL'),
+        ])),
+        el('tbody', {}, rows.map((r) => el('tr', {}, [
+          el('td', {}, esc(r.code)),
+          el('td', { class: 'num' }, fmt(r.available, r.scaleK)),
+          el('td', { class: 'num amber' }, fmt(r.reserved, r.scaleK)),
+          el('td', { class: 'num' }, fmt(r.available + r.reserved, r.scaleK)),
+        ]))),
+      ]),
     ]));
   }
 

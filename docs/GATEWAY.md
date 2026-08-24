@@ -246,6 +246,11 @@ Gate (must pass in order, per the engine rules): `spotlessApply` ->
 `checkstyleMain checkstyleTest` -> `compileJava` -> `test integrationTest` ->
 `:exc-core:jmh -PquickBench`.
 
+Browser smoke (tag `ui`, opt-in, NOT wired into `check`): boots the same
+in-process cluster + replica + gateway and drives headless Chromium
+(`GatewayUiSmokeTest`). Requires browser binaries:
+`./gradlew :exc-tests:installPlaywrightBrowsers`, then `./gradlew :exc-tests:uiTest`.
+
 ---
 
 ## Limitations and roadmap

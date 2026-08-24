@@ -12,7 +12,7 @@ import * as ops from './modules/views/ops.js';
 
 const views = { markets, spot, portfolio, admin, ops };
 let current = 'markets';
-let cleanup = null;
+let handle = null;
 
 const deps = {
   uid: () => store.currentUid,
@@ -77,16 +77,23 @@ async function boot() {
 
 function show(view) {
   if (!views[view]) return;
-  if (view === current && views[current].refresh) {
-    views[current].refresh();
+  if (view === current && handlesRefresh()) {
+    refresh();
     return;
   }
-  if (cleanup) cleanup();
+  if (handle && handle.cleanup) handle.cleanup();
   current = view;
   document.querySelectorAll('#nav .tab').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   const root = document.getElementById('view');
   root.innerHTML = '';
-  cleanup = views[view].render(root, deps) || null;
+  handle = views[view].render(root, deps) || null;
+}
+
+function handlesRefresh() {
+  return views[current] && views[current].refresh;
+}
+function refresh() {
+  if (views[current] && views[current].refresh) views[current].refresh();
 }
 
 let toastTimer = null;
