@@ -1,5 +1,11 @@
 # excoredum - Deterministic Spot Matching Engine
 
+[![CI](https://github.com/brianpht/excoredum/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/brianpht/excoredum/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![JDK 21](https://img.shields.io/badge/JDK-21-blue.svg)](gradle.properties)
+[![Gradle](https://img.shields.io/badge/Gradle-8.10.2-green.svg)](gradle/wrapper/gradle-wrapper.properties)
+[![Platform: Linux](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)](README.md)
+
 A deterministic, replicated, in-memory spot exchange matching engine in Java,
 built on Aeron Cluster: strong consistency, ultra-low latency, and an
 allocation-free hot path for the order book and its balances.
