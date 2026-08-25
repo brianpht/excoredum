@@ -120,7 +120,7 @@ val installPlaywrightBrowsers by tasks.registering(JavaExec::class) {
 
 tasks.named<Test>("test") {
     useJUnitPlatform {
-        excludeTags("integration", "cluster", "fault", "soak", "ui")
+        excludeTags("integration", "cluster", "fault", "soak", "ui", "uiStack")
     }
 }
 
