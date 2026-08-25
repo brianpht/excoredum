@@ -2,7 +2,7 @@
 // the selected symbol. Reconnect with exponential backoff; the connection status
 // is surfaced to the top bar so the user knows when live data is flowing.
 
-import { store, emit, setL2, appendTape } from './store.js';
+import { store, emit, setL2, appendTape, selectedSymbol } from './store.js';
 
 let ws = null;
 let retry = 0;
@@ -52,7 +52,7 @@ function scheduleReconnect() {
 }
 
 function handle(ev) {
-  const sel = store.selectedSymbol();
+  const sel = selectedSymbol();
   if (ev.symbolId !== undefined && (!sel || Number(ev.symbolId) !== Number(sel.symbolId))) return;
   switch (ev.type) {
     case 'L2':
