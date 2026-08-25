@@ -299,7 +299,7 @@ class DevStackUiFeatureTest {
         final String text = page.locator("#mk-body").innerText();
         assertTrue(text.contains("BTC/USDT"), "markets should list BTC/USDT: " + text);
         assertTrue(text.contains("ETH/USDT"), "markets should list ETH/USDT: " + text);
-        pollPage(() -> !page.locator("#mk-1-last").innerText().equals("—"), "last price should populate");
+        pollPage(() -> !page.locator("#mk-1-last").innerText().equals("\u2014"), "last price should populate");
 
         page.locator("#mk-body [data-trade='1']").click();
         page.waitForSelector("#book-body .header");
@@ -521,7 +521,7 @@ class DevStackUiFeatureTest {
         openPage();
         gotoView("ops");
         page.waitForSelector("#health-panel .counter-list");
-        pollPage(() -> !page.locator("#health-panel").innerText().contains("—"), "health counters populate");
+        pollPage(() -> !page.locator("#health-panel").innerText().contains("\u2014"), "health counters populate");
         pollPage(() -> page.locator("#cons-panel").innerText().contains("total"), "conservation renders");
         assertTrue(
                 page.locator("#counters-panel").innerText().contains("read queries submitted"),
