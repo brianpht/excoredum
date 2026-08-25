@@ -32,6 +32,47 @@ currencies `BTC` (10) / `USDT` (20), all with `scaleK = 1`. Admin allow-list:
 
 ---
 
+## Command lifecycle (one order through the UI)
+
+```mermaid
+flowchart TD
+    UI["Browser UI<br/>(Spot ticket)"] -->|"POST /api/v1/orders"| API["api.js req"]
+    API -->|REST| ROUTER["Router + HttpHandler"]
+    ROUTER -->|"submit task"| WP["WritePump"]
+    WP -->|"ExcClient placeGtc / Ioc / FokBudget"| CL["Raft cluster leader"]
+    CL -->|"command applied"| ME["MatchingEngine<br/>risk - match - settle"]
+    ME -->|"CommandResult"| CL
+    CL -->|"result + egress TRADE / REDUCE / REJECT"| WP
+    WP -->|"StreamBroadcaster.publish"| BC["StreamBroadcaster"]
+    ROUTER -->|"HTTP resultCode / filledSize"| UI
+    BC -->|"WS /ws JSON"| UI
+
+    UI -->|"GET /api/v1/orderbook, balances, ..."| ROUTER
+    ROUTER -->|"submit task"| RP["ReadPump"]
+    RP -->|"ReadClient query"| QR["QueryResponder<br/>(read replica)"]
+    QR -->|"L2 / balances / orders / trades"| RP
+    RP -->|"future completes"| ROUTER
+    ROUTER -->|"HTTP JSON"| UI
+
+    CL -->|"Raft log"| ARC["Archive"]
+    ARC -->|"follow"| QR
+    MP["MarketPump<br/>(periodic orderBook + marketTrades)"] -->|"L2 / MARKET_TAPE"| BC
+    BC -->|"WS /ws JSON"| UI
+```
+
+**Write path** (top): the ticket action becomes an `ExcClient` command on the
+leader; the engine matches and settles; the result returns over HTTP and the
+egress events (`TRADE` / `REDUCE` / `REJECT`) fan out over the WebSocket to the
+browser (tape, live-events, open orders).
+
+**Read path** (bottom): REST reads (`orderBook`, `balances`, `orders`,
+`trades`, `conservation`, `health`) are answered by the read replica's
+`QueryResponder`; `MarketPump` additionally publishes periodic `L2` /
+`MARKET_TAPE` snapshots over the WebSocket. The read replica follows the cluster
+leader's archive. See `docs/GATEWAY.md` for the exact wire contract.
+
+---
+
 ## Features by view
 
 ### Markets

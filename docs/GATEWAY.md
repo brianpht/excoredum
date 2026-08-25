@@ -251,6 +251,13 @@ in-process cluster + replica + gateway and drives headless Chromium
 (`GatewayUiSmokeTest`). Requires browser binaries:
 `./gradlew :exc-tests:installPlaywrightBrowsers`, then `./gradlew :exc-tests:uiTest`.
 
+The full UI feature suite (`DevStackUiFeatureTest`, tag `uiStack`) drives the
+same bundled UI against an externally started dev stack
+(`scripts/excoredum-dev.sh`) and covers every view and user-facing action
+(place / cancel / move / reduce, admin, portfolio, ops, WS streaming). See
+[`docs/UI.md`](UI.md) for the feature-by-feature description, the coverage
+matrix, and how to run it with `scripts/excoredum-ui-test.sh`.
+
 ---
 
 ## Limitations and roadmap
