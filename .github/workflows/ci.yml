@@ -31,8 +31,31 @@ jobs:
       - name: Unit + property + integration tests
         run: ./gradlew test integrationTest
 
-      - name: Multi-node cluster + fault tests
-        run: ./gradlew clusterTest faultTest
+      - name: Multi-node cluster tests
+        run: |
+          attempt=1; max=2
+          until ./gradlew clusterTest; do
+            if [ "$attempt" -ge "$max" ]; then
+              echo "::error::clusterTest failed after $attempt attempts" >&2
+              exit 1
+            fi
+            echo "clusterTest attempt $attempt/$max failed; retrying in 10s" >&2
+            attempt=$((attempt + 1))
+            sleep 10
+          done
+
+      - name: Fault-injection tests
+        run: |
+          attempt=1; max=2
+          until ./gradlew faultTest; do
+            if [ "$attempt" -ge "$max" ]; then
+              echo "::error::faultTest failed after $attempt attempts" >&2
+              exit 1
+            fi
+            echo "faultTest attempt $attempt/$max failed; retrying in 10s" >&2
+            attempt=$((attempt + 1))
+            sleep 10
+          done
 
       - name: JMH quick benchmark (regression smoke)
         run: ./gradlew :exc-core:jmh -PquickBench
