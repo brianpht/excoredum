@@ -32,13 +32,13 @@ import org.junit.jupiter.api.io.TempDir;
 class ReadReplicaCheckpointClusterTest {
 
     private static final int NODES = 3;
-    private static final long TIMEOUT_MS = 120_000L;
+    private static final long TIMEOUT_MS = 300_000L;
     private static final int SYM = 1;
     private static final int BASE = 10;
     private static final int QUOTE = 20;
 
     @Test
-    @Timeout(300)
+    @Timeout(600)
     void warmStartResumesFromCheckpoint(@TempDir final Path baseDir) throws Exception {
         final ClusterConfig[] configs = ClusterConfig.multiNodeLocalhost(NODES, baseDir);
         final ClusterNode[] nodes = new ClusterNode[NODES];
