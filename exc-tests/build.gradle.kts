@@ -29,8 +29,6 @@ dependencies {
     testImplementation(libs.hdrhistogram)
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.jqwik)
-    // Browser smoke for the bundled gateway UI (opt-in `uiTest` suite).
-    testImplementation(libs.playwright)
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
@@ -74,53 +72,9 @@ val soakTest by tasks.registering(Test::class) {
     shouldRunAfter(faultTest)
 }
 
-// Browser smoke for the bundled gateway UI (headless Chromium via Playwright).
-// Opt-in only: it needs browser binaries (`installPlaywrightBrowsers`) and is NOT
-// wired into `check`, so the fast, JS-free gate stays unchanged.
-val uiTest by tasks.registering(Test::class) {
-    description = "Drives the bundled gateway UI in headless Chromium (Playwright)."
-    group = "verification"
-    useJUnitPlatform {
-        includeTags("ui")
-    }
-    shouldRunAfter(faultTest)
-    // Playwright launches a native browser process; give it room under the env.
-    systemProperty("exc.ui.headless", "true")
-}
-
-// Browser suite that drives the same bundled UI against an EXTERNALLY started
-// dev stack (scripts/excoredum-dev.sh). Uses a separate tag (`uiStack`) so the
-// self-contained, in-process `uiTest` smoke suite is unaffected. Orchestrated by
-// scripts/excoredum-ui-test.sh, which starts/stops the stack around this task.
-// Opt-in only (needs a running stack + browser binaries); NOT wired into `check`.
-val devStackUiTest by tasks.registering(Test::class) {
-    description = "Drives the bundled gateway UI against an externally started dev stack (excoredum-dev.sh)."
-    group = "verification"
-    useJUnitPlatform {
-        includeTags("uiStack")
-    }
-    shouldRunAfter(faultTest)
-    // Playwright launches a native browser process; give it room under the env.
-    systemProperty("exc.ui.headless", providers.gradleProperty("exc.ui.headless").getOrElse("true"))
-    // Base URL of the gateway started by excoredum-dev.sh (override with
-    // -Pexc.gateway.url=http://host:port on the gradle invocation).
-    systemProperty("exc.gateway.url", providers.gradleProperty("exc.gateway.url").getOrElse("http://localhost:8080"))
-}
-
-// Downloads the Playwright browser binaries used by `uiTest`. Run once before
-// `uiTest` on a fresh machine (e.g. `./gradlew :exc-tests:installPlaywrightBrowsers`).
-// The smoke suite drives Chromium only, so we install just that browser engine.
-val installPlaywrightBrowsers by tasks.registering(JavaExec::class) {
-    description = "Downloads Playwright Chromium for the UI smoke suite."
-    group = "verification"
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass.set("com.microsoft.playwright.CLI")
-    args("install", "chromium")
-}
-
 tasks.named<Test>("test") {
     useJUnitPlatform {
-        excludeTags("integration", "cluster", "fault", "soak", "ui", "uiStack")
+        excludeTags("integration", "cluster", "fault", "soak")
     }
 }
 

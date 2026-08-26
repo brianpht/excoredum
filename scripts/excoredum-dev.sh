@@ -8,7 +8,7 @@
 #   ./scripts/excoredum-dev.sh {start|stop|restart|status}
 #
 # Env overrides (all optional):
-#   EXC_NODES           number of cluster nodes        (1)
+#   EXC_NODES           number of cluster nodes        (3)
 #   EXC_INGRESS_BASE    node-0 ingress port            (20100); node n uses +n*100
 #   EXC_HOST            host advertised in members     (localhost)
 #   EXC_QUERY_PORT      read query channel port        (44000)
@@ -29,7 +29,7 @@ PROG="$(basename "$0")"
 cd "$ROOT"
 
 # ---- overridable defaults -------------------------------------------------
-EXC_NODES="${EXC_NODES:-1}"
+EXC_NODES="${EXC_NODES:-3}"
 BASE_PORT="${EXC_INGRESS_BASE:-20100}"
 HOST="${EXC_HOST:-localhost}"
 QUERY_PORT="${EXC_QUERY_PORT:-44000}"
@@ -98,11 +98,15 @@ ensure_dists() {
 }
 
 write_confs() {
-  cat > "$CONF_DIR/cluster.properties" <<EOF
+  local i
+  for ((i = 0; i < EXC_NODES; i++)); do
+    mkdir -p "$CLUSTER_BASE/node-$i"
+    cat > "$CONF_DIR/cluster-$i.properties" <<EOF
 exc.clusterMembers=$(build_members)
 exc.host=${HOST}
-exc.baseDir=${CLUSTER_BASE}
+exc.baseDir=${CLUSTER_BASE}/node-$i
 EOF
+  done
 
   cat > "$CONF_DIR/gateway.properties" <<EOF
 gateway.http.host=0.0.0.0
@@ -164,7 +168,7 @@ start_cluster() {
     log "starting cluster node $i (ingress ${HOST}:$((BASE_PORT + i * 100)), cleanStart=${CLEAN_START})"
     java "${ADD_OPENS[@]}" \
       -Dexc.nodeId="$i" -Dexc.cleanStart="$CLEAN_START" \
-      -cp "$LAUNCHER_LIB/*" "$LAUNCHER_MAIN" --config="$CONF_DIR/cluster.properties" \
+      -cp "$LAUNCHER_LIB/*" "$LAUNCHER_MAIN" --config="$CONF_DIR/cluster-$i.properties" \
       >"$LOG_DIR/cluster-$i.log" 2>&1 &
     echo $! > "$pidfile"
   done

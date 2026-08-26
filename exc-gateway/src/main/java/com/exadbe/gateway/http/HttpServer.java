@@ -57,9 +57,6 @@ public final class HttpServer {
                             ch.pipeline().addLast(new WebSocketServerProtocolHandler("/ws"));
                             ch.pipeline().addLast(new WebSocketHandler(broadcaster));
                         }
-                        // Serve the bundled UI (classpath static/) before the JSON API
-                        // router; non-UI paths are passed through to the router.
-                        ch.pipeline().addLast(new StaticResourceHandler());
                         ch.pipeline().addLast(new HttpHandler(router));
                     }
                 });

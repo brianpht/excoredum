@@ -139,10 +139,6 @@ class GatewayEndToEndIntegrationTest {
         final String symbols = get(client, port, "/api/v1/symbols");
         assertTrue(symbols.contains("\"name\":\"BTC/USDT\""), symbols);
 
-        // The bundled UI is served from the gateway root.
-        final String index = get(client, port, "/");
-        assertTrue(index.contains("<html"), index);
-
         // The config-driven currency registry names balances for the UI.
         final String currencies = get(client, port, "/api/v1/currencies");
         assertTrue(currencies.contains("\"code\":\"USDT\""), currencies);

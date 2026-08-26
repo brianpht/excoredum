@@ -1,7 +1,7 @@
 # exc-gateway - HTTP/JSON + WebSocket boundary
 
 > The read/write boundary in front of the deterministic CQRS matching engine. A
-> UI talks plain HTTP/JSON (and subscribes over WebSocket); the gateway translates
+> client talks plain HTTP/JSON (and subscribes over WebSocket); the gateway translates
 > that into `ReadClient` queries and `ExcClient` commands. It never touches
 > `exc-core`, and JSON stays at this boundary (as the engine rules require).
 
@@ -10,9 +10,9 @@
 ## Overview
 
 `excoredum` is an in-memory spot matching engine replicated by Raft. It exposes no
-network protocol for a UI on its own - reads live in a CQRS read replica
-(`exc-read`) and writes go through the cluster ingress. `exc-gateway` sits between
-them and the browser: a Netty HTTP/JSON server plus a WebSocket `/ws` stream.
+network protocol on its own - reads live in a CQRS read replica
+(`exc-read`) and writes go through the cluster ingress. `exc-gateway` sits in
+front of them: a Netty HTTP/JSON server plus a WebSocket `/ws` stream.
 
 The gateway is deliberately thin and asynchronous:
 
@@ -32,8 +32,8 @@ is under the core determinism rules.
 
 ```mermaid
 flowchart TB
-    UI[Browser UI] --HTTP/JSON--> GW[exc-gateway Netty]
-    UI --WS /ws--> GW
+    CLI[HTTP/WS client] --HTTP/JSON--> GW[exc-gateway Netty]
+    CLI --WS /ws--> GW
     subgraph GW
         HTTP[HttpServer + Router]
         READP[ReadPump thread] --- RC[ReadClient]
@@ -186,7 +186,7 @@ Launcher reads a properties file via `--config=<path>` (or `--config <path>`):
 | `gateway.write.aeronDir`                    | (embedded media driver)                        | Shared Aeron dir, if any                 |
 | `gateway.admin.uids`                        | (empty)                                        | Admin `X-User-Id` allow-list             |
 | `gateway.symbols`                           | (empty)                                        | `id\|name\|base\|quote\|baseScaleK\|quoteScaleK[|makerFee|takerFee]`, comma separated |
-| `gateway.currencies`                        | (empty)                                        | `id\|code\|scaleK`, comma separated (UI balance naming/scaling) |
+| `gateway.currencies`                        | (empty)                                        | `id\|code\|scaleK`, comma separated (balance naming/scaling) |
 | `gateway.marketPump.intervalMs`             | `1000`                                         | Market snapshot interval (0 disables)    |
 
 ---
@@ -245,18 +245,6 @@ gateway.marketPump.intervalMs=1000
 Gate (must pass in order, per the engine rules): `spotlessApply` ->
 `checkstyleMain checkstyleTest` -> `compileJava` -> `test integrationTest` ->
 `:exc-core:jmh -PquickBench`.
-
-Browser smoke (tag `ui`, opt-in, NOT wired into `check`): boots the same
-in-process cluster + replica + gateway and drives headless Chromium
-(`GatewayUiSmokeTest`). Requires browser binaries:
-`./gradlew :exc-tests:installPlaywrightBrowsers`, then `./gradlew :exc-tests:uiTest`.
-
-The full UI feature suite (`DevStackUiFeatureTest`, tag `uiStack`) drives the
-same bundled UI against an externally started dev stack
-(`scripts/excoredum-dev.sh`) and covers every view and user-facing action
-(place / cancel / move / reduce, admin, portfolio, ops, WS streaming). See
-[`docs/UI.md`](UI.md) for the feature-by-feature description, the coverage
-matrix, and how to run it with `scripts/excoredum-ui-test.sh`.
 
 ---
 
