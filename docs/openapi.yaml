@@ -1,0 +1,1004 @@
+openapi: 3.0.3
+info:
+  title: exc-gateway HTTP/JSON API
+  version: 1.0.0
+  description: |
+    The HTTP/JSON + WebSocket boundary in front of the deterministic CQRS spot
+    matching engine. Read endpoints are answered by a read replica's
+    QueryResponder; trade and admin writes are replicated commands to the Aeron
+    Raft cluster.
+
+    This spec describes the REST surface only. WebSocket streaming under `/ws`
+    is not expressible in OpenAPI; its JSON frames are listed in the
+    `Ws*` schemas below and documented in
+    [docs/GATEWAY.md](GATEWAY.md) and
+    [docs/API-USAGE.md](API-USAGE.md).
+
+    All numeric values are integer fixed-point scaled by the symbol/currency's
+    `scaleK` (see `gateway.symbols` / `gateway.currencies`).
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: health
+    description: Replica liveness and conservation totals.
+  - name: read
+    description: Read-side queries answered by the read replica.
+  - name: trading
+    description: Write-side trade commands (place / cancel / move / reduce).
+  - name: admin
+    description: Admin commands. Require an `X-User-Id` header in `gateway.admin.uids`.
+paths:
+  /api/v1/health:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Replica position, deterministic state hash, and conservation totals
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /api/v1/symbols:
+    get:
+      tags: [read]
+      operationId: listSymbols
+      summary: Config-driven symbol registry (display metadata only)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Symbol"
+    post:
+      tags: [admin]
+      operationId: addSymbol
+      summary: Register a new symbol (admin)
+      security:
+        - adminKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddSymbolRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/currencies:
+    get:
+      tags: [read]
+      operationId: listCurrencies
+      summary: Config-driven currency registry (display metadata only)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Currency"
+  /api/v1/orderbook:
+    get:
+      tags: [read]
+      operationId: getOrderBook
+      summary: L2 order book for a symbol
+      parameters:
+        - $ref: "#/components/parameters/symbolIdQuery"
+        - $ref: "#/components/parameters/maxLevels"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderBook"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/markettrades:
+    get:
+      tags: [read]
+      operationId: getMarketTrades
+      summary: Recent trades on the replicated market tape
+      parameters:
+        - $ref: "#/components/parameters/symbolIdQuery"
+        - $ref: "#/components/parameters/limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Trade"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/report/conservation:
+    get:
+      tags: [read]
+      operationId: getConservation
+      summary: Per-currency value-conservation totals (fees + balances + reserved)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conservation"
+  /api/v1/users/{uid}/balances:
+    get:
+      tags: [read]
+      operationId: getUserReport
+      summary: Balances and resting orders for one user
+      parameters:
+        - $ref: "#/components/parameters/uidPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserReport"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/users/{uid}/orders:
+    get:
+      tags: [read]
+      operationId: getOrderHistory
+      summary: Full order lifecycle history for one user
+      parameters:
+        - $ref: "#/components/parameters/uidPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/users/{uid}/orders/active:
+    get:
+      tags: [read]
+      operationId: getActiveOrders
+      summary: Resting (active) orders for one user
+      parameters:
+        - $ref: "#/components/parameters/uidPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/users/{uid}/trades:
+    get:
+      tags: [read]
+      operationId: getUserTrades
+      summary: Trades for one user from the replicated tape
+      parameters:
+        - $ref: "#/components/parameters/uidPath"
+        - $ref: "#/components/parameters/limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Trade"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/orders/{orderId}:
+    get:
+      tags: [read]
+      operationId: getOrder
+      summary: One order including its fills
+      parameters:
+        - $ref: "#/components/parameters/orderIdPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [trading]
+      operationId: cancelOrder
+      summary: Cancel an order
+      parameters:
+        - $ref: "#/components/parameters/orderIdPath"
+        - $ref: "#/components/parameters/symbolIdQuery"
+        - $ref: "#/components/parameters/uidQuery"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    patch:
+      tags: [trading]
+      operationId: modifyOrder
+      summary: Move (change price) or reduce (change size) an order
+      parameters:
+        - $ref: "#/components/parameters/orderIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModifyOrderRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/orders:
+    post:
+      tags: [trading]
+      operationId: placeOrder
+      summary: Place a GTC / IOC / FOK_BUDGET order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceOrderRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/orderbook/{symbolId}/request:
+    post:
+      tags: [trading]
+      operationId: requestOrderBook
+      summary: Request an L2 snapshot (emitted as an L2 WebSocket event)
+      parameters:
+        - $ref: "#/components/parameters/symbolIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderBookRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/v1/users:
+    post:
+      tags: [admin]
+      operationId: addUser
+      summary: Create a user (admin)
+      security:
+        - adminKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddUserRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/users/{uid}/balance:
+    post:
+      tags: [admin]
+      operationId: adjustBalance
+      summary: Adjust a user's balance (admin)
+      security:
+        - adminKey: []
+      parameters:
+        - $ref: "#/components/parameters/uidPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdjustBalanceRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/users/{uid}/suspend:
+    post:
+      tags: [admin]
+      operationId: suspendUser
+      summary: Suspend a user (admin)
+      security:
+        - adminKey: []
+      parameters:
+        - $ref: "#/components/parameters/uidPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/users/{uid}/resume:
+    post:
+      tags: [admin]
+      operationId: resumeUser
+      summary: Resume a suspended user (admin)
+      security:
+        - adminKey: []
+      parameters:
+        - $ref: "#/components/parameters/uidPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+components:
+  securitySchemes:
+    adminKey:
+      type: apiKey
+      in: header
+      name: X-User-Id
+      description: A uid listed in `gateway.admin.uids` (default 1,2,811).
+  parameters:
+    uidPath:
+      name: uid
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    orderIdPath:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    symbolIdPath:
+      name: symbolId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int32
+    symbolIdQuery:
+      name: symbolId
+      in: query
+      required: true
+      schema:
+        type: integer
+        format: int32
+    uidQuery:
+      name: uid
+      in: query
+      required: true
+      schema:
+        type: integer
+        format: int64
+    maxLevels:
+      name: maxLevels
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+        default: 32
+    limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+        default: 100
+  responses:
+    BadRequest:
+      description: Bad request (malformed JSON, unknown order type, missing admin header)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Header present but uid is not an allowed admin
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: No route / unknown order
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: boolean
+          example: true
+        message:
+          type: string
+    Symbol:
+      type: object
+      properties:
+        symbolId:
+          type: integer
+          format: int32
+        name:
+          type: string
+        baseCurrency:
+          type: integer
+          format: int32
+        quoteCurrency:
+          type: integer
+          format: int32
+        baseScaleK:
+          type: integer
+          format: int64
+        quoteScaleK:
+          type: integer
+          format: int64
+        makerFee:
+          type: integer
+          format: int64
+        takerFee:
+          type: integer
+          format: int64
+    Currency:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int32
+        code:
+          type: string
+        scaleK:
+          type: integer
+          format: int64
+    OrderBookLevel:
+      type: object
+      properties:
+        price:
+          type: integer
+          format: int64
+        size:
+          type: integer
+          format: int64
+        orders:
+          type: integer
+          format: int32
+    OrderBook:
+      type: object
+      properties:
+        symbolId:
+          type: integer
+          format: int32
+        found:
+          type: boolean
+        appliedPosition:
+          type: integer
+          format: int64
+        asks:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderBookLevel"
+        bids:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderBookLevel"
+    Trade:
+      type: object
+      properties:
+        timestamp:
+          type: integer
+          format: int64
+        symbolId:
+          type: integer
+          format: int32
+        price:
+          type: integer
+          format: int64
+        size:
+          type: integer
+          format: int64
+        makerOrderId:
+          type: integer
+          format: int64
+        makerUid:
+          type: integer
+          format: int64
+        takerUid:
+          type: integer
+          format: int64
+    OrderFill:
+      type: object
+      properties:
+        taker:
+          type: boolean
+        price:
+          type: integer
+          format: int64
+        size:
+          type: integer
+          format: int64
+        counterpartyUid:
+          type: integer
+          format: int64
+        timestamp:
+          type: integer
+          format: int64
+    Order:
+      type: object
+      properties:
+        symbolId:
+          type: integer
+          format: int32
+        orderId:
+          type: integer
+          format: int64
+        uid:
+          type: integer
+          format: int64
+        side:
+          type: string
+          enum: [ASK, BID]
+        orderType:
+          type: string
+          description: GTC | IOC | FOK_BUDGET
+        price:
+          type: integer
+          format: int64
+        size:
+          type: integer
+          format: int64
+        filled:
+          type: integer
+          format: int64
+        reduced:
+          type: integer
+          format: int64
+        remaining:
+          type: integer
+          format: int64
+        placedTimestamp:
+          type: integer
+          format: int64
+        lastTimestamp:
+          type: integer
+          format: int64
+        userCookie:
+          type: integer
+          format: int32
+        state:
+          type: string
+        fills:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderFill"
+    UserBalance:
+      type: object
+      properties:
+        currency:
+          type: integer
+          format: int32
+        balance:
+          type: integer
+          format: int64
+    RestingOrder:
+      type: object
+      properties:
+        symbolId:
+          type: integer
+          format: int32
+        orderId:
+          type: integer
+          format: int64
+        side:
+          type: string
+          enum: [ASK, BID]
+        price:
+          type: integer
+          format: int64
+        size:
+          type: integer
+          format: int64
+        filled:
+          type: integer
+          format: int64
+        remaining:
+          type: integer
+          format: int64
+        reserveBidPrice:
+          type: integer
+          format: int64
+    UserReport:
+      type: object
+      properties:
+        uid:
+          type: integer
+          format: int64
+        exists:
+          type: boolean
+        suspended:
+          type: boolean
+        appliedPosition:
+          type: integer
+          format: int64
+        balances:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserBalance"
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/RestingOrder"
+    ConservationTotal:
+      type: object
+      properties:
+        currency:
+          type: integer
+          format: int32
+        accountBalance:
+          type: integer
+          format: int64
+        reserved:
+          type: integer
+          format: int64
+        fees:
+          type: integer
+          format: int64
+        total:
+          type: integer
+          format: int64
+    Conservation:
+      type: object
+      properties:
+        appliedPosition:
+          type: integer
+          format: int64
+        totals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConservationTotal"
+    Health:
+      type: object
+      properties:
+        appliedPosition:
+          type: integer
+          format: int64
+        stateHash:
+          type: integer
+          format: int64
+        submitted:
+          type: integer
+          format: int64
+        completed:
+          type: integer
+          format: int64
+        expired:
+          type: integer
+          format: int64
+        backpressure:
+          type: integer
+          format: int64
+        totals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConservationTotal"
+    WriteResult:
+      type: object
+      properties:
+        commandIdHi:
+          type: integer
+          format: int64
+        commandIdLo:
+          type: integer
+          format: int64
+        resultCode:
+          type: string
+          description: Deterministic engine result, e.g. SUCCESS or REJECTED_*.
+        uid:
+          type: integer
+          format: int64
+          nullable: true
+        orderId:
+          type: integer
+          format: int64
+          nullable: true
+        filledSize:
+          type: integer
+          format: int64
+          nullable: true
+    PlaceOrderRequest:
+      type: object
+      required: [symbolId, orderId, ask, type, price, size, reserveBidPrice, uid, userCookie]
+      properties:
+        symbolId:
+          type: integer
+          format: int32
+        orderId:
+          type: integer
+          format: int64
+        ask:
+          type: boolean
+          description: true = ask (sell), false = bid (buy).
+        type:
+          type: string
+          enum: [GTC, IOC, FOK_BUDGET]
+        price:
+          type: integer
+          format: int64
+        size:
+          type: integer
+          format: int64
+        reserveBidPrice:
+          type: integer
+          format: int64
+          description: Reserved quote price for a GTC bid; 0 for an ask.
+        uid:
+          type: integer
+          format: int64
+        userCookie:
+          type: integer
+          format: int32
+    ModifyOrderRequest:
+      type: object
+      required: [symbolId, uid]
+      properties:
+        symbolId:
+          type: integer
+          format: int32
+        uid:
+          type: integer
+          format: int64
+        price:
+          type: integer
+          format: int64
+          description: Present to move the order (mutually exclusive with size).
+        size:
+          type: integer
+          format: int64
+          description: Present to reduce the order (mutually exclusive with price).
+    AddSymbolRequest:
+      type: object
+      required: [symbolId, baseCurrency, quoteCurrency, baseScaleK, quoteScaleK]
+      properties:
+        symbolId:
+          type: integer
+          format: int32
+        baseCurrency:
+          type: integer
+          format: int32
+        quoteCurrency:
+          type: integer
+          format: int32
+        baseScaleK:
+          type: integer
+          format: int64
+        quoteScaleK:
+          type: integer
+          format: int64
+        takerFee:
+          type: integer
+          format: int64
+          default: 0
+        makerFee:
+          type: integer
+          format: int64
+          default: 0
+    AddUserRequest:
+      type: object
+      required: [uid]
+      properties:
+        uid:
+          type: integer
+          format: int64
+    AdjustBalanceRequest:
+      type: object
+      required: [currency, amount]
+      properties:
+        currency:
+          type: integer
+          format: int32
+        amount:
+          type: integer
+          format: int64
+          description: Signed adjust (fixed-point); see scaleK.
+    OrderBookRequest:
+      type: object
+      required: [uid]
+      properties:
+        uid:
+          type: integer
+          format: int64
+    # WebSocket frames under /ws (not REST responses). The gateway broadcasts
+    # every event to all subscribers; the client filters by symbol.
+    WsTrade:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [TRADE]
+        commandIdLo:
+          type: integer
+          format: int64
+        eventIndex:
+          type: integer
+          format: int64
+        symbolId:
+          type: integer
+          format: int32
+        makerOrderId:
+          type: integer
+          format: int64
+        makerUid:
+          type: integer
+          format: int64
+        takerUid:
+          type: integer
+          format: int64
+        price:
+          type: integer
+          format: int64
+        size:
+          type: integer
+          format: int64
+        makerCompleted:
+          type: boolean
+    WsReduce:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [REDUCE]
+        commandIdLo:
+          type: integer
+          format: int64
+        eventIndex:
+          type: integer
+          format: int64
+        symbolId:
+          type: integer
+          format: int32
+        orderId:
+          type: integer
+          format: int64
+        uid:
+          type: integer
+          format: int64
+        reducedBy:
+          type: integer
+          format: int64
+        price:
+          type: integer
+          format: int64
+        completed:
+          type: boolean
+    WsReject:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [REJECT]
+        commandIdLo:
+          type: integer
+          format: int64
+        eventIndex:
+          type: integer
+          format: int64
+        symbolId:
+          type: integer
+          format: int32
+        orderId:
+          type: integer
+          format: int64
+        uid:
+          type: integer
+          format: int64
+        rejectedSize:
+          type: integer
+          format: int64
+        price:
+          type: integer
+          format: int64
+    WsL2:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [L2]
+        symbolId:
+          type: integer
+          format: int32
+        appliedPosition:
+          type: integer
+          format: int64
+        asks:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderBookLevel"
+        bids:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderBookLevel"
+    WsMarketTape:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [MARKET_TAPE]
+        symbolId:
+          type: integer
+          format: int32
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trade"
