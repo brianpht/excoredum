@@ -22,6 +22,7 @@ dependencies {
     implementation(project(":exc-protocol"))
     implementation(libs.bundles.aeron)
     implementation(libs.hdrhistogram)
+    implementation(libs.jackson.databind)
 }
 
 // Benchmark code is illustrative, not the production hot path: keep lint

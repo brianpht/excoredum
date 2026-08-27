@@ -5,7 +5,7 @@
 #   node-0's archive, and the HTTP/WS gateway.
 #
 # Usage:
-#   ./scripts/excoredum-dev.sh {start|stop|restart|status}
+#   ./scripts/excoredum-dev.sh {start|stop|restart|status|seed|bench}
 #
 # Env overrides (all optional):
 #   EXC_NODES           number of cluster nodes        (3)
@@ -18,6 +18,10 @@
 #   EXC_SYMBOLS         gateway.symbols                (BTC/USDT, ETH/USDT sample)
 #   EXC_CURRENCIES      gateway.currencies             (BTC=10, USDT=20 sample)
 #   EXC_ADMIN_UIDS      gateway.admin.uids             (1,2,811)
+#   EXC_BENCH_OPS       gateway bench commands         (10000)
+#   EXC_BENCH_USERS     gateway bench users            (100)
+#   EXC_ADMIN_UID       gateway bench admin uid        (811)
+#   EXC_ADMIN_API_KEY   gateway.admin.apiKey           (unset = disabled)
 #
 # First run builds the application distributions (installDist) automatically.
 # State and logs live under $EXC_RUN_DIR; PID files under $EXC_RUN_DIR/pids.
@@ -39,6 +43,10 @@ CLEAN_START="${EXC_CLEAN_START:-true}"
 SYMBOLS="${EXC_SYMBOLS:-1|BTC/USDT|10|20|1|1|0|0,2|ETH/USDT|10|20|1|1|0|0}"
 CURRENCIES="${EXC_CURRENCIES:-10|BTC|1,20|USDT|1}"
 ADMIN_UIDS="${EXC_ADMIN_UIDS:-1,2,811}"
+BENCH_OPS="${EXC_BENCH_OPS:-10000}"
+BENCH_USERS="${EXC_BENCH_USERS:-100}"
+ADMIN_UID="${EXC_ADMIN_UID:-811}"
+ADMIN_API_KEY="${EXC_ADMIN_API_KEY:-}"
 
 LOG_DIR="$RUN_DIR/logs"
 PID_DIR="$RUN_DIR/pids"
@@ -56,6 +64,8 @@ GATEWAY_MAIN=com.exadbe.gateway.GatewayLauncher
 LAUNCHER_LIB="$ROOT/exc-launcher/build/install/exc-launcher/lib"
 READ_LIB="$ROOT/exc-read/build/install/exc-read/lib"
 GATEWAY_LIB="$ROOT/exc-gateway/build/install/exc-gateway/lib"
+BENCH_LIB="$ROOT/exc-bench/build/install/exc-bench/lib"
+BENCH_MAIN=com.exadbe.bench.GatewayBenchRunner
 
 ADD_OPENS=(
   "--add-opens" "java.base/jdk.internal.misc=ALL-UNNAMED"
@@ -94,6 +104,13 @@ ensure_dists() {
       || [ ! -f "$GATEWAY_LIB/exc-gateway.jar" ]; then
     log "building application distributions (installDist) ..."
     "$ROOT/gradlew" --quiet :exc-launcher:installDist :exc-read:installDist :exc-gateway:installDist
+  fi
+}
+
+ensure_bench_dist() {
+  if [ ! -f "$BENCH_LIB/exc-bench.jar" ]; then
+    log "building bench distribution (installDist) ..."
+    "$ROOT/gradlew" --quiet :exc-bench:installDist
   fi
 }
 
@@ -238,10 +255,23 @@ seed_market() { # register symbol 1 + users + a resting ask and a crossing fill
   log "seeded symbol 1 (BTC/USDT) + users 811/812 + resting ask and a crossing fill"
 }
 
+bench() {
+  wait_port "$HOST" "$HTTP_PORT" 30 || { err "gateway is not up on :${HTTP_PORT} (run 'start' first)"; exit 1; }
+  ensure_bench_dist
+  log "benchmarking through gateway http://localhost:${HTTP_PORT} (ops=${BENCH_OPS} users=${BENCH_USERS})"
+  local api_key_args=()
+  if [ -n "$ADMIN_API_KEY" ]; then api_key_args=(--api-key="$ADMIN_API_KEY"); fi
+  java "${ADD_OPENS[@]}" \
+    -cp "$BENCH_LIB/*" "$BENCH_MAIN" \
+    --base-url="http://localhost:${HTTP_PORT}" \
+    --ops="$BENCH_OPS" --users="$BENCH_USERS" \
+    --admin-uid="$ADMIN_UID" "${api_key_args[@]}"
+}
+
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
   echo
-  echo "Commands: start | stop | restart | status | seed"
+  echo "Commands: start | stop | restart | status | seed | bench"
 }
 
 # ---- main -----------------------------------------------------------------
@@ -286,6 +316,9 @@ case "$cmd" in
     wait_port "$HOST" "$HTTP_PORT" 30 || { err "gateway is not up on :${HTTP_PORT} (run 'start' first)"; exit 1; }
     seed_market
     log "seeded; open http://localhost:${HTTP_PORT} to see a live book"
+    ;;
+  bench)
+    bench
     ;;
   help|-h|--help)
     usage
