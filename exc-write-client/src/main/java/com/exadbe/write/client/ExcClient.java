@@ -310,7 +310,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 userCookie);
     }
 
-    /** Submits an IOC limit order. */
+    /** Submits an IOC limit order. A bid reserves quote at the limit price. */
     public long placeIoc(
             final int symbolId,
             final long orderId,
@@ -327,7 +327,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 ask ? OrderAction.ASK : OrderAction.BID,
                 OrderType.IOC,
                 price,
-                CommandEnvelopeEncoder.reserveBidPriceNullValue(),
+                ask ? CommandEnvelopeEncoder.reserveBidPriceNullValue() : price,
                 size,
                 userCookie);
     }

@@ -481,22 +481,20 @@ public final class GatewayBenchRunner {
             failures.add("coverage MOVE place -> " + resting.path("resultCode").asText());
         }
 
-        // IOC: cross a fresh resting bid with an IOC ask, assert filledSize.
-        // (An IOC bid needs a reserve price >= price; the gateway's IOC path
-        // sends a null reserve, so the ask side is the reliable cross-check.)
+        // IOC: cross a fresh resting ask with an IOC bid, assert filledSize.
         final long iocMaker = orderId + 1L;
         final long iocTaker = orderId + 2L;
         if (isSuccess(post(
                 "/api/v1/orders",
                 String.format(
-                        "{\"symbolId\":%d,\"orderId\":%d,\"ask\":false,\"type\":\"GTC\",\"price\":50,"
-                                + "\"size\":1,\"reserveBidPrice\":50,\"uid\":%d,\"userCookie\":0}",
+                        "{\"symbolId\":%d,\"orderId\":%d,\"ask\":true,\"type\":\"GTC\",\"price\":200,"
+                                + "\"size\":1,\"reserveBidPrice\":0,\"uid\":%d,\"userCookie\":0}",
                         SYMBOL, iocMaker, makerUid)))) {
             final JsonNode ioc = post(
                     "/api/v1/orders",
                     String.format(
-                            "{\"symbolId\":%d,\"orderId\":%d,\"ask\":true,\"type\":\"IOC\",\"price\":50,"
-                                    + "\"size\":1,\"reserveBidPrice\":0,\"uid\":%d,\"userCookie\":0}",
+                            "{\"symbolId\":%d,\"orderId\":%d,\"ask\":false,\"type\":\"IOC\",\"price\":200,"
+                                    + "\"size\":1,\"reserveBidPrice\":200,\"uid\":%d,\"userCookie\":0}",
                             SYMBOL, iocTaker, takerUid));
             if (!isSuccess(ioc) || ioc.path("filledSize").asLong() != 1L) {
                 failures.add("coverage IOC -> " + ioc.path("resultCode").asText() + " filledSize="

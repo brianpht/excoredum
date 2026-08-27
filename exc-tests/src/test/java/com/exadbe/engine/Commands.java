@@ -203,7 +203,7 @@ final class Commands {
                 ask ? OrderAction.ASK : OrderAction.BID,
                 OrderType.IOC,
                 price,
-                CommandEnvelopeEncoder.reserveBidPriceNullValue(),
+                ask ? CommandEnvelopeEncoder.reserveBidPriceNullValue() : price,
                 size);
     }
 

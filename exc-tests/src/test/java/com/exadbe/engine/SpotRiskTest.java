@@ -85,6 +85,23 @@ class SpotRiskTest {
     }
 
     @Test
+    void iocBidFillsAndSettlesAtLimitPrice() {
+        fund(MAKER, BASE, 1000L);
+        fund(TAKER, QUOTE, 100_000L);
+        placeGtc(1L, true, 100L, 6L, 0L, MAKER);
+
+        // An IOC bid reserves quote at its limit price, then settles at the
+        // fill price; the full resting ask is consumed.
+        placeIoc(2L, false, 100L, 6L, TAKER);
+        assertEquals(CommandResultCode.SUCCESS, out.resultCode());
+        assertEquals(6L, out.filledSize());
+
+        assertEquals(6L, engine.balance(TAKER, BASE));
+        assertEquals(99_400L, engine.balance(TAKER, QUOTE)); // 100000 - 6 * 100
+        assertEquals(600L, engine.balance(MAKER, QUOTE));
+    }
+
+    @Test
     void fokBudgetFillsAndSettles() {
         fund(MAKER, BASE, 1000L);
         fund(TAKER, QUOTE, 100_000L);
@@ -155,6 +172,10 @@ class SpotRiskTest {
             final long reserveBidPrice,
             final long uid) {
         run(cmd.placeGtc(1L, seq, seq, SYM, orderId, ask, price, size, reserveBidPrice, uid));
+    }
+
+    private void placeIoc(final long orderId, final boolean ask, final long price, final long size, final long uid) {
+        run(cmd.placeIoc(1L, seq, seq, SYM, orderId, ask, price, size, uid));
     }
 
     private void run(final com.exadbe.protocol.CommandEnvelopeDecoder decoded) {

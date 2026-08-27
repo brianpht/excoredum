@@ -79,6 +79,49 @@ class ExcClientIntegrationTest {
         }
     }
 
+    @Test
+    @Timeout(120)
+    void iocBidFillsAgainstRestingAsk() {
+        final int sym = 1;
+        final int base = 10;
+        final int quote = 20;
+        final long maker = 1L;
+        final long taker = 2L;
+
+        final long[] lastCommandIdLo = {-1L};
+        final CommandResultCode[] lastCode = {CommandResultCode.NULL_VAL};
+        final long[] lastFilled = {-1L};
+
+        final ResultHandler handler =
+                (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) -> {
+                    lastCommandIdLo[0] = idLo;
+                    lastCode[0] = code;
+                    if (hasFilledSize) {
+                        lastFilled[0] = filledSize;
+                    }
+                };
+
+        final ClientConfig config =
+                ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
+
+        try (ExcClient client = new ExcClient(config, handler)) {
+            awaitResult(client, client.addSymbol(sym, base, quote, 1L, 1L), lastCommandIdLo);
+            awaitResult(client, client.addUser(maker), lastCommandIdLo);
+            awaitResult(client, client.adjustBalance(maker, base, 1_000L), lastCommandIdLo);
+            awaitResult(client, client.addUser(taker), lastCommandIdLo);
+            awaitResult(client, client.adjustBalance(taker, quote, 100_000L), lastCommandIdLo);
+
+            awaitResult(client, client.placeGtc(sym, 1L, true, 100L, 6L, 0L, maker, 0), lastCommandIdLo);
+            assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
+
+            // A bid reserves quote at its limit price; before the fix the IOC
+            // path sent a null reserve and this was rejected.
+            awaitResult(client, client.placeIoc(sym, 2L, false, 100L, 6L, taker, 0), lastCommandIdLo);
+            assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
+            assertEquals(6L, lastFilled[0]);
+        }
+    }
+
     private static void awaitResult(final ExcClient client, final long commandIdLo, final long[] lastCommandIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
