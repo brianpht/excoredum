@@ -29,6 +29,7 @@ public final class MarketPump implements AutoCloseable {
     private final Thread thread;
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile boolean running = true;
+    private volatile long refreshFailures;
 
     public MarketPump(
             final ReadPump read,
@@ -61,9 +62,26 @@ public final class MarketPump implements AutoCloseable {
     private void refresh() {
         for (final GatewayConfig.Symbol symbol : symbols) {
             final int symbolId = symbol.symbolId();
-            read.submitOrderBook(symbolId, 32).thenAccept(v -> publishBook((L2Snapshot) v));
-            read.submitMarketTrades(symbolId, 100).thenAccept(v -> publishTape(symbolId, castTrades(v)));
+            read.submitOrderBook(symbolId, 32).whenComplete((v, err) -> {
+                if (err == null) {
+                    publishBook((L2Snapshot) v);
+                } else {
+                    refreshFailures++;
+                }
+            });
+            read.submitMarketTrades(symbolId, 100).whenComplete((v, err) -> {
+                if (err == null) {
+                    publishTape(symbolId, castTrades(v));
+                } else {
+                    refreshFailures++;
+                }
+            });
         }
+    }
+
+    /** Number of snapshot/tape refreshes that failed (diagnostic; not yet wired to the HTTP surface). */
+    public long refreshFailures() {
+        return refreshFailures;
     }
 
     private void publishBook(final L2Snapshot snapshot) {
@@ -121,6 +139,15 @@ public final class MarketPump implements AutoCloseable {
         if (closed.compareAndSet(false, true)) {
             running = false;
             thread.interrupt();
+            joinQuietly(thread);
+        }
+    }
+
+    private static void joinQuietly(final Thread thread) {
+        try {
+            thread.join(5_000L);
+        } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

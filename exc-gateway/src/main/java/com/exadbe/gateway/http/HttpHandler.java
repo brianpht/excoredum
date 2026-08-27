@@ -10,6 +10,7 @@ import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.HttpVersion;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -35,28 +36,31 @@ final class HttpHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
     @Override
     protected void channelRead0(final ChannelHandlerContext ctx, final FullHttpRequest request) {
         final HandlerRequest handlerRequest = new HandlerRequest(request);
+        final boolean keepAlive = HttpUtil.isKeepAlive(request);
         final CompletableFuture<?> future;
         try {
             future = router.route(handlerRequest);
         } catch (final RuntimeException e) {
-            respond(ctx, null, e);
+            respond(ctx, null, e, keepAlive);
             return;
         }
         future.whenComplete((payload, error) -> {
-            ctx.executor().execute(() -> respond(ctx, payload, error));
+            ctx.executor().execute(() -> respond(ctx, payload, error, keepAlive));
         });
     }
 
-    private void respond(final ChannelHandlerContext ctx, final Object payload, final Throwable error) {
+    private void respond(
+            final ChannelHandlerContext ctx, final Object payload, final Throwable error, final boolean keepAlive) {
         if (error != null) {
             final Throwable cause = unwrap(error);
-            writeJson(ctx, statusOf(cause), errorBody(cause));
+            writeJson(ctx, statusOf(cause), errorBody(cause), keepAlive);
         } else {
-            writeJson(ctx, 200, payload);
+            writeJson(ctx, 200, payload, keepAlive);
         }
     }
 
-    private void writeJson(final ChannelHandlerContext ctx, final int status, final Object payload) {
+    private void writeJson(
+            final ChannelHandlerContext ctx, final int status, final Object payload, final boolean keepAlive) {
         byte[] bytes;
         int effectiveStatus;
         try {
@@ -70,7 +74,11 @@ final class HttpHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
                 HttpVersion.HTTP_1_1, HttpResponseStatus.valueOf(effectiveStatus), Unpooled.wrappedBuffer(bytes));
         response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=utf-8");
         response.headers().set(HttpHeaderNames.CONTENT_LENGTH, bytes.length);
-        ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+        if (keepAlive) {
+            ctx.writeAndFlush(response);
+        } else {
+            ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+        }
     }
 
     private static Object errorBody(final Throwable error) {

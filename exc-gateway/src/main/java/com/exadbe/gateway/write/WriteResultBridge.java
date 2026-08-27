@@ -4,8 +4,8 @@ import com.exadbe.gateway.dto.WriteResultDto;
 import com.exadbe.gateway.http.ApiException;
 import com.exadbe.protocol.CommandResultCode;
 import com.exadbe.write.client.ResultHandler;
+import java.util.HashMap;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Bridges {@link ExcClient} result delivery to the HTTP handlers: the single
@@ -15,7 +15,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class WriteResultBridge implements ResultHandler {
 
-    private final ConcurrentHashMap<Long, CompletableFuture<WriteResultDto>> pending = new ConcurrentHashMap<>();
+    // Single-threaded: register() and onResult() both run on the write pump thread.
+    private final HashMap<Long, CompletableFuture<WriteResultDto>> pending = new HashMap<>();
 
     /** Registered by the handler *after* a submit returns the command id (safe: submit and poll share one thread). */
     public CompletableFuture<WriteResultDto> register(final long commandIdLo) {

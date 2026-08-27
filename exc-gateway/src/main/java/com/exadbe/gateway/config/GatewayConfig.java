@@ -46,6 +46,7 @@ public final class GatewayConfig {
     private final String writeAeronDir;
     private final long marketPumpIntervalMs;
     private final List<Long> adminUids;
+    private final String adminApiKey;
     private final List<Symbol> symbols;
     private final List<Currency> currencies;
 
@@ -63,6 +64,7 @@ public final class GatewayConfig {
         this.writeAeronDir = b.writeAeronDir;
         this.marketPumpIntervalMs = b.marketPumpIntervalMs;
         this.adminUids = List.copyOf(b.adminUids);
+        this.adminApiKey = b.adminApiKey;
         this.symbols = List.copyOf(b.symbols);
         this.currencies = List.copyOf(b.currencies);
     }
@@ -74,13 +76,15 @@ public final class GatewayConfig {
     /** Parses the gateway's operator-facing properties. */
     public static GatewayConfig fromProperties(final Properties p) {
         final Builder b = builder();
-        b.httpHost(p.getProperty("gateway.http.host", "0.0.0.0"));
+        b.httpHost(p.getProperty("gateway.http.host", "127.0.0.1"));
         b.httpPort(parseInt(p.getProperty("gateway.http.port", "8080"), "gateway.http.port"));
         b.readRequestChannel(p.getProperty("gateway.read.requestChannel", QueryStreams.QUERY_REQUEST_CHANNEL));
-        b.readRequestStreamId(
-                parseInt(p.getProperty("gateway.read.requestStreamId", "300"), "gateway.read.requestStreamId"));
-        b.readResponseStreamId(
-                parseInt(p.getProperty("gateway.read.responseStreamId", "301"), "gateway.read.responseStreamId"));
+        b.readRequestStreamId(parseInt(
+                p.getProperty("gateway.read.requestStreamId", Integer.toString(QueryStreams.QUERY_REQUEST_STREAM_ID)),
+                "gateway.read.requestStreamId"));
+        b.readResponseStreamId(parseInt(
+                p.getProperty("gateway.read.responseStreamId", Integer.toString(QueryStreams.QUERY_RESPONSE_STREAM_ID)),
+                "gateway.read.responseStreamId"));
         b.readAeronDir(p.getProperty("gateway.read.aeronDir"));
         b.writeClientId(parseLong(p.getProperty("gateway.write.clientId", "1"), "gateway.write.clientId"));
         b.writeInitialClientSeq(
@@ -95,6 +99,8 @@ public final class GatewayConfig {
                 b.adminUid(parseLong(uid.trim(), "gateway.admin.uids"));
             }
         }
+        final String apiKey = p.getProperty("gateway.admin.apiKey");
+        b.adminApiKey(apiKey == null || apiKey.isBlank() ? null : apiKey);
         final String symbols = p.getProperty("gateway.symbols", "");
         if (!symbols.isBlank()) {
             for (final String token : symbols.split(",")) {
@@ -214,6 +220,11 @@ public final class GatewayConfig {
         return adminUids;
     }
 
+    /** Shared secret required on the {@code X-Api-Key} header for admin endpoints, or null to disable. */
+    public String adminApiKey() {
+        return adminApiKey;
+    }
+
     public List<Symbol> symbols() {
         return symbols;
     }
@@ -224,7 +235,7 @@ public final class GatewayConfig {
 
     /** Fluent builder with conservative local defaults. */
     public static final class Builder {
-        private String httpHost = "0.0.0.0";
+        private String httpHost = "127.0.0.1";
         private int httpPort = 8080;
         private String readRequestChannel = QueryStreams.QUERY_REQUEST_CHANNEL;
         private int readRequestStreamId = QueryStreams.QUERY_REQUEST_STREAM_ID;
@@ -237,6 +248,7 @@ public final class GatewayConfig {
         private String writeAeronDir;
         private long marketPumpIntervalMs = 1000L;
         private final List<Long> adminUids = new ArrayList<>();
+        private String adminApiKey;
         private final List<Symbol> symbols = new ArrayList<>();
         private final List<Currency> currencies = new ArrayList<>();
 
@@ -305,6 +317,11 @@ public final class GatewayConfig {
             return this;
         }
 
+        public Builder adminApiKey(final String v) {
+            this.adminApiKey = v;
+            return this;
+        }
+
         public Builder symbol(final Symbol v) {
             this.symbols.add(v);
             return this;
@@ -319,7 +336,53 @@ public final class GatewayConfig {
             if (httpPort < 0 || httpPort > 65535) {
                 throw new IllegalArgumentException("httpPort out of range: " + httpPort);
             }
+            if (readRequestStreamId < 0 || readResponseStreamId < 0) {
+                throw new IllegalArgumentException("read stream ids must be non-negative");
+            }
+            if (writeClientId <= 0L) {
+                throw new IllegalArgumentException("writeClientId must be positive: " + writeClientId);
+            }
+            if (writeIngressEndpoints == null || writeIngressEndpoints.isBlank()) {
+                throw new IllegalArgumentException("writeIngressEndpoints must not be blank");
+            }
+            if (marketPumpIntervalMs < 0L) {
+                throw new IllegalArgumentException("marketPumpIntervalMs out of range: " + marketPumpIntervalMs);
+            }
+            for (final Symbol s : symbols) {
+                validateSymbol(s);
+            }
+            for (final Currency c : currencies) {
+                validateCurrency(c);
+            }
             return new GatewayConfig(this);
+        }
+
+        private static void validateSymbol(final Symbol s) {
+            if (s.symbolId() <= 0) {
+                throw new IllegalArgumentException("symbol id must be positive: " + s.symbolId());
+            }
+            if (s.baseCurrency() == s.quoteCurrency()) {
+                throw new IllegalArgumentException("base and quote currency must differ for symbol " + s.symbolId());
+            }
+            if (s.baseScaleK() <= 0L || s.quoteScaleK() <= 0L) {
+                throw new IllegalArgumentException("scale factors must be positive for symbol " + s.symbolId());
+            }
+            if (s.makerFee() < 0L || s.takerFee() < 0L) {
+                throw new IllegalArgumentException("fees must be non-negative for symbol " + s.symbolId());
+            }
+            if (s.makerFee() > s.takerFee()) {
+                throw new IllegalArgumentException("makerFee must be <= takerFee for symbol " + s.symbolId());
+            }
+        }
+
+        private static void validateCurrency(final Currency c) {
+            if (c.id() <= 0) {
+                throw new IllegalArgumentException("currency id must be positive: " + c.id());
+            }
+            if (c.code() == null || c.code().isBlank() || c.scaleK() <= 0L) {
+                throw new IllegalArgumentException(
+                        "currency must have a non-blank code and positive scaleK: " + c.id());
+            }
         }
     }
 }

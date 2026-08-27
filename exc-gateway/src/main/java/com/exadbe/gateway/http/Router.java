@@ -18,9 +18,12 @@ import com.exadbe.read.client.OrderRecordResult;
 import com.exadbe.read.client.TotalBalanceResult;
 import com.exadbe.read.client.UserReport;
 import io.netty.handler.codec.http.HttpMethod;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
@@ -169,7 +172,13 @@ public final class Router {
     // ---- write handlers (trading) ----
     private CompletableFuture<?> placeOrder(final HandlerRequest req) {
         final PlaceOrderRequest body = readBody(req, PlaceOrderRequest.class);
-        final String type = body.type() == null ? "GTC" : body.type().toUpperCase();
+        require(body.symbolId(), "symbolId");
+        require(body.orderId(), "orderId");
+        require(body.ask(), "ask");
+        require(body.price(), "price");
+        require(body.size(), "size");
+        require(body.uid(), "uid");
+        final String type = body.type() == null ? "GTC" : body.type().toUpperCase(Locale.ROOT);
         switch (type) {
             case "IOC":
                 return write.placeIoc(
@@ -214,6 +223,11 @@ public final class Router {
     private CompletableFuture<?> modifyOrder(final HandlerRequest req) {
         final long orderId = req.pathLong("orderId");
         final ModifyOrderRequest body = readBody(req, ModifyOrderRequest.class);
+        require(body.symbolId(), "symbolId");
+        require(body.uid(), "uid");
+        if (body.price() != null && body.size() != null) {
+            throw ApiException.badRequest("PATCH order needs exactly one of 'price' or 'size'");
+        }
         if (body.price() != null) {
             return write.moveOrder(body.symbolId(), orderId, body.price(), body.uid());
         }
@@ -226,12 +240,18 @@ public final class Router {
     private CompletableFuture<?> requestOrderBook(final HandlerRequest req) {
         final int symbolId = req.pathInt("symbolId");
         final OrderBookRequest body = readBody(req, OrderBookRequest.class);
+        require(body.uid(), "uid");
         return write.requestOrderBook(symbolId, body.uid());
     }
 
     // ---- write handlers (admin) ----
     private CompletableFuture<?> addSymbol(final HandlerRequest req) {
         final AddSymbolRequest body = readBody(req, AddSymbolRequest.class);
+        require(body.symbolId(), "symbolId");
+        require(body.baseCurrency(), "baseCurrency");
+        require(body.quoteCurrency(), "quoteCurrency");
+        require(body.baseScaleK(), "baseScaleK");
+        require(body.quoteScaleK(), "quoteScaleK");
         return write.addSymbol(
                 body.symbolId(),
                 body.baseCurrency(),
@@ -244,12 +264,15 @@ public final class Router {
 
     private CompletableFuture<?> addUser(final HandlerRequest req) {
         final AddUserRequest body = readBody(req, AddUserRequest.class);
+        require(body.uid(), "uid");
         return write.addUser(body.uid());
     }
 
     private CompletableFuture<?> adjustBalance(final HandlerRequest req) {
         final long uid = req.pathLong("uid");
         final AdjustBalanceRequest body = readBody(req, AdjustBalanceRequest.class);
+        require(body.currency(), "currency");
+        require(body.amount(), "amount");
         return write.adjustBalance(uid, body.currency(), body.amount());
     }
 
@@ -264,20 +287,45 @@ public final class Router {
     // ---- helpers ----
     private Handler admin(final Handler delegate) {
         return req -> {
-            requireAdmin(req);
+            checkAdmin(config, req);
             return delegate.handle(req);
         };
     }
 
-    /** Admin endpoints require a header carrying an uid in the configured allow-list. */
-    private void requireAdmin(final HandlerRequest req) {
+    /**
+     * Admin endpoints require an {@code X-User-Id} header in the configured
+     * allow-list and, when an API key is configured, a matching {@code X-Api-Key}.
+     */
+    static void checkAdmin(final GatewayConfig config, final HandlerRequest req) {
+        final String apiKey = config.adminApiKey();
+        if (apiKey != null && !apiKey.isBlank()) {
+            final String provided = req.header("X-Api-Key");
+            if (provided == null || !constantTimeEquals(apiKey, provided)) {
+                throw new ApiException(401, "invalid or missing X-Api-Key header for admin endpoint");
+            }
+        }
         final String uid = req.header("X-User-Id");
         if (uid == null) {
             throw ApiException.badRequest("missing X-User-Id header for admin endpoint");
         }
-        final long parsed = Long.parseLong(uid);
+        final long parsed;
+        try {
+            parsed = Long.parseLong(uid);
+        } catch (final NumberFormatException e) {
+            throw ApiException.badRequest("invalid X-User-Id header: " + uid);
+        }
         if (!config.adminUids().contains(parsed)) {
             throw new ApiException(403, "uid is not an admin: " + parsed);
+        }
+    }
+
+    private static boolean constantTimeEquals(final String a, final String b) {
+        return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void require(final Object value, final String name) {
+        if (value == null) {
+            throw ApiException.badRequest("missing required field: " + name);
         }
     }
 

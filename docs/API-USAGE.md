@@ -28,13 +28,16 @@ under `/tmp/excoredum`; `stop` tears the stack down.
   `/users/{uid}/suspend`, `/users/{uid}/resume`) require the `X-User-Id` header
   to carry a uid listed in `gateway.admin.uids` (default `1,2,811`). A missing
   header is `400`; a uid not in the allow-list is `403`.
+- When `gateway.admin.apiKey` is configured, admin endpoints also require a
+  matching `X-Api-Key` header (missing/invalid is `401`). The examples below
+  assume `gateway.admin.apiKey=change-me`.
 
 ## 1. Fund a user (admin)
 
 ```bash
 # Create user 812
 curl -s -X POST http://localhost:8080/api/v1/users \
-  -H 'X-User-Id: 811' -H 'Content-Type: application/json' \
+  -H 'X-User-Id: 811' -H 'X-Api-Key: change-me' -H 'Content-Type: application/json' \
   -d '{"uid":812}'
 #> {"commandIdHi":0,"commandIdLo":123,"resultCode":"SUCCESS","uid":812,"orderId":null,"filledSize":null}
 ```
@@ -42,7 +45,7 @@ curl -s -X POST http://localhost:8080/api/v1/users \
 ```bash
 # Fund 1,000,000 quote (currency 20 = USDT)
 curl -s -X POST http://localhost:8080/api/v1/users/812/balance \
-  -H 'X-User-Id: 811' -H 'Content-Type: application/json' \
+  -H 'X-User-Id: 811' -H 'X-Api-Key: change-me' -H 'Content-Type: application/json' \
   -d '{"currency":20,"amount":1000000}'
 #> {"commandIdHi":0,"commandIdLo":124,"resultCode":"SUCCESS","uid":812,"orderId":null,"filledSize":null}
 ```
@@ -211,20 +214,21 @@ interval (`gateway.marketPump.intervalMs`; `0` disables them).
 ```bash
 # Add a symbol (admin)
 curl -s -X POST http://localhost:8080/api/v1/symbols \
-  -H 'X-User-Id: 811' -H 'Content-Type: application/json' \
+  -H 'X-User-Id: 811' -H 'X-Api-Key: change-me' -H 'Content-Type: application/json' \
   -d '{"symbolId":5,"baseCurrency":30,"quoteCurrency":40,"baseScaleK":1,"quoteScaleK":1,"takerFee":0,"makerFee":0}'
 
 # Suspend / resume a user
-curl -s -X POST http://localhost:8080/api/v1/users/812/suspend -H 'X-User-Id: 811'
-curl -s -X POST http://localhost:8080/api/v1/users/812/resume  -H 'X-User-Id: 811'
+curl -s -X POST http://localhost:8080/api/v1/users/812/suspend -H 'X-User-Id: 811' -H 'X-Api-Key: change-me'
+curl -s -X POST http://localhost:8080/api/v1/users/812/resume  -H 'X-User-Id: 811' -H 'X-Api-Key: change-me'
 ```
 
 ```bash
-# Admin guard: without the X-User-Id header the same route is rejected
+# Admin guard: without the X-Api-Key header the route is rejected
 curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8080/api/v1/symbols \
   -H 'Content-Type: application/json' -d '{}'
-#> 400          # missing header
-#> 403          # header present but uid not in gateway.admin.uids
+#> 401          # missing/invalid X-Api-Key (when gateway.admin.apiKey is set)
+#> 400          # missing X-User-Id header
+#> 403          # X-User-Id present but not in gateway.admin.uids
 ```
 
 ## Order-type semantics
@@ -243,6 +247,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8080/api/v1/sy
 |--------|--------------------------------------------------------------------|
 | 200    | Success                                                            |
 | 400    | Bad request / malformed input / missing admin header               |
+| 401    | Missing or invalid `X-Api-Key` on an admin route                   |
 | 403    | Header present but uid is not an allowed admin                     |
 | 404    | No route / unknown order                                           |
 | 429    | Read/write in-flight window full                                   |

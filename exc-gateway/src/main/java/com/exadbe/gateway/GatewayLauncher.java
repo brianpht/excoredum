@@ -67,6 +67,7 @@ public final class GatewayLauncher {
             // Block the main thread until the process is terminated.
             new CountDownLatch(1).await();
         } finally {
+            server.stop();
             marketPump.close();
             write.close();
             read.close();

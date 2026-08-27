@@ -59,7 +59,8 @@ paths:
       operationId: addSymbol
       summary: Register a new symbol (admin)
       security:
-        - adminKey: []
+        - adminApiKey: []
+          adminKey: []
       requestBody:
         required: true
         content:
@@ -75,6 +76,8 @@ paths:
                 $ref: "#/components/schemas/WriteResult"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
   /api/v1/currencies:
@@ -314,7 +317,8 @@ paths:
       operationId: addUser
       summary: Create a user (admin)
       security:
-        - adminKey: []
+        - adminApiKey: []
+          adminKey: []
       requestBody:
         required: true
         content:
@@ -330,6 +334,8 @@ paths:
                 $ref: "#/components/schemas/WriteResult"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
   /api/v1/users/{uid}/balance:
@@ -338,7 +344,8 @@ paths:
       operationId: adjustBalance
       summary: Adjust a user's balance (admin)
       security:
-        - adminKey: []
+        - adminApiKey: []
+          adminKey: []
       parameters:
         - $ref: "#/components/parameters/uidPath"
       requestBody:
@@ -356,6 +363,8 @@ paths:
                 $ref: "#/components/schemas/WriteResult"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
   /api/v1/users/{uid}/suspend:
@@ -364,7 +373,8 @@ paths:
       operationId: suspendUser
       summary: Suspend a user (admin)
       security:
-        - adminKey: []
+        - adminApiKey: []
+          adminKey: []
       parameters:
         - $ref: "#/components/parameters/uidPath"
       responses:
@@ -376,6 +386,8 @@ paths:
                 $ref: "#/components/schemas/WriteResult"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
   /api/v1/users/{uid}/resume:
@@ -384,7 +396,8 @@ paths:
       operationId: resumeUser
       summary: Resume a suspended user (admin)
       security:
-        - adminKey: []
+        - adminApiKey: []
+          adminKey: []
       parameters:
         - $ref: "#/components/parameters/uidPath"
       responses:
@@ -396,10 +409,17 @@ paths:
                 $ref: "#/components/schemas/WriteResult"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
 components:
   securitySchemes:
+    adminApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: Shared secret from `gateway.admin.apiKey` (required when configured).
     adminKey:
       type: apiKey
       in: header
@@ -466,6 +486,12 @@ components:
             $ref: "#/components/schemas/Error"
     Forbidden:
       description: Header present but uid is not an allowed admin
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing or invalid X-Api-Key on an admin route
       content:
         application/json:
           schema:

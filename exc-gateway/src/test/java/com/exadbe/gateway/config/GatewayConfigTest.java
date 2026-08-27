@@ -1,6 +1,7 @@
 package com.exadbe.gateway.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.List;
@@ -21,7 +22,7 @@ class GatewayConfigTest {
         p.setProperty("gateway.currencies", "10|BTC|100000000,20|USDT|1000000");
 
         final GatewayConfig config = GatewayConfig.fromProperties(p);
-        assertEquals("0.0.0.0", config.httpHost());
+        assertEquals("127.0.0.1", config.httpHost());
         assertEquals(9090, config.httpPort());
         assertEquals(42L, config.writeClientId());
         assertEquals("localhost:20100,localhost:20200", config.writeIngressEndpoints());
@@ -48,11 +49,65 @@ class GatewayConfigTest {
     @Test
     void usesConservativeDefaults() {
         final GatewayConfig config = GatewayConfig.builder().build();
+        assertEquals("127.0.0.1", config.httpHost());
         assertEquals(8080, config.httpPort());
         assertEquals(1L, config.writeClientId());
         assertEquals("localhost:20100", config.writeIngressEndpoints());
         assertEquals(List.of(), config.adminUids());
+        assertNull(config.adminApiKey());
         assertEquals(List.of(), config.symbols());
+    }
+
+    @Test
+    void parsesAdminApiKey() {
+        final Properties p = new Properties();
+        p.setProperty("gateway.admin.apiKey", "secret");
+
+        final GatewayConfig config = GatewayConfig.fromProperties(p);
+        assertEquals("secret", config.adminApiKey());
+    }
+
+    @Test
+    void treatsBlankApiKeyAsDisabled() {
+        final Properties p = new Properties();
+        p.setProperty("gateway.admin.apiKey", "   ");
+
+        final GatewayConfig config = GatewayConfig.fromProperties(p);
+        assertNull(config.adminApiKey());
+    }
+
+    @Test
+    void rejectsSymbolWithNonPositiveScale() {
+        assertThrows(IllegalArgumentException.class, () -> {
+            final Properties p = new Properties();
+            p.setProperty("gateway.symbols", "1|BTC|10|20|0|1000000");
+            GatewayConfig.fromProperties(p);
+        });
+    }
+
+    @Test
+    void rejectsSymbolWithMakerFeeAboveTaker() {
+        assertThrows(IllegalArgumentException.class, () -> {
+            final Properties p = new Properties();
+            p.setProperty("gateway.symbols", "1|BTC|10|20|1000000|1000000|1000|500");
+            GatewayConfig.fromProperties(p);
+        });
+    }
+
+    @Test
+    void rejectsSymbolWithSameBaseAndQuote() {
+        assertThrows(IllegalArgumentException.class, () -> {
+            final Properties p = new Properties();
+            p.setProperty("gateway.symbols", "1|BTC|10|10|1000000|1000000");
+            GatewayConfig.fromProperties(p);
+        });
+    }
+
+    @Test
+    void rejectsNonPositiveClientId() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GatewayConfig.builder().writeClientId(0L).build());
     }
 
     @Test

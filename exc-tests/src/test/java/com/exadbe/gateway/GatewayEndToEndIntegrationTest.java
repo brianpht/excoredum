@@ -54,6 +54,7 @@ class GatewayEndToEndIntegrationTest {
     private static final int QUOTE = 20;
     private static final long MAKER = 811L;
     private static final long TAKER = 812L;
+    private static final String API_KEY = "test-secret";
 
     @Test
     @Timeout(180)
@@ -100,6 +101,7 @@ class GatewayEndToEndIntegrationTest {
                         .writeClientId(7L)
                         .writeIngressEndpoints(ClusterConfig.ingressEndpoints(1))
                         .adminUid(MAKER)
+                        .adminApiKey(API_KEY)
                         .symbol(new GatewayConfig.Symbol(SYM, "BTC/USDT", BASE, QUOTE, 1L, 1L, 0L, 0L))
                         .currency(new GatewayConfig.Currency(BASE, "BTC", 1L))
                         .currency(new GatewayConfig.Currency(QUOTE, "USDT", 1L))
@@ -192,7 +194,7 @@ class GatewayEndToEndIntegrationTest {
                 "811");
         assertTrue(added.contains("\"resultCode\":\"SUCCESS\""), added);
 
-        // Admin guard: without the admin header the same route is rejected.
+        // Admin guard: without the X-Api-Key header the same route is rejected with 401.
         final HttpResponse<String> denied = send(
                 client,
                 HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/symbols"))
@@ -200,9 +202,56 @@ class GatewayEndToEndIntegrationTest {
                         .POST(HttpRequest.BodyPublishers.ofString("{}"))
                         .timeout(Duration.ofSeconds(10))
                         .build());
-        assertTrue(
-                denied.statusCode() == 400 || denied.statusCode() == 403,
-                "admin guard should reject: " + denied.statusCode());
+        assertEquals(401, denied.statusCode(), "admin guard should reject: " + denied.statusCode());
+
+        // A wrong X-Api-Key is rejected with 401.
+        final HttpResponse<String> wrongKey = send(
+                client,
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/symbols"))
+                        .header("Content-Type", "application/json")
+                        .header("X-Api-Key", "not-the-secret")
+                        .header("X-User-Id", "811")
+                        .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                        .timeout(Duration.ofSeconds(10))
+                        .build());
+        assertEquals(401, wrongKey.statusCode(), "wrong key should be 401: " + wrongKey.statusCode());
+
+        // A malformed X-User-Id is a 400, not a 500.
+        final HttpResponse<String> badUid = send(
+                client,
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/symbols"))
+                        .header("Content-Type", "application/json")
+                        .header("X-Api-Key", API_KEY)
+                        .header("X-User-Id", "not-a-number")
+                        .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                        .timeout(Duration.ofSeconds(10))
+                        .build());
+        assertEquals(400, badUid.statusCode(), "malformed uid should be 400: " + badUid.statusCode());
+
+        // PATCH with both price and size is rejected with 400.
+        final HttpResponse<String> patchBoth = send(
+                client,
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/orders/1"))
+                        .header("Content-Type", "application/json")
+                        .method(
+                                "PATCH",
+                                HttpRequest.BodyPublishers.ofString(
+                                        "{\"symbolId\":1,\"uid\":812,\"price\":100,\"size\":5}"))
+                        .timeout(Duration.ofSeconds(10))
+                        .build());
+        assertEquals(
+                400, patchBoth.statusCode(), "PATCH with both price and size should be 400: " + patchBoth.statusCode());
+
+        // POST /orders with a missing required field is rejected with 400.
+        final HttpResponse<String> missingField = send(
+                client,
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/orders"))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(
+                                "{\"symbolId\":1,\"orderId\":9,\"ask\":false,\"type\":\"GTC\",\"size\":1,\"uid\":812}"))
+                        .timeout(Duration.ofSeconds(10))
+                        .build());
+        assertEquals(400, missingField.statusCode(), "missing price should be 400: " + missingField.statusCode());
     }
 
     // ---- HTTP helpers ----
@@ -231,6 +280,7 @@ class GatewayEndToEndIntegrationTest {
                 .timeout(Duration.ofSeconds(10));
         if (adminUid != null) {
             req.header("X-User-Id", adminUid);
+            req.header("X-Api-Key", API_KEY);
         }
         final HttpResponse<String> resp = send(client, req.build());
         assertEquals(200, resp.statusCode(), () -> "POST " + path + " -> " + resp.statusCode() + " " + resp.body());

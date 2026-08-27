@@ -187,7 +187,16 @@ public final class WritePump implements AutoCloseable {
         if (closed.compareAndSet(false, true)) {
             running = false;
             thread.interrupt();
+            joinQuietly(thread);
             client.close();
+        }
+    }
+
+    private static void joinQuietly(final Thread thread) {
+        try {
+            thread.join(5_000L);
+        } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

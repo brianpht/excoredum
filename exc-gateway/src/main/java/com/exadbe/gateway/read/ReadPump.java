@@ -29,6 +29,14 @@ public final class ReadPump implements AutoCloseable {
     private volatile boolean running = true;
     private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean();
 
+    // Diagnostic snapshot of the client, refreshed on the pump thread so callers
+    // on other threads (e.g. the health endpoint) never read the client directly.
+    private volatile long lastAppliedPosition;
+    private volatile long submitted;
+    private volatile long completed;
+    private volatile long expired;
+    private volatile long backpressure;
+
     public ReadPump(final ReadClientConfig config) {
         this.client = new ReadClient(config);
         this.client.setListener(bridge);
@@ -51,23 +59,23 @@ public final class ReadPump implements AutoCloseable {
 
     /** The most recent applied position the replica reported (diagnostics). */
     public long lastAppliedPosition() {
-        return client.lastAppliedPosition();
+        return lastAppliedPosition;
     }
 
     public long submitted() {
-        return client.submitted();
+        return submitted;
     }
 
     public long completed() {
-        return client.completed();
+        return completed;
     }
 
     public long expired() {
-        return client.expired();
+        return expired;
     }
 
     public long backpressure() {
-        return client.backpressureEvents();
+        return backpressure;
     }
 
     // Typed submits; each runs the underlying ReadClient call on the pump thread.
@@ -125,8 +133,17 @@ public final class ReadPump implements AutoCloseable {
                 work++;
             }
             work += client.poll();
+            refreshDiagnostics();
             idle.idle(work);
         }
+    }
+
+    private void refreshDiagnostics() {
+        lastAppliedPosition = client.lastAppliedPosition();
+        submitted = client.submitted();
+        completed = client.completed();
+        expired = client.expired();
+        backpressure = client.backpressureEvents();
     }
 
     private void execSubmit(final Submit submit) {
@@ -160,7 +177,16 @@ public final class ReadPump implements AutoCloseable {
         if (closed.compareAndSet(false, true)) {
             running = false;
             thread.interrupt();
+            joinQuietly(thread);
             client.close();
+        }
+    }
+
+    private static void joinQuietly(final Thread thread) {
+        try {
+            thread.join(5_000L);
+        } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

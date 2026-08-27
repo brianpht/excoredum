@@ -130,7 +130,7 @@ reserveBidPrice, uid, userCookie}` with `type` in `GTC | IOC | FOK_BUDGET`.
 `PATCH /orders/{id}` body: `{symbolId, uid, price}` (move) or `{symbolId, uid,
 size}` (reduce).
 
-### Write - admin (requires `X-User-Id` in the configured allow-list)
+### Write - admin (requires `X-Api-Key` when configured, plus `X-User-Id` in the allow-list)
 
 | Method | Path                                | Backed by             |
 |--------|-------------------------------------|-----------------------|
@@ -173,7 +173,7 @@ Launcher reads a properties file via `--config=<path>` (or `--config <path>`):
 
 | Property                                   | Default                                        | Purpose                                  |
 |--------------------------------------------|------------------------------------------------|------------------------------------------|
-| `gateway.http.host`                         | `0.0.0.0`                                      | HTTP bind address                        |
+| `gateway.http.host`                         | `127.0.0.1`                                    | HTTP bind address                        |
 | `gateway.http.port`                         | `8080`                                         | HTTP bind port                           |
 | `gateway.read.requestChannel`               | `aeron:udp?endpoint=localhost:44000`           | Read replica query channel               |
 | `gateway.read.requestStreamId`              | `300`                                          | Read request stream                      |
@@ -185,6 +185,7 @@ Launcher reads a properties file via `--config=<path>` (or `--config <path>`):
 | `gateway.write.egressChannel`               | `aeron:udp?endpoint=localhost:0`               | Write egress channel                     |
 | `gateway.write.aeronDir`                    | (embedded media driver)                        | Shared Aeron dir, if any                 |
 | `gateway.admin.uids`                        | (empty)                                        | Admin `X-User-Id` allow-list             |
+| `gateway.admin.apiKey`                      | (disabled)                                     | Shared secret for admin `X-Api-Key` (blank disables the check) |
 | `gateway.symbols`                           | (empty)                                        | `id\|name\|base\|quote\|baseScaleK\|quoteScaleK[|makerFee|takerFee]`, comma separated |
 | `gateway.currencies`                        | (empty)                                        | `id\|code\|scaleK`, comma separated (balance naming/scaling) |
 | `gateway.marketPump.intervalMs`             | `1000`                                         | Market snapshot interval (0 disables)    |
@@ -194,15 +195,19 @@ Launcher reads a properties file via `--config=<path>` (or `--config <path>`):
 ## Identity and errors
 
 - **Identity** is transport-level only: `X-User-Id` (long) identifies the acting
-  user; admin routes require that uid to be in `gateway.admin.uids` else `403`.
-  The engine keeps its own `uid` model; the gateway only forwards it.
+  user; the engine keeps its own `uid` model and the gateway only forwards it.
+- **Admin auth**: when `gateway.admin.apiKey` is set, admin routes also require a
+  matching `X-Api-Key` header (constant-time compare) before the `X-User-Id`
+  allow-list check. The gateway binds to `127.0.0.1` by default so the API is not
+  exposed beyond the host.
 - **Errors** map to HTTP status:
 
 | Status | Meaning                                                        |
 |--------|----------------------------------------------------------------|
 | 200    | Success                                                        |
-| 400    | Bad request / malformed input / non-admin missing header       |
-| 403    | Not an allowed admin                                           |
+| 400    | Bad request / malformed input / missing admin header           |
+| 401    | Missing or invalid `X-Api-Key` on an admin route               |
+| 403    | `X-User-Id` not in the admin allow-list                        |
 | 404    | No route, unknown order                                        |
 | 429    | Read/write in-flight window full                               |
 | 500    | Serialization / submit failure                                 |
@@ -225,6 +230,7 @@ gateway.read.requestChannel=aeron:udp?endpoint=localhost:44000
 gateway.write.clientId=42
 gateway.write.ingressEndpoints=localhost:20100,localhost:20200,localhost:20300
 gateway.admin.uids=1,2,811
+gateway.admin.apiKey=change-me
 gateway.symbols=1|BTC/USDT|10|20|1000000|100000|1000|5000,2|ETH/USDT|10|20|1000000|100000|1000|5000
 gateway.currencies=10|BTC|1000000,20|USDT|100000
 gateway.marketPump.intervalMs=1000
@@ -235,7 +241,7 @@ gateway.marketPump.intervalMs=1000
 ## Verification
 
 - **Unit** (`exc-gateway/src/test`): `MapperTest`, `GatewayConfigTest`,
-  `HandlerRequestTest`, `JsonTest`, `StreamBroadcasterTest`.
+  `HandlerRequestTest`, `JsonTest`, `StreamBroadcasterTest`, `AdminGuardTest`.
 - **End to end** (`exc-tests`, tag `integration`):
   `GatewayEndToEndIntegrationTest` boots an in-process cluster + read replica +
   gateway, then via `HttpClient` checks the order book, symbols, balance report,
@@ -250,11 +256,11 @@ Gate (must pass in order, per the engine rules): `spotlessApply` ->
 
 ## Limitations and roadmap
 
-- **Auth** is a boundary gate only; real authentication/authorization is out of
-  scope.
+- **Auth** is a boundary gate only (a shared `X-Api-Key` for admin plus the
+  `X-User-Id` allow-list); real per-user authentication/authorization is out of
+  scope, so trading endpoints still trust the caller-supplied `uid`.
 - **Streaming** is a coarse broadcast (client filters); per-symbol server-side
   subscription filtering is a follow-up.
 - **System health** exposes `appliedPosition` / `stateHash` / conservation /
   client stats; Raft roles and `CoreMetrics` counters are not on the query
   protocol and would need a separate admin channel or a schema extension.
-- A malformed `X-User-Id` currently surfaces as `500` rather than `400` (edge case).

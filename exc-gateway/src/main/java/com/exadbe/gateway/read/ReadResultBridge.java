@@ -10,9 +10,9 @@ import com.exadbe.read.client.OrderRecordResult;
 import com.exadbe.read.client.QueryListener;
 import com.exadbe.read.client.TotalBalanceResult;
 import com.exadbe.read.client.UserReport;
+import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Bridges {@link ReadClient} async delivery to the HTTP handlers: a single
@@ -22,7 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class ReadResultBridge implements QueryListener {
 
-    private final ConcurrentHashMap<Long, CompletableFuture<Object>> pending = new ConcurrentHashMap<>();
+    // Single-threaded: register() and the listener callbacks all run on the read pump thread.
+    private final HashMap<Long, CompletableFuture<Object>> pending = new HashMap<>();
 
     /** Registered by the handler *after* a submit returns the request id (safe: submit and poll share one thread). */
     public CompletableFuture<Object> register(final long requestId) {

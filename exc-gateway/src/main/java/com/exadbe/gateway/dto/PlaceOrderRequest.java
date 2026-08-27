@@ -1,13 +1,17 @@
 package com.exadbe.gateway.dto;
 
-/** JSON body for {@code POST /api/v1/orders}. {@code type} is GTC / IOC / FOK_BUDGET. */
+/**
+ * JSON body for {@code POST /api/v1/orders}. {@code type} is GTC / IOC / FOK_BUDGET.
+ * The identity and quantity fields are boxed so an absent field is a {@code null}
+ * the router can reject with a 400 instead of silently deserializing to zero.
+ */
 public record PlaceOrderRequest(
-        int symbolId,
-        long orderId,
-        boolean ask,
+        Integer symbolId,
+        Long orderId,
+        Boolean ask,
         String type,
-        long price,
-        long size,
+        Long price,
+        Long size,
         long reserveBidPrice,
-        long uid,
+        Long uid,
         int userCookie) {}

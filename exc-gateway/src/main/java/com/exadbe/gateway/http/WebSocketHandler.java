@@ -28,7 +28,13 @@ final class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame>
     public void userEventTriggered(final ChannelHandlerContext ctx, final Object evt) throws Exception {
         if (evt instanceof io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler.HandshakeComplete) {
             final Channel channel = ctx.channel();
-            this.sink = json -> channel.writeAndFlush(new TextWebSocketFrame(json));
+            this.sink = json -> {
+                // A slow subscriber must not grow the outbound buffer without bound:
+                // drop frames once the channel crosses its write watermark.
+                if (channel.isWritable()) {
+                    channel.writeAndFlush(new TextWebSocketFrame(json));
+                }
+            };
             broadcaster.add(sink);
         }
         super.userEventTriggered(ctx, evt);
