@@ -1,6 +1,7 @@
 package com.exadbe.launcher;
 
 import com.exadbe.config.CoreConfig;
+import com.exadbe.telemetry.CoreMetrics;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.locks.LockSupport;
@@ -43,10 +44,63 @@ public final class ClusterLauncher {
         final ClusterNode node = new ClusterNode(clusterConfig, coreConfig, cleanStart);
         Runtime.getRuntime().addShutdownHook(new Thread(node::close, "exc-shutdown"));
 
+        startMetricsDump(node);
+
         // Park the main thread; the service runs on the clustered service agent thread.
         while (!Thread.currentThread().isInterrupted()) {
             LockSupport.parkNanos(1_000_000_000L);
         }
+    }
+
+    /**
+     * Optionally starts a daemon thread that writes this node's {@link CoreMetrics}
+     * to stdout every {@code exc.metricsIntervalMs} milliseconds, so a deployed
+     * node's internal counters are observable from its logs without a query
+     * channel. Disabled by default ({@code interval <= 0}).
+     *
+     * <p>The counters are plain {@code long} fields owned by the service thread,
+     * so reads here are eventually consistent (monitoring only). This thread
+     * never mutates engine state, so determinism and snapshots are unaffected.
+     */
+    private static void startMetricsDump(final ClusterNode node) {
+        final long intervalMs = Long.getLong("exc.metricsIntervalMs", 0L);
+        if (intervalMs <= 0L) {
+            return;
+        }
+        final CoreMetrics metrics = node.metrics();
+        final Thread thread = new Thread(
+                () -> {
+                    while (!Thread.currentThread().isInterrupted()) {
+                        System.out.printf(
+                                "metrics commands=%d duplicates=%d backpressure=%d unsupported=%d snapshotsTaken=%d"
+                                        + " snapshotsLoaded=%d eventBufferOverflows=%d orderPoolExhaustions=%d"
+                                        + " priceBucketPoolExhaustions=%d journalBackpressure=%d dedupEvictions=%d"
+                                        + " snapshotWriteMs=%d snapshotReadMs=%d journalPublished=%d%n",
+                                metrics.commandsProcessed(),
+                                metrics.duplicates(),
+                                metrics.backpressureEvents(),
+                                metrics.unsupportedCommands(),
+                                metrics.snapshotsTaken(),
+                                metrics.snapshotsLoaded(),
+                                metrics.eventBufferOverflows(),
+                                metrics.orderPoolExhaustions(),
+                                metrics.priceBucketPoolExhaustions(),
+                                metrics.journalBackpressureEvents(),
+                                metrics.dedupEvictions(),
+                                metrics.lastSnapshotWriteMillis(),
+                                metrics.lastSnapshotReadMillis(),
+                                node.journalPublished());
+                        try {
+                            Thread.sleep(intervalMs);
+                        } catch (final InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                },
+                "exc-metrics-dump");
+        thread.setDaemon(true);
+        thread.start();
     }
 
     private static String configPath(final String[] args) {

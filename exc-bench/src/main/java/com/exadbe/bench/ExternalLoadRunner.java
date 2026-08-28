@@ -49,6 +49,7 @@ public final class ExternalLoadRunner {
         String egress = "aeron:udp?endpoint=localhost:0";
         int ops = 100_000;
         int users = 100;
+        long clientId = 1L;
         for (final String arg : args) {
             final int eq = arg.indexOf('=');
             if (!arg.startsWith("--") || eq < 0) {
@@ -59,17 +60,30 @@ public final class ExternalLoadRunner {
                 case "--egress" -> egress = arg.substring(eq + 1);
                 case "--ops" -> ops = Integer.parseInt(arg.substring(eq + 1));
                 case "--users" -> users = Integer.parseInt(arg.substring(eq + 1));
+                case "--client-id" -> clientId = Long.parseLong(arg.substring(eq + 1));
                 default -> throw new IllegalArgumentException("unknown argument: " + arg);
             }
         }
 
         final LoadWorkload workload = new LoadWorkload(ops, users);
-        final boolean ok = run(workload, endpoints, egress);
+        final boolean ok = run(workload, endpoints, egress, clientId);
         System.exit(ok ? 0 : 1);
     }
 
-    /** Runs the workload against the external cluster; returns whether every check passed. */
+    /** Runs the workload against the external cluster with client id {@code 1}. */
     public static boolean run(final LoadWorkload workload, final String endpoints, final String egress) {
+        return run(workload, endpoints, egress, 1L);
+    }
+
+    /**
+     * Runs the workload against the external cluster; returns whether every check passed.
+     *
+     * <p>{@code clientId} must be unique per concurrently running client process:
+     * the engine dedups on {@code (clientId, clientSeq)}, so two runners sharing an
+     * id would interfere. Parallel load generators each need their own id.
+     */
+    public static boolean run(
+            final LoadWorkload workload, final String endpoints, final String egress, final long clientId) {
         final long[] lastIdLo = {-1L};
         final long[] results = {0L};
         final long[] success = {0L};
@@ -94,7 +108,7 @@ public final class ExternalLoadRunner {
                 };
 
         final ClientConfig config =
-                ClientConfig.builder(1L, endpoints).egressChannel(egress).build();
+                ClientConfig.builder(clientId, endpoints).egressChannel(egress).build();
         final ExcClient client = connectWithRetry(config, handler);
         try {
             client.tradeGroupListener(group -> fills[0] += group.totalVolume());
