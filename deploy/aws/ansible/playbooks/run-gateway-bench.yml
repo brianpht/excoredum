@@ -1,0 +1,28 @@
+---
+# Run the gateway HTTP/WS end-to-end benchmark against the local gateway and
+# print the result. The bench distribution is present on every instance.
+- name: Run gateway end-to-end benchmark
+  hosts: gateway
+  become: true
+  tasks:
+    - name: Run GatewayBenchRunner
+      ansible.builtin.command:
+        argv:
+          - "{{ install_dir }}/jre/bin/java"
+          - "--add-opens"
+          - "java.base/jdk.internal.misc=ALL-UNNAMED"
+          - "--add-opens"
+          - "java.base/sun.nio.ch=ALL-UNNAMED"
+          - "-cp"
+          - "{{ install_dir }}/bench/lib/*"
+          - "com.exadbe.bench.GatewayBenchRunner"
+          - "--base-url=http://localhost:8080"
+          - "--ops={{ gateway_bench_ops }}"
+          - "--users={{ gateway_bench_users }}"
+          - "--admin-uid={{ gateway_bench_admin_uid }}"
+      register: bench
+      changed_when: false
+
+    - name: Gateway bench output
+      ansible.builtin.debug:
+        msg: "{{ bench.stdout }}"

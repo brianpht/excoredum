@@ -1,0 +1,20 @@
+---
+# Run the write-side load against the deployed cluster and print the result.
+- name: Run write-side load
+  hosts: load
+  become: true
+  tasks:
+    - name: Run load runner (blocks until done)
+      ansible.builtin.command: systemctl start excoredum
+      register: load_start
+      ignore_errors: true
+      changed_when: false
+
+    - name: Show load output
+      ansible.builtin.command: journalctl -u excoredum --no-pager -n 300
+      register: journal
+      changed_when: false
+
+    - name: Load result
+      ansible.builtin.debug:
+        msg: "{{ journal.stdout }}"

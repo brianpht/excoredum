@@ -1,0 +1,8 @@
+---
+svc_name: "excoredum gateway"
+service_type: simple
+service_enable: true
+service_exec: "{{ install_dir }}/bin/gateway.sh"
+gateway_config_path: /etc/excoredum/gateway.properties
+service_env:
+  EXC_CONFIG: "{{ gateway_config_path }}"

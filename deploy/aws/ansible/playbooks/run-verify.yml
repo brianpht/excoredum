@@ -1,0 +1,20 @@
+---
+# Run the read-side verification after a load run and print the result.
+- name: Run read-side verification
+  hosts: verify
+  become: true
+  tasks:
+    - name: Run verifier (blocks until done)
+      ansible.builtin.command: systemctl start excoredum
+      register: verify_start
+      ignore_errors: true
+      changed_when: false
+
+    - name: Show verify output
+      ansible.builtin.command: journalctl -u excoredum --no-pager -n 300
+      register: journal
+      changed_when: false
+
+    - name: Verify result
+      ansible.builtin.debug:
+        msg: "{{ journal.stdout }}"

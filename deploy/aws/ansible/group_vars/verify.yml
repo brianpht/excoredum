@@ -1,0 +1,9 @@
+---
+svc_name: "excoredum read-side verification"
+service_type: oneshot
+service_enable: false
+service_exec: "{{ install_dir }}/bin/verify.sh"
+service_env:
+  EXC_QUERY: "{{ query_channel }}"
+  EXC_OPS: "{{ workload_ops }}"
+  EXC_USERS: "{{ workload_users }}"

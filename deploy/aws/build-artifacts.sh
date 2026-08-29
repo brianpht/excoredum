@@ -3,11 +3,11 @@
 # build-artifacts.sh - build a self-contained excoredum runtime tarball for the
 # AWS benchmark deployment: a pinned Eclipse Temurin 21 JRE plus the four
 # application distributions (launcher, read, gateway, bench) and the bin/
-# entrypoints. Optionally uploads the tarball to S3.
+# entrypoints. The Ansible deploy playbook pushes the tarball to each instance
+# over SSH; nothing is uploaded to S3.
 #
 # Usage:
-#   ./deploy/aws/build-artifacts.sh                    # build ./deploy/aws/excoredum-runtime.tgz
-#   ./deploy/aws/build-artifacts.sh --s3=s3://BUCKET/excoredum-runtime.tgz
+#   ./deploy/aws/build-artifacts.sh    # build ./deploy/aws/excoredum-runtime.tgz
 #
 # Env overrides:
 #   JRE_URL   Temurin 21 JRE tarball URL (default: Adoptium "latest" for
@@ -27,15 +27,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEPLOY_DIR="$ROOT/deploy/aws"
 OUT="$DEPLOY_DIR/excoredum-runtime.tgz"
-S3_URL=""
 JRE_URL="${JRE_URL:-https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jre/hotspot/normal/eclipse}"
-
-for arg in "$@"; do
-    case "$arg" in
-        --s3=*) S3_URL="${arg#--s3=}" ;;
-        *) echo "unknown argument: $arg" >&2; exit 1 ;;
-    esac
-done
 
 echo "[build-artifacts] building application distributions ..."
 "$ROOT/gradlew" --quiet \
@@ -63,10 +55,5 @@ chmod +x "$STAGE/bin/"*.sh
 
 echo "[build-artifacts] packing $OUT ..."
 tar -czf "$OUT" -C "$STAGE" jre launcher read gateway bench bin
-
-if [ -n "$S3_URL" ]; then
-    echo "[build-artifacts] uploading to $S3_URL ..."
-    aws s3 cp "$OUT" "$S3_URL"
-fi
 
 echo "[build-artifacts] done: $OUT"

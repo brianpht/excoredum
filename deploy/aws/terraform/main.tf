@@ -1,6 +1,8 @@
 # ---------------------------------------------------------------------------
-# Networking: one VPC, one public subnet, one AZ. Benchmark traffic is
-# private-IP based; public IPs are only for SSH access.
+# Infrastructure only. Provisioning (installing the runtime, writing config,
+# and starting services) is delegated to Ansible, which pushes the runtime
+# tarball over SSH. No IAM role / instance profile / S3 artifact store is
+# needed here, because the instances do not pull from S3 at boot.
 # ---------------------------------------------------------------------------
 
 data "aws_ami" "al2023" {
@@ -12,6 +14,12 @@ data "aws_ami" "al2023" {
     values = ["al2023-ami-2023.*-x86_64"]
   }
 }
+
+# ---------------------------------------------------------------------------
+# Networking: one VPC, one public subnet, one AZ. Benchmark traffic is
+# private-IP based; public IPs are only for SSH access from the Ansible
+# controller.
+# ---------------------------------------------------------------------------
 
 resource "aws_vpc" "bench" {
   cidr_block           = var.subnet_cidr
@@ -132,58 +140,9 @@ resource "aws_security_group_rule" "egress_all" {
 }
 
 # ---------------------------------------------------------------------------
-# Artifact storage + instance role.
-# ---------------------------------------------------------------------------
-
-resource "aws_s3_bucket" "artifacts" {
-  bucket        = var.s3_bucket
-  force_destroy = true
-}
-
-resource "aws_iam_role" "bench" {
-  name = "excoredum-bench"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = { Service = "ec2.amazonaws.com" }
-        Action  = "sts:AssumeRole"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy" "s3_read" {
-  name = "excoredum-s3-read"
-  role = aws_iam_role.bench.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["s3:GetObject"]
-        Resource = ["${aws_s3_bucket.artifacts.arn}/*"]
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ssm" {
-  role       = aws_iam_role.bench.id
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "bench" {
-  name = "excoredum-bench"
-  role = aws_iam_role.bench.name
-}
-
-# ---------------------------------------------------------------------------
 # Derived addressing (static private IPs so the cluster members string is
-# deterministic before instances exist).
+# deterministic before instances exist). These values feed the Ansible
+# inventory via `terraform output -json`.
 # ---------------------------------------------------------------------------
 
 locals {
@@ -217,7 +176,7 @@ locals {
 }
 
 # ---------------------------------------------------------------------------
-# Instances.
+# Instances. Provisioning is done by Ansible after `terraform apply`.
 # ---------------------------------------------------------------------------
 
 resource "aws_instance" "node" {
@@ -229,18 +188,8 @@ resource "aws_instance" "node" {
   private_ip                  = local.node_private_ips[count.index]
   key_name                    = var.key_name == "" ? null : var.key_name
   vpc_security_group_ids      = [aws_security_group.bench.id]
-  iam_instance_profile        = aws_iam_instance_profile.bench.name
   associate_public_ip_address = true
   placement_group             = aws_placement_group.bench.name
-
-  user_data = templatefile("${path.module}/templates/node.sh.tpl", {
-    s3_url              = "s3://${var.s3_bucket}/${var.s3_key}"
-    node_id             = tostring(count.index)
-    members             = local.cluster_members
-    host                = local.node_private_ips[count.index]
-    clean_start         = "true"
-    metrics_interval_ms = tostring(var.metrics_interval_ms)
-  })
 
   tags = { Name = "excoredum-node-${count.index}" }
 }
@@ -252,15 +201,7 @@ resource "aws_instance" "read" {
   private_ip                  = local.read_ip
   key_name                    = var.key_name == "" ? null : var.key_name
   vpc_security_group_ids      = [aws_security_group.bench.id]
-  iam_instance_profile        = aws_iam_instance_profile.bench.name
   associate_public_ip_address = true
-
-  user_data = templatefile("${path.module}/templates/read.sh.tpl", {
-    s3_url          = "s3://${var.s3_bucket}/${var.s3_key}"
-    archive_channels = local.archive_channels
-    host             = local.read_ip
-    query_channel    = local.query_channel
-  })
 
   tags = { Name = "excoredum-read" }
 }
@@ -272,16 +213,7 @@ resource "aws_instance" "gateway" {
   private_ip                  = local.gateway_ip
   key_name                    = var.key_name == "" ? null : var.key_name
   vpc_security_group_ids      = [aws_security_group.bench.id]
-  iam_instance_profile        = aws_iam_instance_profile.bench.name
   associate_public_ip_address = true
-
-  user_data = templatefile("${path.module}/templates/gateway.sh.tpl", {
-    s3_url           = "s3://${var.s3_bucket}/${var.s3_key}"
-    query_channel    = local.query_channel
-    ingress_endpoints = local.ingress_endpoints
-    symbols           = var.gateway_symbols
-    currencies        = var.gateway_currencies
-  })
 
   tags = { Name = "excoredum-gateway" }
 }
@@ -293,16 +225,7 @@ resource "aws_instance" "load" {
   private_ip                  = local.load_ip
   key_name                    = var.key_name == "" ? null : var.key_name
   vpc_security_group_ids      = [aws_security_group.bench.id]
-  iam_instance_profile        = aws_iam_instance_profile.bench.name
   associate_public_ip_address = true
-
-  user_data = templatefile("${path.module}/templates/load.sh.tpl", {
-    s3_url            = "s3://${var.s3_bucket}/${var.s3_key}"
-    ingress_endpoints = local.ingress_endpoints
-    ops               = tostring(var.workload_ops)
-    users             = tostring(var.workload_users)
-    client_id         = tostring(var.load_client_id)
-  })
 
   tags = { Name = "excoredum-load" }
 }
@@ -314,15 +237,7 @@ resource "aws_instance" "verify" {
   private_ip                  = local.verify_ip
   key_name                    = var.key_name == "" ? null : var.key_name
   vpc_security_group_ids      = [aws_security_group.bench.id]
-  iam_instance_profile        = aws_iam_instance_profile.bench.name
   associate_public_ip_address = true
-
-  user_data = templatefile("${path.module}/templates/verify.sh.tpl", {
-    s3_url       = "s3://${var.s3_bucket}/${var.s3_key}"
-    query_channel = local.query_channel
-    ops          = tostring(var.workload_ops)
-    users        = tostring(var.workload_users)
-  })
 
   tags = { Name = "excoredum-verify" }
 }

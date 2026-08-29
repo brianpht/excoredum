@@ -56,3 +56,13 @@ gradle-app.setting
 # JDT-specific (Eclipse Java Development Tools)
 .classpath
 
+### Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+### AWS deploy generated artifacts
+deploy/aws/ansible/hosts.ini
+deploy/aws/excoredum-runtime.tgz
+

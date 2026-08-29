@@ -1,7 +1,7 @@
 # AWS deployment for load testing and benchmarking
 
-This directory provisions a throwaway AWS environment that runs the two
-deployed benchmark modes against a real multi-node cluster:
+This directory provisions a throwaway AWS environment that runs the deployed
+benchmark modes against a real multi-node cluster:
 
 - **Distributed cluster load test** - `ExternalLoadRunner` drives the
   deterministic `LoadWorkload` through the write client SDK and reports
@@ -9,6 +9,11 @@ deployed benchmark modes against a real multi-node cluster:
 - **Gateway HTTP/WS end-to-end** - `GatewayBenchRunner` drives the same
   workload through the REST/WebSocket gateway and cross-checks the replicated
   state on every read endpoint.
+
+Infrastructure (network, instances, security group) is created by Terraform.
+Provisioning (installing the runtime, writing config, starting services) is
+done by Ansible over SSH, which pushes the runtime tarball directly - no S3
+bucket and no IAM role / instance profile are required.
 
 Topology (single AZ, `us-east-1a` by default):
 
@@ -26,111 +31,125 @@ it because a cluster placement group accepts a single instance type.
 
 ## Prerequisites
 
-- Terraform `>= 1.5`, AWS CLI with credentials, JDK 21 (to build), `curl`, `tar`.
-- A non-existing S3 bucket name for the runtime artifact.
+- Terraform `>= 1.5`, AWS CLI with credentials, JDK 21 (to build), `curl`,
+  `tar`, `python3`.
+- Ansible (install with `pip install ansible` or `pipx install ansible`; if it
+  lands in `~/.local/bin`, add that directory to `PATH`).
+- An EC2 key pair for SSH (Ansible uses `~/.ssh/excoredum-bench` by default).
 
-## 1. Prepare the artifact
+## 1. Build the runtime tarball
 
 ```bash
-# Create only the bucket first (instances download from it at boot).
-terraform -chdir=deploy/aws/terraform init
-terraform -chdir=deploy/aws/terraform apply -target=aws_s3_bucket.artifacts
-
-# Build the self-contained runtime tarball (Temurin 21 JRE + 4 distributions
-# + bin/ entrypoints) and upload it.
-./deploy/aws/build-artifacts.sh --s3=s3://<bucket>/excoredum-runtime.tgz
+./deploy/aws/build-artifacts.sh
 ```
 
-Pin the JRE for reproducibility with `JRE_URL` (default is the Adoptium
-"latest" 21 JRE for linux/x64):
+This builds `deploy/aws/excoredum-runtime.tgz` (Temurin 21 JRE + the four
+distributions + `bin/` entrypoints). Pin the JRE for reproducibility with
+`JRE_URL` (default is the Adoptium "latest" 21 JRE for linux/x64):
 
 ```bash
 JRE_URL=https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jre_x64_linux_hotspot_21.0.5_11.tar.gz \
-  ./deploy/aws/build-artifacts.sh --s3=s3://<bucket>/excoredum-runtime.tgz
+  ./deploy/aws/build-artifacts.sh
 ```
 
-## 2. Deploy
+## 2. Create a key pair
 
 ```bash
+ssh-keygen -t rsa -b 2048 -N "" -f ~/.ssh/excoredum-bench -C "excoredum-bench"
+aws ec2 import-key-pair --key-name excoredum-bench \
+  --public-key-material fileb://~/.ssh/excoredum-bench.pub \
+  --region us-east-1
+```
+
+> The AWS CLI defaults to your configured region (possibly not `us-east-1`),
+> while Terraform deploys into `us-east-1`. Pass `--region us-east-1` to any
+> `aws ec2` command that must match the deployment.
+
+## 3. Deploy infrastructure
+
+```bash
+terraform -chdir=deploy/aws/terraform init
 terraform -chdir=deploy/aws/terraform plan
 terraform -chdir=deploy/aws/terraform apply
 ```
 
-Set the bucket and key to match step 1:
-
 ```hcl
 # terraform.tfvars
-s3_bucket = "<bucket>"
-key_name  = "<your-keypair>"     # empty disables SSH (use SSM Session Manager)
-ssh_cidr  = "203.0.113.0/24"     # restrict SSH + gateway HTTP
+key_name = "excoredum-bench"      # EC2 key pair name (Ansible SSH)
+ssh_cidr = "203.0.113.0/24"       # restrict SSH + gateway HTTP to your IP
+```
+
+Terraform only creates infrastructure. No IAM role, instance profile, or S3
+bucket is involved, so the credential needs only EC2 permissions.
+
+## 4. Provision and start services
+
+```bash
+cd deploy/aws/ansible
+./inventory.sh                    # writes hosts.ini from terraform outputs
+ansible-playbook playbooks/deploy.yml
 ```
 
 The nodes, read replica, and gateway start automatically via systemd. The load
 and verify units are installed but not started (they are one-shots run by the
-operator).
+operator). Tune the benchmark in `deploy/aws/ansible/group_vars/all.yml`.
 
-## 3. Run the load test and verify
-
-```bash
-# SSH into the load instance (private IP from outputs), then:
-sudo systemctl start excoredum          # blocks until ExternalLoadRunner exits
-sudo journalctl -u excoredum            # throughput + p50/p99/p99.9/max + PASS/FAIL
-```
-
-After the load run completes, run the read-side verifier:
+## 5. Run the load test and verify
 
 ```bash
-# SSH into the verify instance, then:
-sudo systemctl start excoredum          # ReadVerifyRunner: read-side checks PASS/FAIL
+cd deploy/aws/ansible
+ansible-playbook playbooks/run-load.yml
+ansible-playbook playbooks/run-verify.yml
+ansible-playbook playbooks/run-gateway-bench.yml
 ```
 
-Run the gateway end-to-end benchmark from any instance against the gateway
-URL (the `bench` distribution is on every instance):
+Each runner prints throughput, latency `p50/p99/p99.9/max`, and a `PASS`/`FAIL`
+line.
 
-```bash
-/opt/excoredum/jre/bin/java \
-  --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
-  --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
-  -cp "/opt/excoredum/bench/lib/*" \
-  com.exadbe.bench.GatewayBenchRunner \
-  --base-url=http://<gateway-ip>:8080 --ops=10000 --users=100 --admin-uid=811
-```
+## 6. Collect metrics
 
-## 4. Collect metrics
-
-- **Application** (runners, `journalctl -u excoredum`): throughput, latency
-  `p50/p99/p99.9/max`, `success/nonSuccess/expired`, `leaderChanges`,
+- **Application** (runners, `journalctl -u excoredum` on each instance):
+  throughput, latency tails, `success/nonSuccess/expired`, `leaderChanges`,
   `reconnects`, `backpressure`, `retransmits`, `fills observed vs expected`.
 - **Cluster internal counters**: each node logs a `metrics ...` line every
-  `metrics_interval_ms` (default 5000) via the `-Dexc.metricsIntervalMs`
-  flag added to `ClusterLauncher`. The line carries `commands`, `duplicates`,
-  `backpressure`, pool exhaustions, `journalBackpressure`, `dedupEvictions`,
-  snapshot write/read ms, and `journalPublished`.
-- **OS/host** (optional): install the CloudWatch agent, or run `sar`/`vmstat`
-  on the nodes for CPU, soft-interrupts, and network pps/bytes.
+  `metrics_interval_ms` (default 5000) via the `-Dexc.metricsIntervalMs` flag.
+  The line carries `commands`, `duplicates`, `backpressure`, pool exhaustions,
+  `journalBackpressure`, `dedupEvictions`, snapshot write/read ms, and
+  `journalPublished`.
+- **OS/host** (optional): `sar`/`vmstat` on the nodes for CPU,
+  soft-interrupts, and network pps/bytes.
 - **JVM** (optional): add `-Xlog:gc*` to the entrypoint for GC pause logs.
-- **Aeron driver** (optional): run `aeron-stat` against each node's
-  `aeron-dir` (under `/data/driver`) for driver counters and error stats.
 
-## 5. Teardown
+## 7. Teardown
 
 ```bash
 terraform -chdir=deploy/aws/terraform destroy
 ```
 
-`force_destroy = true` on the bucket removes the uploaded tarball too.
-
 ## Notes
 
 - **Saturation load**: `ExternalLoadRunner` is closed-loop (one client), so it
   measures latency and correctness. For a throughput ceiling, run several load
-  instances concurrently, each with a distinct `load_client_id` (the engine
-  dedups on `(clientId, clientSeq)`; the runner gained a `--client-id` flag for
-  this).
+  instances concurrently, each with a distinct `load_client_id` (set in
+  `group_vars/all.yml`).
 - **Gateway throughput vs latency**: `GatewayBenchRunner` is closed-loop
   (concurrency 1). Use `k6`/`wrk` against the gateway for raw HTTP throughput.
 - **Determinism**: keep `clean_start = true` for a fresh cluster; a warm
   restart (`clean_start = false`) reuses state and changes the measured window.
+- **Fresh cluster per benchmark**: the load and gateway runners each run their
+  own setup (add symbol + users + balances) and are not idempotent - re-running
+  one after the other against the same cluster fails with `DUPLICATE`. Reset
+  the cluster between runs (restart the nodes, whose units set
+  `clean_start = true`) or run each benchmark against a fresh environment.
+- **Node public IPs (100.x)**: `us-east-1a` can assign `100.x` public IPs to
+  the cluster nodes that some networks cannot route (SSH times out during the
+  banner exchange, while `3.x`/`44.x`/`54.x` work). If node SSH is flaky,
+  attach Elastic IPs to the nodes, then `terraform refresh` before regenerating
+  the inventory.
+- **Incremental redeploy**: after the first deploy,
+  `ansible-playbook playbooks/deploy.yml --tags configure` re-applies
+  config/systemd without re-uploading the tarball; `--tags distribute`
+  re-distributes only the tarball.
 - **Placement group**: cluster placement groups accept one instance type and
   require available capacity in the AZ; if launch fails, retry or drop the
   placement group for a smoke run.

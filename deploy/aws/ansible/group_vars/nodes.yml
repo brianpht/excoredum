@@ -1,0 +1,12 @@
+---
+svc_name: "excoredum cluster node {{ node_id }}"
+service_type: simple
+service_enable: true
+service_exec: "{{ install_dir }}/bin/node.sh"
+service_env:
+  EXC_NODE_ID: "{{ node_id }}"
+  EXC_MEMBERS: "{{ cluster_members }}"
+  EXC_HOST: "{{ host }}"
+  EXC_CLEAN_START: "{{ clean_start }}"
+  EXC_BASE_DIR: "{{ base_dir }}"
+  EXC_METRICS_INTERVAL_MS: "{{ metrics_interval_ms }}"

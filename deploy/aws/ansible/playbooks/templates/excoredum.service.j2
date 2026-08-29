@@ -1,0 +1,19 @@
+[Unit]
+Description={{ svc_name }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type={{ service_type }}
+{% for key, value in service_env.items() %}
+Environment={{ key }}={{ value }}
+{% endfor %}
+ExecStart={{ service_exec }}
+{% if service_type == 'simple' %}
+Restart=on-failure
+{% endif %}
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

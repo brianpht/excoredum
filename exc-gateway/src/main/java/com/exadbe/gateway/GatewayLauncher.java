@@ -29,6 +29,7 @@ public final class GatewayLauncher {
 
         final ReadClientConfig readConfig = ReadClientConfig.builder()
                 .requestChannel(config.readRequestChannel())
+                .responseChannel(config.readResponseChannel())
                 .requestStreamId(config.readRequestStreamId())
                 .responseStreamId(config.readResponseStreamId())
                 .aeronDirectoryName(config.readAeronDir())

@@ -36,6 +36,7 @@ public final class GatewayConfig {
     private final String httpHost;
     private final int httpPort;
     private final String readRequestChannel;
+    private final String readResponseChannel;
     private final int readRequestStreamId;
     private final int readResponseStreamId;
     private final String readAeronDir;
@@ -54,6 +55,7 @@ public final class GatewayConfig {
         this.httpHost = b.httpHost;
         this.httpPort = b.httpPort;
         this.readRequestChannel = b.readRequestChannel;
+        this.readResponseChannel = b.readResponseChannel;
         this.readRequestStreamId = b.readRequestStreamId;
         this.readResponseStreamId = b.readResponseStreamId;
         this.readAeronDir = b.readAeronDir;
@@ -79,6 +81,7 @@ public final class GatewayConfig {
         b.httpHost(p.getProperty("gateway.http.host", "127.0.0.1"));
         b.httpPort(parseInt(p.getProperty("gateway.http.port", "8080"), "gateway.http.port"));
         b.readRequestChannel(p.getProperty("gateway.read.requestChannel", QueryStreams.QUERY_REQUEST_CHANNEL));
+        b.readResponseChannel(p.getProperty("gateway.read.responseChannel", "aeron:udp?endpoint=localhost:0"));
         b.readRequestStreamId(parseInt(
                 p.getProperty("gateway.read.requestStreamId", Integer.toString(QueryStreams.QUERY_REQUEST_STREAM_ID)),
                 "gateway.read.requestStreamId"));
@@ -177,6 +180,11 @@ public final class GatewayConfig {
         return readRequestChannel;
     }
 
+    /** The channel the read replica sends query responses to (this gateway's reachable endpoint). */
+    public String readResponseChannel() {
+        return readResponseChannel;
+    }
+
     public int readRequestStreamId() {
         return readRequestStreamId;
     }
@@ -238,6 +246,7 @@ public final class GatewayConfig {
         private String httpHost = "127.0.0.1";
         private int httpPort = 8080;
         private String readRequestChannel = QueryStreams.QUERY_REQUEST_CHANNEL;
+        private String readResponseChannel = "aeron:udp?endpoint=localhost:0";
         private int readRequestStreamId = QueryStreams.QUERY_REQUEST_STREAM_ID;
         private int readResponseStreamId = QueryStreams.QUERY_RESPONSE_STREAM_ID;
         private String readAeronDir;
@@ -264,6 +273,11 @@ public final class GatewayConfig {
 
         public Builder readRequestChannel(final String v) {
             this.readRequestChannel = v;
+            return this;
+        }
+
+        public Builder readResponseChannel(final String v) {
+            this.readResponseChannel = v;
             return this;
         }
 

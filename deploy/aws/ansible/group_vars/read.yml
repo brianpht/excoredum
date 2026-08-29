@@ -1,0 +1,9 @@
+---
+svc_name: "excoredum read replica"
+service_type: simple
+service_enable: true
+service_exec: "{{ install_dir }}/bin/read.sh"
+service_env:
+  EXC_ARCHIVE: "{{ archive_channels }}"
+  EXC_HOST: "{{ host }}"
+  EXC_QUERY: "{{ query_channel }}"

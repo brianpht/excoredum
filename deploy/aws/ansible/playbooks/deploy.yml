@@ -1,0 +1,59 @@
+---
+# Deploy the runtime tarball to every instance, write the systemd unit and
+# config, and start the services (load/verify are installed but not started;
+# run them with run-load.yml / run-verify.yml).
+- name: Distribute excoredum runtime
+  hosts: all
+  become: true
+  tags:
+    - distribute
+  tasks:
+    - name: Ensure install dir exists
+      ansible.builtin.file:
+        path: "{{ install_dir }}"
+        state: directory
+
+    - name: Upload runtime tarball
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../excoredum-runtime.tgz"
+        dest: /tmp/excoredum-runtime.tgz
+
+    - name: Extract runtime tarball
+      ansible.builtin.unarchive:
+        src: /tmp/excoredum-runtime.tgz
+        dest: "{{ install_dir }}"
+        remote_src: true
+
+- name: Configure and start services
+  hosts: all
+  become: true
+  tags:
+    - configure
+  tasks:
+    - name: Create gateway config directory
+      ansible.builtin.file:
+        path: /etc/excoredum
+        state: directory
+      when: inventory_hostname in groups['gateway']
+
+    - name: Write gateway.properties
+      ansible.builtin.template:
+        src: gateway.properties.j2
+        dest: "{{ gateway_config_path }}"
+      when: inventory_hostname in groups['gateway']
+
+    - name: Install systemd unit
+      ansible.builtin.template:
+        src: excoredum.service.j2
+        dest: /etc/systemd/system/excoredum.service
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start service
+      ansible.builtin.systemd:
+        name: excoredum
+        enabled: "{{ service_enable | default(false) }}"
+        state: started
+      when: service_enable | default(false)
