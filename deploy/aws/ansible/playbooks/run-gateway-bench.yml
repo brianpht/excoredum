@@ -19,6 +19,7 @@
           - "--base-url=http://localhost:8080"
           - "--ops={{ gateway_bench_ops }}"
           - "--users={{ gateway_bench_users }}"
+          - "--symbols={{ workload_symbols }}"
           - "--admin-uid={{ gateway_bench_admin_uid }}"
       register: bench
       changed_when: false

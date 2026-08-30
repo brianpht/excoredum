@@ -36,7 +36,7 @@ import org.HdrHistogram.Histogram;
  *
  * <pre>{@code
  * java -cp 'lib/*' com.exadbe.bench.GatewayBenchRunner \
- *   --base-url=http://localhost:8080 --ops=10000 --users=100 --admin-uid=811
+ *   --base-url=http://localhost:8080 --ops=10000 --users=100 --symbols=256 --admin-uid=811
  * }</pre>
  */
 public final class GatewayBenchRunner {
@@ -44,7 +44,6 @@ public final class GatewayBenchRunner {
     private static final int SYMBOL = LoadWorkload.SYMBOL;
     private static final int BASE = LoadWorkload.BASE_CURRENCY;
     private static final int QUOTE = LoadWorkload.QUOTE_CURRENCY;
-    private static final long PRICE = LoadWorkload.PRICE;
     private static final int DEFAULT_TRADE_LIMIT = 4096;
     private static final int MAX_LEVELS = 32;
     private static final long SETTLE_TIMEOUT_MS = 3 * 60_000L;
@@ -69,6 +68,7 @@ public final class GatewayBenchRunner {
             final String baseUrl,
             final int ops,
             final int users,
+            final int symbols,
             final long adminUid,
             final String apiKey,
             final int tradeLimit) {
@@ -78,13 +78,14 @@ public final class GatewayBenchRunner {
         this.adminUid = adminUid;
         this.apiKey = (apiKey == null || apiKey.isBlank()) ? null : apiKey;
         this.tradeLimit = tradeLimit;
-        this.workload = new LoadWorkload(ops, users);
+        this.workload = new LoadWorkload(ops, users, symbols);
     }
 
     public static void main(final String[] args) throws Exception {
         String baseUrl = "http://localhost:8080";
         int ops = 10_000;
         int users = 100;
+        int symbols = 1;
         long adminUid = 811L;
         String apiKey = null;
         int tradeLimit = DEFAULT_TRADE_LIMIT;
@@ -97,19 +98,22 @@ public final class GatewayBenchRunner {
                 case "--base-url" -> baseUrl = arg.substring(eq + 1);
                 case "--ops" -> ops = Integer.parseInt(arg.substring(eq + 1));
                 case "--users" -> users = Integer.parseInt(arg.substring(eq + 1));
+                case "--symbols" -> symbols = Integer.parseInt(arg.substring(eq + 1));
                 case "--admin-uid" -> adminUid = Long.parseLong(arg.substring(eq + 1));
                 case "--api-key" -> apiKey = arg.substring(eq + 1);
                 case "--trade-limit" -> tradeLimit = Integer.parseInt(arg.substring(eq + 1));
                 default -> throw new IllegalArgumentException("unknown argument: " + arg.substring(0, eq));
             }
         }
-        final GatewayBenchRunner runner = new GatewayBenchRunner(baseUrl, ops, users, adminUid, apiKey, tradeLimit);
+        final GatewayBenchRunner runner =
+                new GatewayBenchRunner(baseUrl, ops, users, symbols, adminUid, apiKey, tradeLimit);
         System.exit(runner.run() ? 0 : 1);
     }
 
     private boolean run() {
         final List<String> failures = new ArrayList<>();
-        System.out.println("gateway bench: base=" + baseUrl + " ops=" + ops + " users=" + users);
+        System.out.println("gateway bench: base=" + baseUrl + " ops=" + ops + " users=" + users + " symbols="
+                + workload.symbols());
 
         if (!setup(failures)) {
             printReport(null, failures);
@@ -130,15 +134,18 @@ public final class GatewayBenchRunner {
 
     // ---- setup (admin writes through the gateway) ----
     private boolean setup(final List<String> failures) {
-        final JsonNode symbol = postAdmin(
-                "/api/v1/symbols",
-                String.format(
-                        "{\"symbolId\":%d,\"baseCurrency\":%d,\"quoteCurrency\":%d,\"baseScaleK\":1,"
-                                + "\"quoteScaleK\":1,\"takerFee\":0,\"makerFee\":0}",
-                        SYMBOL, BASE, QUOTE));
-        if (!isSuccess(symbol)) {
-            failures.add("setup addSymbol -> " + symbol.path("resultCode").asText());
-            return false;
+        for (int symbolId = 1; symbolId <= workload.symbols(); symbolId++) {
+            final JsonNode symbol = postAdmin(
+                    "/api/v1/symbols",
+                    String.format(
+                            "{\"symbolId\":%d,\"baseCurrency\":%d,\"quoteCurrency\":%d,\"baseScaleK\":1,"
+                                    + "\"quoteScaleK\":1,\"takerFee\":0,\"makerFee\":0}",
+                            symbolId, BASE, QUOTE));
+            if (!isSuccess(symbol)) {
+                failures.add("setup addSymbol " + symbolId + " -> "
+                        + symbol.path("resultCode").asText());
+                return false;
+            }
         }
         for (long uid = 1L; uid <= users; uid++) {
             final JsonNode added = postAdmin("/api/v1/users", String.format("{\"uid\":%d}", uid));
@@ -187,20 +194,27 @@ public final class GatewayBenchRunner {
     }
 
     private HttpRequest buildCommand(final LoadWorkload.Command command) {
+        final int symbolId = command.symbolId();
+        final long price = LoadWorkload.price(symbolId);
         return switch (command.type()) {
             case PLACE -> postReq(
                     "/api/v1/orders",
                     String.format(
                             "{\"symbolId\":%d,\"orderId\":%d,\"ask\":%b,\"type\":\"GTC\",\"price\":%d,"
                                     + "\"size\":1,\"reserveBidPrice\":%d,\"uid\":%d,\"userCookie\":0}",
-                            SYMBOL, command.orderId(), command.ask(), PRICE, command.reserveBidPrice(), command.uid()));
+                            symbolId,
+                            command.orderId(),
+                            command.ask(),
+                            price,
+                            command.reserveBidPrice(),
+                            command.uid()));
             case CANCEL -> deleteReq(
-                    "/api/v1/orders/" + command.orderId() + "?symbolId=" + SYMBOL + "&uid=" + command.uid());
+                    "/api/v1/orders/" + command.orderId() + "?symbolId=" + symbolId + "&uid=" + command.uid());
             case REDUCE -> patchReq(
                     "/api/v1/orders/" + command.orderId(),
-                    String.format("{\"symbolId\":%d,\"uid\":%d,\"size\":1}", SYMBOL, command.uid()));
+                    String.format("{\"symbolId\":%d,\"uid\":%d,\"size\":1}", symbolId, command.uid()));
             case ORDER_BOOK -> postReq(
-                    "/api/v1/orderbook/" + SYMBOL + "/request", String.format("{\"uid\":%d}", command.uid()));
+                    "/api/v1/orderbook/" + symbolId + "/request", String.format("{\"uid\":%d}", command.uid()));
         };
     }
 
@@ -243,7 +257,7 @@ public final class GatewayBenchRunner {
         for (long uid = 1L; uid <= users; uid++) {
             checkUser(uid, restingAsks, restingBids, failures);
         }
-        checkL2(restingAsks, restingBids, failures);
+        checkL2(failures);
         checkTotals(failures);
         checkHealth(failures);
         checkRegistry(failures);
@@ -321,7 +335,10 @@ public final class GatewayBenchRunner {
             failures.add("user " + uid + " trade tape " + trades.size() + " != expected fills " + workload.fills(uid));
         } else {
             for (final JsonNode trade : trades) {
-                if (trade.path("price").asLong() != PRICE || trade.path("size").asLong() != 1L) {
+                final long price = trade.path("price").asLong();
+                if (price < LoadWorkload.PRICE
+                        || price >= LoadWorkload.PRICE + workload.symbols()
+                        || trade.path("size").asLong() != 1L) {
                     failures.add("user " + uid + " unexpected trade " + trade);
                     break;
                 }
@@ -329,22 +346,24 @@ public final class GatewayBenchRunner {
         }
     }
 
-    private void checkL2(
-            final List<LoadWorkload.Resting> restingAsks,
-            final List<LoadWorkload.Resting> restingBids,
-            final List<String> failures) {
-        final JsonNode book = get("/api/v1/orderbook?symbolId=" + SYMBOL + "&maxLevels=" + MAX_LEVELS);
-        if (!book.path("found").asBoolean()) {
-            failures.add("L2 snapshot for symbol " + SYMBOL + " not found");
-            return;
+    private void checkL2(final List<String> failures) {
+        for (int symbolId = 1; symbolId <= workload.symbols(); symbolId++) {
+            final JsonNode book = get("/api/v1/orderbook?symbolId=" + symbolId + "&maxLevels=" + MAX_LEVELS);
+            if (!book.path("found").asBoolean()) {
+                failures.add("L2 snapshot for symbol " + symbolId + " not found");
+                continue;
+            }
+            checkSide(
+                    book.path("asks"), workload.restingAsks(symbolId), LoadWorkload.price(symbolId), "asks", failures);
+            checkSide(
+                    book.path("bids"), workload.restingBids(symbolId), LoadWorkload.price(symbolId), "bids", failures);
         }
-        checkSide(book.path("asks"), restingAsks, "asks", failures);
-        checkSide(book.path("bids"), restingBids, "bids", failures);
     }
 
     private void checkSide(
             final JsonNode actual,
             final List<LoadWorkload.Resting> expected,
+            final long price,
             final String side,
             final List<String> failures) {
         if (expected.isEmpty()) {
@@ -362,7 +381,7 @@ public final class GatewayBenchRunner {
         for (final LoadWorkload.Resting order : expected) {
             size += order.size();
         }
-        if (level.path("price").asLong() != PRICE
+        if (level.path("price").asLong() != price
                 || level.path("size").asLong() != size
                 || level.path("orders").asInt() != expected.size()) {
             failures.add("L2 " + side + " mismatch: " + level);
@@ -404,14 +423,17 @@ public final class GatewayBenchRunner {
     }
 
     private void checkRegistry(final List<String> failures) {
-        boolean foundSymbol = false;
-        for (final JsonNode symbol : get("/api/v1/symbols")) {
-            if (symbol.path("symbolId").asInt() == SYMBOL) {
-                foundSymbol = true;
+        final JsonNode symbols = get("/api/v1/symbols");
+        for (int symbolId = 1; symbolId <= workload.symbols(); symbolId++) {
+            boolean found = false;
+            for (final JsonNode symbol : symbols) {
+                if (symbol.path("symbolId").asInt() == symbolId) {
+                    found = true;
+                }
             }
-        }
-        if (!foundSymbol) {
-            failures.add("symbol " + SYMBOL + " missing from /symbols");
+            if (!found) {
+                failures.add("symbol " + symbolId + " missing from /symbols");
+            }
         }
         boolean foundBase = false;
         boolean foundQuote = false;
@@ -430,18 +452,21 @@ public final class GatewayBenchRunner {
     }
 
     private void checkMarketTrades(final List<String> failures) {
-        final JsonNode trades = get("/api/v1/markettrades?symbolId=" + SYMBOL + "&limit=" + tradeLimit);
-        if (trades.size() == 0 && workload.trades() != 0L) {
-            failures.add("market tape empty but " + workload.trades() + " trades expected");
-            return;
-        }
-        for (final JsonNode trade : trades) {
-            if (trade.path("price").asLong() != PRICE
-                    || trade.path("size").asLong() != 1L
-                    || trade.path("symbolId").asInt() != SYMBOL) {
-                failures.add("market tape unexpected trade " + trade);
-                return;
+        long total = 0L;
+        for (int symbolId = 1; symbolId <= workload.symbols(); symbolId++) {
+            final JsonNode trades = get("/api/v1/markettrades?symbolId=" + symbolId + "&limit=" + tradeLimit);
+            total += trades.size();
+            for (final JsonNode trade : trades) {
+                if (trade.path("price").asLong() != LoadWorkload.price(symbolId)
+                        || trade.path("size").asLong() != 1L
+                        || trade.path("symbolId").asInt() != symbolId) {
+                    failures.add("market tape unexpected trade " + trade);
+                    return;
+                }
             }
+        }
+        if (total != workload.trades()) {
+            failures.add("market tape total " + total + " != expected " + workload.trades());
         }
     }
 
@@ -456,6 +481,7 @@ public final class GatewayBenchRunner {
         }
         final JsonNode order = get("/api/v1/orders/" + sample.orderId());
         if (!"ACTIVE".equals(order.path("state").asText())
+                || order.path("symbolId").asLong() != sample.symbolId()
                 || order.path("remaining").asLong() != sample.size()
                 || order.path("price").asLong() != sample.price()) {
             failures.add("order " + sample.orderId() + " by-id does not match simulation: " + order);
@@ -779,7 +805,9 @@ public final class GatewayBenchRunner {
     private void printReport(final Histogram histogram, final List<String> failures) {
         System.out.println();
         System.out.println("== gateway bench result ==");
-        System.out.printf("config:  base=%s ops=%d users=%d adminUid=%d%n", baseUrl, ops, users, adminUid);
+        System.out.printf(
+                "config:  base=%s ops=%d users=%d symbols=%d adminUid=%d%n",
+                baseUrl, ops, users, workload.symbols(), adminUid);
         if (histogram != null) {
             final double opsPerSec = ops / (loadElapsedNanos / 1_000_000_000.0);
             System.out.printf("load:    ops=%d throughput=%.0f ops/s%n", ops, opsPerSec);

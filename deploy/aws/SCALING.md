@@ -144,13 +144,13 @@ Minimum users for a target op count (read-side verification enabled):
 
 ## Scaling symbols (tens to hundreds)
 
-Multi-symbol support is implemented: `LoadWorkload`, `ExternalLoadRunner`, and
-`ReadVerifyRunner` take `--symbols` (default 1), shard the round-robin across
-symbols, and give each symbol its own resting book and price. The command type
-is derived from the per-symbol iteration index (`i / symbols`), not the global
-index, so every symbol sees the full place/cancel/reduce cycle regardless of the
-symbol count; a symbol count that is a multiple of 8 no longer collapses to a
-single command type. Remaining work is the single-symbol `GatewayBenchRunner`.
+Multi-symbol support is implemented: `LoadWorkload`, `ExternalLoadRunner`,
+`ReadVerifyRunner`, and `GatewayBenchRunner` take `--symbols` (default 1), shard
+the round-robin across symbols, and give each symbol its own resting book and
+price. The command type is derived from the per-symbol iteration index
+(`i / symbols`), not the global index, so every symbol sees the full
+place/cancel/reduce cycle regardless of the symbol count; a symbol count that is
+a multiple of 8 no longer collapses to a single command type.
 
 - **Engine ceiling**: `symbolCapacity = 1024`, so tens to hundreds of symbols
   fit without raising it. Passing 1024 symbols (or needing more resting orders)
@@ -165,10 +165,12 @@ single command type. Remaining work is the single-symbol `GatewayBenchRunner`.
   independent of the symbol count), so hundreds of symbols stay well inside the
   default pool. Multi-price-level books would consume more pool and
   `priceBucketCapacity = 8192`.
-- **Gateway**: the `gateway_symbols` property is already comma-separated
-  (`id|name|base|quote|baseScaleK|quoteScaleK[|makerFee|takerFee]`, parsed in
-  `exc-gateway/.../config/GatewayConfig.java`), so the gateway can declare many
-  symbols today. `GatewayBenchRunner` still exercises a single symbol.
+- **Gateway**: `GatewayBenchRunner` now takes `--symbols` (wired to
+  `workload_symbols` in `run-gateway-bench.yml`) and cross-checks every symbol's
+  L2 and market tape plus the shared-currency conservation totals. The gateway's
+  `gateway.symbols` list is generated from `workload_symbols` in
+  `gateway.properties.j2`, so `GET /symbols` declares one symbol per workload
+  symbol.
 
 ## Server configuration
 

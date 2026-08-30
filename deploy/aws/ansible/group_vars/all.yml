@@ -32,7 +32,9 @@ aeron_term_length: "1m"
 ledger_max_orders_per_user: ""
 ledger_max_market_trades: "2097152"
 
-gateway_symbols: "1|BTC/USDT|10|20|1|1|0|0"
+# The gateway declares one symbol per workload symbol (id|name|base|quote|
+# baseScaleK|quoteScaleK|makerFee|takerFee), generated from workload_symbols in
+# gateway.properties.j2 so the gateway registry matches the benchmark symbol count.
 gateway_currencies: "10|BTC|1,20|USDT|1"
 
 gateway_bench_ops: "10000"

@@ -8,6 +8,7 @@ gateway.write.clientId=42
 gateway.write.ingressEndpoints={{ ingress_endpoints }}
 gateway.write.egressChannel=aeron:udp?endpoint={{ host }}:0
 gateway.admin.uids=1,2,811
-gateway.symbols={{ gateway_symbols }}
+gateway.symbols={% for s in range(1, (workload_symbols | int) + 1) %}{% if not loop.first %},{% endif %}{{ s }}|SYM{{ s }}|10|20|1|1|0|0{% endfor %}
+
 gateway.currencies={{ gateway_currencies }}
 gateway.marketPump.intervalMs=0

@@ -20,6 +20,7 @@
 #   EXC_ADMIN_UIDS      gateway.admin.uids             (1,2,811)
 #   EXC_BENCH_OPS       gateway bench commands         (10000)
 #   EXC_BENCH_USERS     gateway bench users            (100)
+#   EXC_BENCH_SYMBOLS   gateway bench symbol count     (1)
 #   EXC_ADMIN_UID       gateway bench admin uid        (811)
 #   EXC_ADMIN_API_KEY   gateway.admin.apiKey           (unset = disabled)
 #
@@ -45,6 +46,7 @@ CURRENCIES="${EXC_CURRENCIES:-10|BTC|1,20|USDT|1}"
 ADMIN_UIDS="${EXC_ADMIN_UIDS:-1,2,811}"
 BENCH_OPS="${EXC_BENCH_OPS:-10000}"
 BENCH_USERS="${EXC_BENCH_USERS:-100}"
+BENCH_SYMBOLS="${EXC_BENCH_SYMBOLS:-1}"
 ADMIN_UID="${EXC_ADMIN_UID:-811}"
 ADMIN_API_KEY="${EXC_ADMIN_API_KEY:-}"
 
@@ -258,13 +260,13 @@ seed_market() { # register symbol 1 + users + a resting ask and a crossing fill
 bench() {
   wait_port "$HOST" "$HTTP_PORT" 30 || { err "gateway is not up on :${HTTP_PORT} (run 'start' first)"; exit 1; }
   ensure_bench_dist
-  log "benchmarking through gateway http://localhost:${HTTP_PORT} (ops=${BENCH_OPS} users=${BENCH_USERS})"
+  log "benchmarking through gateway http://localhost:${HTTP_PORT} (ops=${BENCH_OPS} users=${BENCH_USERS} symbols=${BENCH_SYMBOLS})"
   local api_key_args=()
   if [ -n "$ADMIN_API_KEY" ]; then api_key_args=(--api-key="$ADMIN_API_KEY"); fi
   java "${ADD_OPENS[@]}" \
     -cp "$BENCH_LIB/*" "$BENCH_MAIN" \
     --base-url="http://localhost:${HTTP_PORT}" \
-    --ops="$BENCH_OPS" --users="$BENCH_USERS" \
+    --ops="$BENCH_OPS" --users="$BENCH_USERS" --symbols="$BENCH_SYMBOLS" \
     --admin-uid="$ADMIN_UID" "${api_key_args[@]}"
 }
 
