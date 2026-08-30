@@ -78,9 +78,13 @@ terraform -chdir=deploy/aws/terraform apply
 ```
 
 ```hcl
-# terraform.tfvars
+# terraform.tfvars (copy deploy/aws/terraform/terraform.tfvars.example)
 key_name = "excoredum-bench"      # EC2 key pair name (Ansible SSH)
 ssh_cidr = "203.0.113.0/24"       # restrict SSH + gateway HTTP to your IP
+
+# Large run (256 symbols / 5000 users / 5M ops); see SCALING.md for the full table
+node_instance_type = "c6i.4xlarge"
+app_instance_type  = "c6i.xlarge"
 ```
 
 Terraform only creates infrastructure. No IAM role, instance profile, or S3

@@ -1,6 +1,7 @@
 package com.exadbe.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import com.exadbe.bench.LoadWorkload;
@@ -31,7 +32,10 @@ class LoadWorkloadEngineParityTest {
 
     @Test
     void multiSymbolBookMatchesEngineForEveryCommand() {
-        runParityCheck(20_000, 50, 4);
+        // 256 is a multiple of 8, the case where the old sharding (i % 8) collapsed
+        // each symbol to a single command type. The assertions added at the end of
+        // runParityCheck guard that regression.
+        runParityCheck(20_000, 50, 256);
     }
 
     private static void runParityCheck(final int ops, final int users, final int symbols) {
@@ -94,6 +98,16 @@ class LoadWorkloadEngineParityTest {
             }
             assertBooksMatch(engine, workload, i, command);
         }
+
+        // Guard the sharding regression: deriving the command type from the global
+        // index (i % 8) correlated it with the symbol (i % symbols) for symbol
+        // counts that are multiples of 8, producing zero trades and unbounded
+        // resting orders. A healthy workload must trade and keep the resting book
+        // small relative to the number of symbols.
+        assertTrue(workload.trades() > 0, "workload produced no trades - command type correlated with symbol");
+        final int resting =
+                workload.restingBids().size() + workload.restingAsks().size();
+        assertTrue(resting <= symbols * 8, "resting orders unbounded: " + resting + " for " + symbols + " symbols");
     }
 
     private static CommandEnvelopeDecoder encode(

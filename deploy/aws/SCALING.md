@@ -123,8 +123,11 @@ Minimum users for a target op count (read-side verification enabled):
 
 Multi-symbol support is implemented: `LoadWorkload`, `ExternalLoadRunner`, and
 `ReadVerifyRunner` take `--symbols` (default 1), shard the round-robin across
-symbols, and give each symbol its own resting book and price. Remaining work is
-sizing the engine/ledger caps and the single-symbol `GatewayBenchRunner`.
+symbols, and give each symbol its own resting book and price. The command type
+is derived from the per-symbol iteration index (`i / symbols`), not the global
+index, so every symbol sees the full place/cancel/reduce cycle regardless of the
+symbol count; a symbol count that is a multiple of 8 no longer collapses to a
+single command type. Remaining work is the single-symbol `GatewayBenchRunner`.
 
 - **Engine ceiling**: `symbolCapacity = 1024`, so tens to hundreds of symbols
   fit without raising it. Passing 1024 symbols (or needing more resting orders)
@@ -134,9 +137,10 @@ sizing the engine/ledger caps and the single-symbol `GatewayBenchRunner`.
   registers every symbol, and `ReadVerifyRunner` verifies each symbol's L2 plus
   the shared-currency conservation totals.
 - **Order pool**: resting orders are global across symbols
-  (`orderPoolCapacity = 65536`). With N symbols each holding ~K resting orders,
-  N * K must stay under 65536; a few hundred symbols at ~1000 resting orders
-  each would exceed it. Multi-price-level books also consume
+  (`orderPoolCapacity = 65536`). The single-price-level workload keeps the
+  resting book tiny (a handful of orders per symbol once the command cycle is
+  independent of the symbol count), so hundreds of symbols stay well inside the
+  default pool. Multi-price-level books would consume more pool and
   `priceBucketCapacity = 8192`.
 - **Gateway**: the `gateway_symbols` property is already comma-separated
   (`id|name|base|quote|baseScaleK|quoteScaleK[|makerFee|takerFee]`, parsed in
@@ -189,12 +193,14 @@ For a multi-symbol deployed run:
 
 | Scale | symbols | users | ops | node type | notes |
 |-------|---------|-------|-----|-----------|-------|
-| Small | 16 | 500 | 1000000 | `c6i.xlarge` | within 1024 symbol cap; read verify needs caps raised |
-| Medium | 64 | 2000 | 2000000 | `c6i.2xlarge` | needs `CoreConfig` order-pool bump and read-side cap changes |
-| Large | 256 | 5000 | 5000000 | `c6i.4xlarge` | needs symbol/order-pool overrides and read-side cap changes |
+| Small | 16 | 500 | 1000000 | `c6i.xlarge` | read verify needs `maxMarketTrades` raised (trades ~312K) |
+| Medium | 64 | 2000 | 2000000 | `c6i.2xlarge` | read verify needs `maxMarketTrades` raised (trades ~625K) |
+| Large | 256 | 5000 | 5000000 | `c6i.4xlarge` | read verify needs `maxMarketTrades` raised (trades ~1.56M) plus a larger read replica heap |
 
 The code-side prerequisites are done: (1) multi-symbol `LoadWorkload` and
-verifier support, (2) `CoreConfig` overrides through `ClusterLauncher` /
-`ReadServiceLauncher`, and (3) JVM heap and Aeron term-length tuning. Each step
-up then only needs (4) larger instance types plus the read-side cap and order
-pool / symbol overrides noted per scale.
+verifier support (command type decoupled from the symbol index), (2)
+`CoreConfig` overrides through `ClusterLauncher` / `ReadServiceLauncher`, and
+(3) JVM heap and Aeron term-length tuning. Each step up then only needs (4)
+larger instance types plus a read-side `maxMarketTrades` raise (power of two)
+noted per scale - no engine symbol/order-pool override is required because the
+resting book stays small.

@@ -141,7 +141,12 @@ public final class LoadWorkload {
     public Command next(final int i) {
         final int u = 1 + (i % users);
         final int s = 1 + (i % symbols);
-        switch (i % 8) {
+        // Derive the command type from the per-symbol iteration index (i / symbols)
+        // rather than the global index (i). Using i % 8 directly would correlate
+        // with i % symbols whenever symbols is a multiple of 8, collapsing every
+        // symbol to a single command type: no cross-side trading and unbounded
+        // resting orders. For symbols == 1 this is identical to the old i % 8.
+        switch ((i / symbols) % 8) {
             case 0, 1, 2 -> {
                 return placeBid(s, u);
             }

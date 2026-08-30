@@ -1,0 +1,19 @@
+# Large-scale benchmark run (see deploy/aws/SCALING.md). Copy to
+# terraform.tfvars and fill in the operator-specific values:
+#
+#   cp terraform.tfvars.example terraform.tfvars
+
+# EC2 key pair name (used by Ansible for SSH).
+key_name = "excoredum-bench"
+
+# Restrict SSH + gateway HTTP to your operator IP.
+ssh_cidr = "203.0.113.0/24"
+
+# Cluster nodes: c6i.4xlarge for the Large run (256 symbols / 5000 users /
+# 5M ops). Drop to c6i.xlarge for Small, c6i.2xlarge for Medium.
+node_instance_type = "c6i.4xlarge"
+
+# Read replica / gateway / load / verify. The read replica holds the
+# ~2M-entry market trade tape plus per-user order history, so c6i.xlarge
+# (8 GB) with a 4g heap is used for Large.
+app_instance_type = "c6i.xlarge"
