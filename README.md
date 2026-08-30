@@ -139,6 +139,36 @@ Targets: decode < 100 ns, primitive-map lookup < 50 ns, end-to-end IPC p99.99
 against upstream exchange-core 0.5.3 (replay parity, engine and e2e latency,
 JMH) - see [docs/BENCHMARKING-XCORE.md](docs/BENCHMARKING-XCORE.md).
 
+### End-to-end (deployed AWS cluster)
+
+A throwaway AWS benchmark (see
+[deploy/aws/SCALING.md](deploy/aws/SCALING.md)) drives the deterministic
+`LoadWorkload` through the write client against a real 3-node cluster and
+verifies the state on the CQRS read replica.
+
+Topology (`ap-southeast-1`, single AZ):
+
+| Role | Count | Instance |
+|------|-------|----------|
+| Aeron Raft node (cluster placement group) | 3 | `c6i.xlarge` (4 vCPU / 8 GB) |
+| CQRS read replica | 1 | `c6i.xlarge` |
+| Write load / read verify | 1 each | `c6i.xlarge` |
+
+Server config: JVM ZGC `-Xms4g -Xmx4g` on nodes and read replica, Aeron ingress
+term length `1m`, read ledger `maxMarketTrades = 2^21`. Workload: 5,000,000 ops
+/ 256 symbols / 5000 users from a single closed-loop write client (drain batch
+64). Batch 16 measured 33,710 ops/s on the same topology, so batch 64 is a
+3.15x lift (full comparison in SCALING.md).
+
+| Metric | Value |
+|--------|-------|
+| Throughput | 106,271 ops/s |
+| End-to-end latency (p50 / p99 / p99.9) | 427us / 3.8ms / 5.6ms |
+| Fills observed vs expected | 1,562,432 == 1,562,432 |
+| Command results | 5,015,256 success, 0 non-success, 0 expired |
+| Session | 0 leader changes, 0 reconnects, 0 retransmits |
+| Read-side verification | PASS (state hash matched, 15,259 queries) |
+
 ## Modules
 
 | Module              | Responsibility                                                   |

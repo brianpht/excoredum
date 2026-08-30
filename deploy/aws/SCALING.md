@@ -87,13 +87,26 @@ The write-side load (`ExternalLoadRunner`) is closed-loop with a single client:
 it submits, then drains every `--batch` commands (Ansible `load_batch`, default
 16, power of two), so its measured throughput is latency-bound, not a
 throughput ceiling. A larger batch deepens the in-flight pipeline and raises
-throughput roughly proportionally; on `c6i.xlarge` nodes, batch 16 measured
-~34k ops/s and batch 64 measured ~106k ops/s with no extra backpressure or
-retransmits, while batch 128 reached ~148k ops/s but FAILED (16 retransmits
-broke the workload's FIFO-dependent cancel/reduce ordering). Raising the Aeron
-term length to `8m` did not help - batch 128 still failed, with retransmits
-climbing to 128. The practical single-client ceiling is ~64; past that, run
-several clients in parallel. To raise the command count:
+throughput, up to the point where the cluster's ingress buffer backpressures
+and a retransmitted cancel/reduce lands out of FIFO order.
+
+Measured on `c6i.xlarge` (3 nodes, 5M ops / 256 symbols / 5000 users):
+
+| Metric | batch 16 | batch 64 | Change |
+|--------|----------|----------|--------|
+| Throughput | 33,710 ops/s | 106,271 ops/s | 3.15x |
+| Elapsed (5M ops) | 148.3s | 47.0s | - |
+| p50 / p99 / p99.9 | 369us / 2.7ms / 5.9ms | 427us / 3.8ms / 5.6ms | - |
+| backpressure | 66 | 66 | unchanged |
+| retransmits | 0 | 0 | - |
+| nonSuccess / expired | 0 / 0 | 0 / 0 | - |
+| fills observed == expected | 1,562,432 | 1,562,432 | pass |
+| verify | PASS | PASS | pass |
+
+Batch 128 reached ~148k ops/s but FAILED (16 retransmits broke the workload's
+FIFO-dependent cancel/reduce ordering); raising the Aeron term length to `8m`
+did not help - retransmits climbed to 128. The practical single-client ceiling
+is batch 64 (~106k ops/s on `c6i.xlarge`). To raise the command count:
 
 - Raise `workload_ops` (`group_vars/all.yml`).
 - Keep `users >= ops / 2000` if the read-side verifier will also run, so both
@@ -199,18 +212,28 @@ Two important caveats when comparing:
 
 ## Recommended target configurations
 
-For a multi-symbol deployed run:
+For a multi-symbol deployed run. Every row uses a single closed-loop write
+client at drain batch 64 (`load_batch: "64"`); see "Scaling commands (ops)"
+for the batch vs throughput tradeoff.
 
 | Scale | symbols | users | ops | node type | notes |
 |-------|---------|-------|-----|-----------|-------|
 | Small | 16 | 500 | 1000000 | `c6i.xlarge` | read verify needs `maxMarketTrades` raised (trades ~312K) |
 | Medium | 64 | 2000 | 2000000 | `c6i.2xlarge` | read verify needs `maxMarketTrades` raised (trades ~625K) |
-| Large | 256 | 5000 | 5000000 | `c6i.4xlarge` | read verify needs `maxMarketTrades` raised (trades ~1.56M) plus a larger read replica heap |
+| Large | 256 | 5000 | 5000000 | `c6i.xlarge` | read verify needs `maxMarketTrades` raised (trades ~1.56M) plus a larger read replica heap; measured ~106k ops/s |
+
+The Large row was run end-to-end on `c6i.xlarge` (3 nodes + read + load +
+verify), measuring ~106k ops/s with read-side verification passing, so
+`c6i.xlarge` is sufficient for the workload; `c6i.4xlarge` is only for more
+throughput headroom. Note this account hits AWS `PendingVerification` when
+launching `c6i.4xlarge`, so a `c6i.xlarge` run is also the practical choice
+until the account is verified.
 
 The code-side prerequisites are done: (1) multi-symbol `LoadWorkload` and
 verifier support (command type decoupled from the symbol index), (2)
-`CoreConfig` overrides through `ClusterLauncher` / `ReadServiceLauncher`, and
-(3) JVM heap and Aeron term-length tuning. Each step up then only needs (4)
-larger instance types plus a read-side `maxMarketTrades` raise (power of two)
-noted per scale - no engine symbol/order-pool override is required because the
+`CoreConfig` overrides through `ClusterLauncher` / `ReadServiceLauncher`, (3)
+JVM heap and Aeron term-length tuning, and (4) the write-side drain batch
+(`load_batch`, default 16, sweet spot 64). Each step up then only needs larger
+instance types plus a read-side `maxMarketTrades` raise (power of two) noted
+per scale - no engine symbol/order-pool override is required because the
 resting book stays small.
