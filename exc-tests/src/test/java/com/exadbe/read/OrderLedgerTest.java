@@ -3,6 +3,7 @@ package com.exadbe.read;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.exadbe.core.CommandOutcome;
@@ -242,7 +243,7 @@ final class OrderLedgerTest {
 
     @Test
     void evictionDropsOldestTerminalRecordsPerUser() {
-        final int capacity = OrderLedger.MAX_ORDERS_PER_USER;
+        final int capacity = OrderLedger.DEFAULT_MAX_ORDERS_PER_USER;
         // Fill the user up with resting (active) orders, then terminate the oldest half.
         for (int i = 0; i < capacity; i++) {
             applyPlace(
@@ -279,7 +280,7 @@ final class OrderLedgerTest {
 
     @Test
     void tapeWrapsAndKeepsNewestTrades() {
-        final int capacity = OrderLedger.MAX_MARKET_TRADES;
+        final int capacity = OrderLedger.DEFAULT_MAX_MARKET_TRADES;
         // Push past the tape capacity so the oldest trades are overwritten; the
         // ring head wraps and the newest-first ordering must hold across it.
         for (long i = 1L; i <= capacity + 3L; i++) {
@@ -299,6 +300,33 @@ final class OrderLedgerTest {
         assertEquals(capacity + 3L, trades.get(0).makerOrderId(), "newest trade first");
         assertEquals(capacity - 6L, trades.get(9).makerOrderId(), "wrapped tape serves the retained tail");
         assertEquals(capacity, ledger.marketTrades(SYMBOL, capacity).size(), "oldest three trades overwritten");
+    }
+
+    @Test
+    void rejectsInvalidCaps() {
+        assertThrows(IllegalArgumentException.class, () -> new OrderLedger(0, 8), "zero per-user cap");
+        assertThrows(IllegalArgumentException.class, () -> new OrderLedger(4096, 100), "non-power-of-two tape cap");
+    }
+
+    @Test
+    void explicitMarketTapeCapWraps() {
+        final OrderLedger small = new OrderLedger(OrderLedger.DEFAULT_MAX_ORDERS_PER_USER, 8);
+        for (long i = 1L; i <= 11L; i++) {
+            outcome.reset(0L, i);
+            outcome.uid(TAKER);
+            outcome.orderId(i);
+            outcome.resultCode(CommandResultCode.SUCCESS);
+            outcome.addTrade(SYMBOL, i, MAKER, TAKER, 100L, 1L, true, false, 0L, true, 100L);
+            small.applyCommand(
+                    i * 10L,
+                    encode(i, OrderCommandType.NOP, TAKER, i, OrderAction.NULL_VAL, OrderType.NULL_VAL, 0L, 0L, 0),
+                    outcome);
+        }
+
+        final List<MarketTrade> trades = small.marketTrades(SYMBOL, 100);
+        assertEquals(8, trades.size(), "tape capped at the explicit capacity");
+        assertEquals(11L, trades.get(0).makerOrderId(), "newest trade first");
+        assertEquals(4L, trades.get(7).makerOrderId(), "wrapped tape serves the retained tail");
     }
 
     private void applyPlace(

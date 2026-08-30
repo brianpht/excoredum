@@ -2,8 +2,13 @@ package com.exadbe.launcher;
 
 import com.exadbe.config.CoreConfig;
 import com.exadbe.telemetry.CoreMetrics;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Properties;
 import java.util.concurrent.locks.LockSupport;
 
 /**
@@ -31,15 +36,18 @@ public final class ClusterLauncher {
         final String configPath = configPath(args);
 
         final ClusterConfig clusterConfig;
+        final CoreConfig coreConfig;
         if (configPath != null) {
-            clusterConfig = ClusterConfig.fromProperties(Paths.get(configPath), nodeId);
+            final Properties props = loadProperties(configPath);
+            clusterConfig = ClusterConfig.fromProperties(props, nodeId);
+            coreConfig = CoreConfig.fromProperties(props);
         } else {
             final Path baseDir = Paths.get(System.getProperty("exc.baseDir", "build/exc-node-" + nodeId));
             clusterConfig = ClusterConfig.singleNodeLocalhost(nodeId, baseDir);
+            coreConfig = CoreConfig.fromSystemProperties();
         }
 
         final boolean cleanStart = Boolean.parseBoolean(System.getProperty("exc.cleanStart", "true"));
-        final CoreConfig coreConfig = CoreConfig.defaults();
 
         final ClusterNode node = new ClusterNode(clusterConfig, coreConfig, cleanStart);
         Runtime.getRuntime().addShutdownHook(new Thread(node::close, "exc-shutdown"));
@@ -101,6 +109,16 @@ public final class ClusterLauncher {
                 "exc-metrics-dump");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    private static Properties loadProperties(final String configPath) {
+        final Properties props = new Properties();
+        try (InputStream in = Files.newInputStream(Paths.get(configPath))) {
+            props.load(in);
+        } catch (final IOException e) {
+            throw new UncheckedIOException("Failed to read config: " + configPath, e);
+        }
+        return props;
     }
 
     private static String configPath(final String[] args) {

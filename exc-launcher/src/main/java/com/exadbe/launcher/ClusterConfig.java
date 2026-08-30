@@ -28,6 +28,12 @@ public final class ClusterConfig {
     /** Port span reserved per node (ingress, consensus, log, catchup, archive). */
     public static final int PORT_STRIDE = 100;
 
+    /** Property key for the ingress channel term length (default {@link #DEFAULT_TERM_LENGTH}). */
+    public static final String TERM_LENGTH_PROPERTY = "exc.aeron.termLength";
+
+    /** Default ingress term length; a larger value reduces flow-control stalls at high rate. */
+    public static final String DEFAULT_TERM_LENGTH = "64k";
+
     private final int nodeId;
     private final String clusterMembers;
     private final String aeronDirectoryName;
@@ -36,6 +42,7 @@ public final class ClusterConfig {
     private final String archiveControlChannel;
     private final String ingressChannel;
     private final String replicationChannel;
+    private final String termLength;
 
     private ClusterConfig(
             final int nodeId,
@@ -45,7 +52,8 @@ public final class ClusterConfig {
             final File clusterDir,
             final String archiveControlChannel,
             final String ingressChannel,
-            final String replicationChannel) {
+            final String replicationChannel,
+            final String termLength) {
         this.nodeId = nodeId;
         this.clusterMembers = clusterMembers;
         this.aeronDirectoryName = aeronDirectoryName;
@@ -54,11 +62,12 @@ public final class ClusterConfig {
         this.archiveControlChannel = archiveControlChannel;
         this.ingressChannel = ingressChannel;
         this.replicationChannel = replicationChannel;
+        this.termLength = termLength;
     }
 
     /** Builds a single-node localhost configuration rooted at {@code baseDir}. */
     public static ClusterConfig singleNodeLocalhost(final int nodeId, final Path baseDir) {
-        return build(nodeId, baseDir, "localhost", memberEntry(nodeId, "localhost"));
+        return build(nodeId, baseDir, "localhost", memberEntry(nodeId, "localhost"), DEFAULT_TERM_LENGTH);
     }
 
     /**
@@ -84,7 +93,7 @@ public final class ClusterConfig {
 
         final ClusterConfig[] configs = new ClusterConfig[nodeCount];
         for (int i = 0; i < nodeCount; i++) {
-            configs[i] = build(i, baseDir.resolve("node-" + i), host, memberString);
+            configs[i] = build(i, baseDir.resolve("node-" + i), host, memberString, DEFAULT_TERM_LENGTH);
         }
         return configs;
     }
@@ -103,14 +112,27 @@ public final class ClusterConfig {
         } catch (final IOException e) {
             throw new UncheckedIOException("Failed to read cluster config: " + propertiesFile, e);
         }
+        return fromProperties(props, nodeId);
+    }
 
+    /**
+     * Loads a node configuration from an already-loaded {@link Properties}
+     * object, so a caller can read the file once and share the same properties
+     * with other config consumers (e.g. {@link CoreConfig#fromProperties}).
+     */
+    public static ClusterConfig fromProperties(final Properties props, final int nodeId) {
         final String members = props.getProperty("exc.clusterMembers");
         if (members == null || members.isBlank()) {
-            throw new IllegalArgumentException("exc.clusterMembers is required in " + propertiesFile);
+            throw new IllegalArgumentException("exc.clusterMembers is required");
         }
         final Path baseDir = Paths.get(props.getProperty("exc.baseDir", "build/exc-node-" + nodeId));
         final String host = props.getProperty("exc.host", "localhost");
-        return build(nodeId, baseDir, host, members);
+        return build(nodeId, baseDir, host, members, termLengthOf(props));
+    }
+
+    private static String termLengthOf(final Properties props) {
+        final String termLength = props.getProperty(TERM_LENGTH_PROPERTY);
+        return termLength == null || termLength.isBlank() ? DEFAULT_TERM_LENGTH : termLength.trim();
     }
 
     /**
@@ -122,7 +144,7 @@ public final class ClusterConfig {
         if (members == null || members.isBlank()) {
             throw new IllegalArgumentException("members string is required");
         }
-        return build(nodeId, baseDir, host, members);
+        return build(nodeId, baseDir, host, members, DEFAULT_TERM_LENGTH);
     }
 
     /**
@@ -181,8 +203,9 @@ public final class ClusterConfig {
         return false;
     }
 
-    /** Assembles a node config given its directory root, host, and members string. */
-    private static ClusterConfig build(final int nodeId, final Path baseDir, final String host, final String members) {
+    /** Assembles a node config given its directory root, host, members string, and ingress term length. */
+    private static ClusterConfig build(
+            final int nodeId, final Path baseDir, final String host, final String members, final String termLength) {
         if (nodeId < 0) {
             throw new IllegalArgumentException("nodeId must be non-negative, was: " + nodeId);
         }
@@ -194,6 +217,9 @@ public final class ClusterConfig {
         }
         if (members == null || members.isBlank()) {
             throw new IllegalArgumentException("clusterMembers is required");
+        }
+        if (termLength == null || termLength.isBlank()) {
+            throw new IllegalArgumentException("termLength is required");
         }
         if (!containsMember(members, nodeId)) {
             // A node that is not in its own members string can never join (or
@@ -208,8 +234,9 @@ public final class ClusterConfig {
                 baseDir.resolve("archive").toFile(),
                 baseDir.resolve("cluster").toFile(),
                 "aeron:udp?endpoint=" + host + ":" + archivePort,
-                "aeron:udp?term-length=64k",
-                "aeron:udp?endpoint=" + host + ":0");
+                "aeron:udp?term-length=" + termLength,
+                "aeron:udp?endpoint=" + host + ":0",
+                termLength);
     }
 
     public int nodeId() {
@@ -242,5 +269,9 @@ public final class ClusterConfig {
 
     public String replicationChannel() {
         return replicationChannel;
+    }
+
+    public String termLength() {
+        return termLength;
     }
 }

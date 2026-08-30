@@ -118,6 +118,7 @@ services:
     shm_size: 256m
     environment:
       EXC_INGRESS: "0=node-0:20100,1=node-1:20200,2=node-2:20300"
+      EXC_SYMBOLS: "${EXC_SYMBOLS:-1}"
       # EXC_OPS: "100000"
       # EXC_USERS: "100"
     command: ["/usr/local/bin/entrypoint-load.sh"]
@@ -135,6 +136,8 @@ services:
     shm_size: 256m
     environment:
       EXC_QUERY: "aeron:udp?endpoint=read:44000"
+      EXC_SYMBOLS: "${EXC_SYMBOLS:-1}"
+      EXC_TRADE_LIMIT: "${EXC_TRADE_LIMIT:-4096}"
     command: ["/usr/local/bin/entrypoint-verify.sh"]
     depends_on:
       load:

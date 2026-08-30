@@ -7,3 +7,6 @@ service_env:
   EXC_QUERY: "{{ query_channel }}"
   EXC_OPS: "{{ workload_ops }}"
   EXC_USERS: "{{ workload_users }}"
+  EXC_SYMBOLS: "{{ workload_symbols }}"
+  EXC_TRADE_LIMIT: "{{ workload_trade_limit }}"
+  EXC_JAVA_OPTS: "{{ verify_java_opts }}"

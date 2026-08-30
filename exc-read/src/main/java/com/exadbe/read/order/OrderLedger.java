@@ -25,29 +25,18 @@ import org.agrona.collections.Long2ObjectHashMap;
  * guards on {@code ordersById} so a re-applied place cannot add a second record.
  * A replicated RESET clears the ledger, mirroring the engine's state reset.
  *
- * <p>Memory is bounded: each user keeps at most {@link #MAX_ORDERS_PER_USER}
+ * <p>Memory is bounded: each user keeps at most {@link #DEFAULT_MAX_ORDERS_PER_USER}
  * records (oldest terminal records are evicted; resting orders are already
  * bounded by the engine's order pool) and the trade tape holds at most
- * {@link #MAX_MARKET_TRADES} entries, overwriting the oldest.
+ * {@link #DEFAULT_MAX_MARKET_TRADES} entries, overwriting the oldest.
  */
 public final class OrderLedger {
 
-    /** Per-user cap on retained order records; oldest terminal records are evicted first. */
-    public static final int MAX_ORDERS_PER_USER = 4096;
+    /** Default per-user cap on retained order records; oldest terminal records are evicted first. */
+    public static final int DEFAULT_MAX_ORDERS_PER_USER = 4096;
 
-    /** Cap on the global market trade tape; oldest trades are overwritten. */
-    public static final int MAX_MARKET_TRADES = 65536;
-
-    // Tape indexing uses `(head + i) & (MAX_MARKET_TRADES - 1)`, which requires a
-    // power-of-two capacity; a non-power-of-two cap would alias slots and corrupt
-    // the newest-first ordering. Mirrors the DedupRing / EventJournalRing guards.
-    static {
-        if (Integer.bitCount(MAX_MARKET_TRADES) != 1) {
-            throw new ExceptionInInitializerError("MAX_MARKET_TRADES must be a power of two");
-        }
-    }
-
-    private static final int TAPE_MASK = MAX_MARKET_TRADES - 1;
+    /** Default cap on the global market trade tape; oldest trades are overwritten. */
+    public static final int DEFAULT_MAX_MARKET_TRADES = 65536;
 
     private static final float LOAD_FACTOR = 0.65f;
 
@@ -56,11 +45,41 @@ public final class OrderLedger {
         final ArrayList<OrderRecord> placementOrder = new ArrayList<>(16);
     }
 
+    private final int maxOrdersPerUser;
+    private final int maxMarketTrades;
+    private final int tapeMask;
     private final Long2ObjectHashMap<UserHistory> users = new Long2ObjectHashMap<>(64, LOAD_FACTOR);
     private final Long2ObjectHashMap<OrderRecord> ordersById = new Long2ObjectHashMap<>(1024, LOAD_FACTOR);
-    private final MarketTrade[] tape = new MarketTrade[MAX_MARKET_TRADES];
+    private final MarketTrade[] tape;
     private int tapeHead;
     private int tapeCount;
+
+    /** Builds a ledger with the default per-user and market-tape caps. */
+    public OrderLedger() {
+        this(DEFAULT_MAX_ORDERS_PER_USER, DEFAULT_MAX_MARKET_TRADES);
+    }
+
+    /**
+     * Builds a ledger with explicit caps.
+     *
+     * @param maxOrdersPerUser per-user order-history cap; oldest terminal records are evicted first
+     * @param maxMarketTrades global market-tape cap; must be a power of two
+     */
+    public OrderLedger(final int maxOrdersPerUser, final int maxMarketTrades) {
+        if (maxOrdersPerUser <= 0) {
+            throw new IllegalArgumentException("maxOrdersPerUser must be positive, was: " + maxOrdersPerUser);
+        }
+        // Tape indexing uses `(head + i) & tapeMask`, which requires a power-of-two
+        // capacity; a non-power-of-two cap would alias slots and corrupt the
+        // newest-first ordering. Mirrors the DedupRing / EventJournalRing guards.
+        if (Integer.bitCount(maxMarketTrades) != 1) {
+            throw new IllegalArgumentException("maxMarketTrades must be a power of two, was: " + maxMarketTrades);
+        }
+        this.maxOrdersPerUser = maxOrdersPerUser;
+        this.maxMarketTrades = maxMarketTrades;
+        this.tapeMask = maxMarketTrades - 1;
+        this.tape = new MarketTrade[maxMarketTrades];
+    }
 
     /**
      * Applies one applied command to the ledger. Re-delivered commands are
@@ -110,7 +129,7 @@ public final class OrderLedger {
         }
         out.writeInt(tapeCount);
         for (int i = 0; i < tapeCount; i++) {
-            final MarketTrade trade = tape[(tapeHead + i) & TAPE_MASK];
+            final MarketTrade trade = tape[(tapeHead + i) & tapeMask];
             out.writeLong(trade.timestamp());
             out.writeInt(trade.symbolId());
             out.writeLong(trade.price());
@@ -303,25 +322,25 @@ public final class OrderLedger {
             final long makerOrderId,
             final long makerUid,
             final long takerUid) {
-        if (tapeCount < MAX_MARKET_TRADES) {
-            tape[(tapeHead + tapeCount) & TAPE_MASK] =
+        if (tapeCount < maxMarketTrades) {
+            tape[(tapeHead + tapeCount) & tapeMask] =
                     new MarketTrade(timestamp, symbolId, price, size, makerOrderId, makerUid, takerUid);
             tapeCount++;
         } else {
             tape[tapeHead] = new MarketTrade(timestamp, symbolId, price, size, makerOrderId, makerUid, takerUid);
-            tapeHead = (tapeHead + 1) & TAPE_MASK;
+            tapeHead = (tapeHead + 1) & tapeMask;
         }
     }
 
     private void forEachNewestFirst(final java.util.function.Consumer<MarketTrade> visitor) {
         for (int i = 0; i < tapeCount; i++) {
-            final int index = (tapeHead + tapeCount - 1 - i) & TAPE_MASK;
+            final int index = (tapeHead + tapeCount - 1 - i) & tapeMask;
             visitor.accept(tape[index]);
         }
     }
 
     private void evictTerminal(final UserHistory user) {
-        while (user.placementOrder.size() > MAX_ORDERS_PER_USER) {
+        while (user.placementOrder.size() > maxOrdersPerUser) {
             boolean evicted = false;
             for (int i = 0; i < user.placementOrder.size(); i++) {
                 final OrderRecord record = user.placementOrder.get(i);

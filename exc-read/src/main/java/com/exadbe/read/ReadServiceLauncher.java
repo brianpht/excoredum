@@ -3,8 +3,12 @@ package com.exadbe.read;
 import com.exadbe.config.CoreConfig;
 import com.exadbe.protocol.QueryStreams;
 import com.exadbe.read.config.ReadReplicaConfig;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Properties;
 import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
 
@@ -36,6 +40,9 @@ public final class ReadServiceLauncher {
         String host = "localhost";
         String queryChannel = QueryStreams.QUERY_REQUEST_CHANNEL;
         String checkpoint = null;
+        String coreConfigPath = null;
+        int maxOrdersPerUser = -1;
+        int maxMarketTrades = -1;
         for (final String arg : args) {
             final int eq = arg.indexOf('=');
             if (!arg.startsWith("--") || eq < 0) {
@@ -46,10 +53,14 @@ public final class ReadServiceLauncher {
                 case "--host" -> host = arg.substring(eq + 1);
                 case "--query" -> queryChannel = arg.substring(eq + 1);
                 case "--checkpoint" -> checkpoint = arg.substring(eq + 1);
+                case "--core-config" -> coreConfigPath = arg.substring(eq + 1);
+                case "--ledger-max-orders-per-user" -> maxOrdersPerUser = Integer.parseInt(arg.substring(eq + 1));
+                case "--ledger-max-market-trades" -> maxMarketTrades = Integer.parseInt(arg.substring(eq + 1));
                 default -> throw new IllegalArgumentException("unknown argument: " + arg);
             }
         }
 
+        final CoreConfig coreConfig = loadCoreConfig(coreConfigPath);
         final String[] channels = archiveControlChannels.split(",");
         final String aeronDir =
                 Files.createTempDirectory("exc-read-").resolve("driver").toString();
@@ -60,11 +71,17 @@ public final class ReadServiceLauncher {
         if (checkpoint != null && !checkpoint.isBlank()) {
             builder.checkpointFile(Path.of(checkpoint));
         }
+        if (maxOrdersPerUser > 0) {
+            builder.maxOrdersPerUser(maxOrdersPerUser);
+        }
+        if (maxMarketTrades > 0) {
+            builder.maxMarketTrades(maxMarketTrades);
+        }
         final ReadReplicaConfig config = builder.build();
 
         final IdleStrategy idle = new BackoffIdleStrategy();
         long pollFailures = 0L;
-        try (ExcReadReplica replica = new ExcReadReplica(config, CoreConfig.defaults());
+        try (ExcReadReplica replica = new ExcReadReplica(config, coreConfig);
                 QueryResponder responder = new QueryResponder(replica, config)) {
             System.out.println("exc-read replica following " + archiveControlChannels + ", serving queries on "
                     + config.queryRequestChannel() + " (Ctrl-C to stop)");
@@ -85,5 +102,23 @@ public final class ReadServiceLauncher {
                 }
             }
         }
+    }
+
+    /**
+     * Builds the core configuration: a {@code --core-config} properties file
+     * takes precedence, then {@code -Dexc.core.*} system properties, then the
+     * compiled defaults.
+     */
+    private static CoreConfig loadCoreConfig(final String coreConfigPath) {
+        if (coreConfigPath != null && !coreConfigPath.isBlank()) {
+            final Properties props = new Properties();
+            try (InputStream in = Files.newInputStream(Path.of(coreConfigPath))) {
+                props.load(in);
+            } catch (final IOException e) {
+                throw new UncheckedIOException("Failed to read core config: " + coreConfigPath, e);
+            }
+            return CoreConfig.fromProperties(props);
+        }
+        return CoreConfig.fromSystemProperties();
     }
 }

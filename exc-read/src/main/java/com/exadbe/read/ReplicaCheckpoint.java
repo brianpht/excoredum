@@ -109,10 +109,14 @@ public final class ReplicaCheckpoint {
      * Loads a checkpoint into {@code engine} (whose stores are replaced with the
      * checkpointed state) and returns the ledger and resume position.
      *
+     * @param maxOrdersPerUser per-user order-history cap for the rebuilt ledger
+     * @param maxMarketTrades market trade-tape cap for the rebuilt ledger
      * @throws IOException when the file is missing, corrupt, or fails the engine
      *     integrity check
      */
-    public static Data load(final Path file, final MatchingEngine engine) throws IOException {
+    public static Data load(
+            final Path file, final MatchingEngine engine, final int maxOrdersPerUser, final int maxMarketTrades)
+            throws IOException {
         try (DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(file)))) {
             if (in.readInt() != MAGIC) {
                 throw new IOException("not an excoredum replica checkpoint: " + file);
@@ -141,7 +145,7 @@ public final class ReplicaCheckpoint {
             final int ledgerLength = in.readInt();
             final byte[] ledgerBytes = new byte[ledgerLength];
             in.readFully(ledgerBytes);
-            final OrderLedger ledger = new OrderLedger();
+            final OrderLedger ledger = new OrderLedger(maxOrdersPerUser, maxMarketTrades);
             ledger.readFrom(new DataInputStream(new ByteArrayInputStream(ledgerBytes)));
             return new Data(logPosition, currentSource, ledger);
         }

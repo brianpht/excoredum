@@ -96,7 +96,24 @@ ansible-playbook playbooks/deploy.yml
 
 The nodes, read replica, and gateway start automatically via systemd. The load
 and verify units are installed but not started (they are one-shots run by the
-operator). Tune the benchmark in `deploy/aws/ansible/group_vars/all.yml`.
+operator). Tune the benchmark in `deploy/aws/ansible/group_vars/all.yml`:
+
+- `workload_ops` / `workload_users` / `workload_symbols` - command count, user
+  count, and symbol count for the `load` and `verify` runners (the write and
+  read sides must use the same values).
+- `workload_trade_limit` - the verifier's per-user trade-query limit (raise it
+  together with the read replica's ledger caps when fills per user exceed 4096).
+- `node_java_opts` / `read_java_opts` / `gateway_java_opts` / `load_java_opts`
+  / `verify_java_opts` - per-role JVM flags (heap + GC; the bin scripts default
+  to ZGC with a pinned heap when left empty).
+- `aeron_term_length` - the cluster ingress term length (default `64k`; raise it
+  to `1m` / `8m` for high-rate runs).
+- `ledger_max_orders_per_user` / `ledger_max_market_trades` - the read replica's
+  read-side ledger caps (defaults 4096 / 65536).
+
+The `EXC_CORE_*` engine capacities (symbol / account / order-pool / journal,
+etc.) can also be added to `nodes.yml` / `read.yml` `service_env` when a run
+needs to raise them. See [SCALING.md](SCALING.md) for sizing guidance.
 
 ## 5. Run the load test and verify
 

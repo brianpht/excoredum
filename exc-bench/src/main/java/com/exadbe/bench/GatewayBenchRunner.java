@@ -45,7 +45,7 @@ public final class GatewayBenchRunner {
     private static final int BASE = LoadWorkload.BASE_CURRENCY;
     private static final int QUOTE = LoadWorkload.QUOTE_CURRENCY;
     private static final long PRICE = LoadWorkload.PRICE;
-    private static final int TRADE_LIMIT = 4096;
+    private static final int DEFAULT_TRADE_LIMIT = 4096;
     private static final int MAX_LEVELS = 32;
     private static final long SETTLE_TIMEOUT_MS = 3 * 60_000L;
     private static final long SETTLE_POLL_MS = 1_000L;
@@ -60,17 +60,24 @@ public final class GatewayBenchRunner {
     private final int users;
     private final long adminUid;
     private final String apiKey;
+    private final int tradeLimit;
     private final LoadWorkload workload;
 
     private long loadElapsedNanos;
 
     private GatewayBenchRunner(
-            final String baseUrl, final int ops, final int users, final long adminUid, final String apiKey) {
+            final String baseUrl,
+            final int ops,
+            final int users,
+            final long adminUid,
+            final String apiKey,
+            final int tradeLimit) {
         this.baseUrl = baseUrl;
         this.ops = ops;
         this.users = users;
         this.adminUid = adminUid;
         this.apiKey = (apiKey == null || apiKey.isBlank()) ? null : apiKey;
+        this.tradeLimit = tradeLimit;
         this.workload = new LoadWorkload(ops, users);
     }
 
@@ -80,6 +87,7 @@ public final class GatewayBenchRunner {
         int users = 100;
         long adminUid = 811L;
         String apiKey = null;
+        int tradeLimit = DEFAULT_TRADE_LIMIT;
         for (final String arg : args) {
             final int eq = arg.indexOf('=');
             if (!arg.startsWith("--") || eq < 0) {
@@ -91,10 +99,11 @@ public final class GatewayBenchRunner {
                 case "--users" -> users = Integer.parseInt(arg.substring(eq + 1));
                 case "--admin-uid" -> adminUid = Long.parseLong(arg.substring(eq + 1));
                 case "--api-key" -> apiKey = arg.substring(eq + 1);
+                case "--trade-limit" -> tradeLimit = Integer.parseInt(arg.substring(eq + 1));
                 default -> throw new IllegalArgumentException("unknown argument: " + arg.substring(0, eq));
             }
         }
-        final GatewayBenchRunner runner = new GatewayBenchRunner(baseUrl, ops, users, adminUid, apiKey);
+        final GatewayBenchRunner runner = new GatewayBenchRunner(baseUrl, ops, users, adminUid, apiKey, tradeLimit);
         System.exit(runner.run() ? 0 : 1);
     }
 
@@ -307,7 +316,7 @@ public final class GatewayBenchRunner {
             failures.add("user " + uid + " active orders " + active.size() + " != expected " + expected.size());
         }
 
-        final JsonNode trades = get("/api/v1/users/" + uid + "/trades?limit=" + TRADE_LIMIT);
+        final JsonNode trades = get("/api/v1/users/" + uid + "/trades?limit=" + tradeLimit);
         if (trades.size() != workload.fills(uid)) {
             failures.add("user " + uid + " trade tape " + trades.size() + " != expected fills " + workload.fills(uid));
         } else {
@@ -421,7 +430,7 @@ public final class GatewayBenchRunner {
     }
 
     private void checkMarketTrades(final List<String> failures) {
-        final JsonNode trades = get("/api/v1/markettrades?symbolId=" + SYMBOL + "&limit=" + TRADE_LIMIT);
+        final JsonNode trades = get("/api/v1/markettrades?symbolId=" + SYMBOL + "&limit=" + tradeLimit);
         if (trades.size() == 0 && workload.trades() != 0L) {
             failures.add("market tape empty but " + workload.trades() + " trades expected");
             return;

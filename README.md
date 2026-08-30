@@ -100,6 +100,29 @@ write load + read verify; exit 0 = all checks passed):
 docker compose -f docker/docker-compose.yml up --build
 ```
 
+Multi-symbol (and other workload knobs) via env vars, e.g. `EXC_SYMBOLS=4`
+(see [Configuration](#configuration)).
+
+## Configuration
+
+Engine and ledger capacities are read at launch, not hardcoded, so a deployment
+can be sized without a rebuild:
+
+- `CoreConfig` capacities via `exc.core.*` properties (`ClusterLauncher`
+  `--config=<file>`, `ReadServiceLauncher` `--core-config=<file>`) or
+  `-Dexc.core.*` system properties.
+- Aeron ingress term length via `exc.aeron.termLength` (default `64k`).
+- Read-side ledger caps via `--ledger-max-orders-per-user` /
+  `--ledger-max-market-trades` (defaults 4096 / 65536) and the verifiers'
+  `--trade-limit` (default 4096).
+- Workload shape via `--ops` / `--users` / `--symbols` on the bench runners, or
+  `EXC_OPS` / `EXC_USERS` / `EXC_SYMBOLS` in the containerized / Ansible
+  deployments.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#configuration) for the full
+capacity table and [deploy/aws/SCALING.md](deploy/aws/SCALING.md) for sizing
+guidance.
+
 ## Performance
 
 Indicative JMH numbers on x86_64 Linux, JDK 21 (steady state, zero allocation):

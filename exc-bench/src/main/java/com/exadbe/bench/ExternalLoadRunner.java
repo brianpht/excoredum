@@ -38,7 +38,6 @@ public final class ExternalLoadRunner {
     private static final long CONNECT_TIMEOUT_MS = 5 * 60_000L;
     private static final long SETUP_TIMEOUT_MS = 60_000L;
     private static final long CONNECT_RETRY_MS = 2_000L;
-    private static final int SYMBOL = LoadWorkload.SYMBOL;
     private static final int BASE = LoadWorkload.BASE_CURRENCY;
     private static final int QUOTE = LoadWorkload.QUOTE_CURRENCY;
 
@@ -49,6 +48,7 @@ public final class ExternalLoadRunner {
         String egress = "aeron:udp?endpoint=localhost:0";
         int ops = 100_000;
         int users = 100;
+        int symbols = 1;
         long clientId = 1L;
         for (final String arg : args) {
             final int eq = arg.indexOf('=');
@@ -60,12 +60,13 @@ public final class ExternalLoadRunner {
                 case "--egress" -> egress = arg.substring(eq + 1);
                 case "--ops" -> ops = Integer.parseInt(arg.substring(eq + 1));
                 case "--users" -> users = Integer.parseInt(arg.substring(eq + 1));
+                case "--symbols" -> symbols = Integer.parseInt(arg.substring(eq + 1));
                 case "--client-id" -> clientId = Long.parseLong(arg.substring(eq + 1));
                 default -> throw new IllegalArgumentException("unknown argument: " + arg);
             }
         }
 
-        final LoadWorkload workload = new LoadWorkload(ops, users);
+        final LoadWorkload workload = new LoadWorkload(ops, users, symbols);
         final boolean ok = run(workload, endpoints, egress, clientId);
         System.exit(ok ? 0 : 1);
     }
@@ -177,7 +178,9 @@ public final class ExternalLoadRunner {
     }
 
     private static void setup(final ExcClient client, final LoadWorkload workload, final long[] lastIdLo) {
-        await(client, client.addSymbol(SYMBOL, BASE, QUOTE, 1L, 1L), lastIdLo);
+        for (int symbolId = 1; symbolId <= workload.symbols(); symbolId++) {
+            await(client, client.addSymbol(symbolId, BASE, QUOTE, 1L, 1L), lastIdLo);
+        }
         for (long uid = 1L; uid <= workload.users(); uid++) {
             await(client, client.addUser(uid), lastIdLo);
             await(client, client.adjustBalance(uid, BASE, LoadWorkload.BASE_FUNDING_PER_USER), lastIdLo);
@@ -190,17 +193,17 @@ public final class ExternalLoadRunner {
             try {
                 return switch (command.type()) {
                     case PLACE -> client.placeGtc(
-                            SYMBOL,
+                            command.symbolId(),
                             command.orderId(),
                             command.ask(),
-                            LoadWorkload.PRICE,
+                            LoadWorkload.price(command.symbolId()),
                             1L,
                             command.reserveBidPrice(),
                             command.uid(),
                             0);
-                    case CANCEL -> client.cancelOrder(SYMBOL, command.orderId(), command.uid());
-                    case REDUCE -> client.reduceOrder(SYMBOL, command.orderId(), 1L, command.uid());
-                    case ORDER_BOOK -> client.requestOrderBook(SYMBOL, command.uid());
+                    case CANCEL -> client.cancelOrder(command.symbolId(), command.orderId(), command.uid());
+                    case REDUCE -> client.reduceOrder(command.symbolId(), command.orderId(), 1L, command.uid());
+                    case ORDER_BOOK -> client.requestOrderBook(command.symbolId(), command.uid());
                 };
             } catch (final BackpressureException e) {
                 client.poll();

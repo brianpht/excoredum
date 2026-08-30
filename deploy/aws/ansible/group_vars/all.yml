@@ -10,7 +10,24 @@ metrics_interval_ms: "5000"
 
 workload_ops: "100000"
 workload_users: "100"
+workload_symbols: "1"
+workload_trade_limit: "4096"
 load_client_id: "1"
+
+# Tuning knobs for the JVM and the engine / ledger capacities. An empty value
+# means "use the compiled-in default" (the bin scripts fall back when the env
+# var is empty or unset). The EXC_CORE_* engine capacities follow the same
+# convention (e.g. EXC_CORE_SYMBOL_CAPACITY, EXC_CORE_ORDER_POOL_CAPACITY,
+# EXC_CORE_JOURNAL_SLOT_COUNT); add them to nodes.yml / read.yml service_env
+# when a run needs to raise them.
+node_java_opts: ""
+read_java_opts: ""
+gateway_java_opts: ""
+load_java_opts: ""
+verify_java_opts: ""
+aeron_term_length: ""
+ledger_max_orders_per_user: ""
+ledger_max_market_trades: ""
 
 gateway_symbols: "1|BTC/USDT|10|20|1|1|0|0"
 gateway_currencies: "10|BTC|1,20|USDT|1"

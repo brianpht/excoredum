@@ -7,3 +7,6 @@ service_env:
   EXC_ARCHIVE: "{{ archive_channels }}"
   EXC_HOST: "{{ host }}"
   EXC_QUERY: "{{ query_channel }}"
+  EXC_JAVA_OPTS: "{{ read_java_opts }}"
+  EXC_LEDGER_MAX_ORDERS_PER_USER: "{{ ledger_max_orders_per_user }}"
+  EXC_LEDGER_MAX_MARKET_TRADES: "{{ ledger_max_market_trades }}"

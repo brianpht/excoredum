@@ -26,29 +26,38 @@ class LoadWorkloadEngineParityTest {
 
     @Test
     void simulatedBookMatchesEngineForEveryCommand() {
-        final int ops = 100_000;
-        final int users = 100;
-        final LoadWorkload workload = new LoadWorkload(ops, users);
+        runParityCheck(100_000, 100, 1);
+    }
+
+    @Test
+    void multiSymbolBookMatchesEngineForEveryCommand() {
+        runParityCheck(20_000, 50, 4);
+    }
+
+    private static void runParityCheck(final int ops, final int users, final int symbols) {
+        final LoadWorkload workload = new LoadWorkload(ops, users, symbols);
         final MatchingEngine engine = new MatchingEngine(CoreConfig.defaults(), new CoreMetrics());
         final CommandOutcome outcome = new CommandOutcome();
         final Commands commands = new Commands();
         long clientSeq = 0L;
         long commandId = 0L;
 
-        // Setup mirrors the load runner: one symbol with zero fees, then users
-        // with the workload's funding.
-        engine.process(
-                commands.addSymbol(
-                        1L,
-                        clientSeq++,
-                        commandId++,
-                        LoadWorkload.SYMBOL,
-                        LoadWorkload.BASE_CURRENCY,
-                        LoadWorkload.QUOTE_CURRENCY,
-                        1L,
-                        1L),
-                1_000L,
-                outcome);
+        // Setup mirrors the load runner: one symbol per workload symbol with zero
+        // fees and shared base/quote currencies, then users with the funding.
+        for (int symbolId = 1; symbolId <= symbols; symbolId++) {
+            engine.process(
+                    commands.addSymbol(
+                            1L,
+                            clientSeq++,
+                            commandId++,
+                            symbolId,
+                            LoadWorkload.BASE_CURRENCY,
+                            LoadWorkload.QUOTE_CURRENCY,
+                            1L,
+                            1L),
+                    1_000L,
+                    outcome);
+        }
         for (long uid = 1L; uid <= users; uid++) {
             engine.process(commands.addUser(1L, clientSeq++, commandId++, uid), 1_000L, outcome);
             engine.process(
@@ -94,24 +103,24 @@ class LoadWorkloadEngineParityTest {
                     1L,
                     clientSeq,
                     commandId,
-                    LoadWorkload.SYMBOL,
+                    command.symbolId(),
                     command.orderId(),
                     command.ask(),
-                    LoadWorkload.PRICE,
+                    LoadWorkload.price(command.symbolId()),
                     1L,
                     command.reserveBidPrice(),
                     command.uid());
             case CANCEL -> commands.cancel(
-                    1L, clientSeq, commandId, LoadWorkload.SYMBOL, command.orderId(), command.uid());
+                    1L, clientSeq, commandId, command.symbolId(), command.orderId(), command.uid());
             case REDUCE -> commands.reduce(
-                    1L, clientSeq, commandId, LoadWorkload.SYMBOL, command.orderId(), 1L, command.uid());
-            case ORDER_BOOK -> commands.orderBookRequest(1L, clientSeq, commandId, LoadWorkload.SYMBOL, command.uid());
+                    1L, clientSeq, commandId, command.symbolId(), command.orderId(), 1L, command.uid());
+            case ORDER_BOOK -> commands.orderBookRequest(1L, clientSeq, commandId, command.symbolId(), command.uid());
         };
     }
 
     private static void assertBooksMatch(
             final MatchingEngine engine, final LoadWorkload workload, final int i, final LoadWorkload.Command command) {
-        final OrderBookNaive book = engine.book(LoadWorkload.SYMBOL);
+        final OrderBookNaive book = engine.book(command.symbolId());
         final List<BookEntry> engineAsks = new ArrayList<>();
         final List<BookEntry> engineBids = new ArrayList<>();
         book.forEachOrderSorted((orderId, ask, price, size, filled, reserveBidPrice, uid, timestamp) -> {
@@ -119,11 +128,11 @@ class LoadWorkloadEngineParityTest {
         });
 
         final List<BookEntry> simAsks = new ArrayList<>();
-        for (final LoadWorkload.Resting resting : workload.restingAsks()) {
+        for (final LoadWorkload.Resting resting : workload.restingAsks(command.symbolId())) {
             simAsks.add(new BookEntry(resting.orderId(), resting.uid()));
         }
         final List<BookEntry> simBids = new ArrayList<>();
-        for (final LoadWorkload.Resting resting : workload.restingBids()) {
+        for (final LoadWorkload.Resting resting : workload.restingBids(command.symbolId())) {
             simBids.add(new BookEntry(resting.orderId(), resting.uid()));
         }
 

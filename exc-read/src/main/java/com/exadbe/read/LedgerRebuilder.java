@@ -27,16 +27,21 @@ final class LedgerRebuilder implements AutoCloseable {
 
     private final CoreConfig coreConfig;
     private final String localHost;
-    private final OrderLedger ledger = new OrderLedger();
+    private final OrderLedger ledger;
     private MatchingEngine engine;
     private CommandOutcome outcome;
     private LiveLogSubscriber subscriber;
     private long targetPosition;
     private long lastPosition;
 
-    LedgerRebuilder(final CoreConfig coreConfig, final String localHost) {
+    LedgerRebuilder(
+            final CoreConfig coreConfig,
+            final String localHost,
+            final int maxOrdersPerUser,
+            final int maxMarketTrades) {
         this.coreConfig = coreConfig;
         this.localHost = localHost;
+        this.ledger = new OrderLedger(maxOrdersPerUser, maxMarketTrades);
     }
 
     /**

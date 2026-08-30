@@ -58,7 +58,7 @@ public final class ExcReadReplica implements AutoCloseable {
     private final ReportGenerator reports;
     private final ReplicationHealth health = new ReplicationHealth();
 
-    private OrderLedger ledger = new OrderLedger();
+    private OrderLedger ledger;
     private ReplicaCommandListener commandListener = ReplicaCommandListener.NONE;
     private LiveLogSubscriber liveLog;
     private AeronArchive archive;
@@ -84,6 +84,7 @@ public final class ExcReadReplica implements AutoCloseable {
         this.coreConfig = coreConfig;
         this.engine = new MatchingEngine(coreConfig, new CoreMetrics());
         this.outcome = new CommandOutcome(coreConfig.eventBufferCapacity());
+        this.ledger = new OrderLedger(config.maxOrdersPerUser(), config.maxMarketTrades());
         this.localHost = config.localHost();
         this.reports = new ReportGenerator(engine);
         this.archiveControlChannels = config.archiveControlChannels();
@@ -108,7 +109,8 @@ public final class ExcReadReplica implements AutoCloseable {
 
         if (config.checkpointFile() != null && Files.exists(config.checkpointFile())) {
             try {
-                final ReplicaCheckpoint.Data data = ReplicaCheckpoint.load(config.checkpointFile(), engine);
+                final ReplicaCheckpoint.Data data = ReplicaCheckpoint.load(
+                        config.checkpointFile(), engine, config.maxOrdersPerUser(), config.maxMarketTrades());
                 this.ledger = data.ledger();
                 this.appliedPosition = data.logPosition();
                 this.currentSource = data.currentSource() % archiveControlChannels.length;
@@ -118,7 +120,7 @@ public final class ExcReadReplica implements AutoCloseable {
                 // fall back to a cold start (the consensus log is replayed in
                 // full) and surface the failure through the health counters.
                 health.recordCheckpointFailure();
-                this.ledger = new OrderLedger();
+                this.ledger = new OrderLedger(config.maxOrdersPerUser(), config.maxMarketTrades());
                 this.appliedPosition = 0L;
                 this.lastCheckpointPosition = -1L;
             }
@@ -265,7 +267,8 @@ public final class ExcReadReplica implements AutoCloseable {
             return;
         }
         if (ledgerRebuilder == null) {
-            ledgerRebuilder = new LedgerRebuilder(coreConfig, localHost);
+            ledgerRebuilder =
+                    new LedgerRebuilder(coreConfig, localHost, config.maxOrdersPerUser(), config.maxMarketTrades());
             if (!ledgerRebuilder.start(archive, appliedPosition)) {
                 ledgerRebuilder.close();
                 ledgerRebuilder = null;

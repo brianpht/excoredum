@@ -1,6 +1,7 @@
 package com.exadbe.bench;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -12,35 +13,45 @@ import java.util.List;
  * exchanging data.
  *
  * <p>The simulation models the engine's price-time priority exactly: one price
- * level means pure FIFO per side, every order has size 1 (so fills are
- * all-or-nothing), and asks reserve base while bids reserve quote at the
- * fill price. Fees are zero (the symbol is registered with zero fees). Every
+ * level per symbol means pure FIFO per side, every order has size 1 (so fills
+ * are all-or-nothing), and asks reserve base while bids reserve quote at the
+ * fill price. Fees are zero (every symbol is registered with zero fees). Every
  * decided command succeeds: cancels and reduces only ever target orders the
  * simulation still holds as resting, and a cancel or reduce with an empty
  * target side falls back to placing a maker ask.
  *
- * <p>Ledger bounds: keep {@code places(uid) < 4096} and {@code fills(uid) <
- * 4096} per user or the read replica's per-user order history and trade tape
- * evict old records and count assertions fail. The default 100k ops over 100
- * users stay well inside those limits.
+ * <p>Multi-symbol mode shards the round-robin across {@code symbols} symbols,
+ * each with its own resting book and price. All symbols share the same base /
+ * quote currency pair, so per-user balances and conservation totals are
+ * unchanged from the single-symbol shape.
+ *
+ * <p>Ledger bounds: keep {@code places(uid) < maxOrdersPerUser} and
+ * {@code fills(uid) < tradeLimit} per user or the read replica's per-user order
+ * history and trade tape evict old records and count assertions fail. The
+ * default 100k ops over 100 users stay well inside those limits.
  */
 public final class LoadWorkload {
 
-    /** The single symbol exercised by the workload. */
+    /** The single symbol exercised by the single-symbol workload. */
     public static final int SYMBOL = 1;
-    /** Base currency of {@link #SYMBOL}. */
+    /** Base currency shared by every symbol. */
     public static final int BASE_CURRENCY = 10;
-    /** Quote currency of {@link #SYMBOL}. */
+    /** Quote currency shared by every symbol. */
     public static final int QUOTE_CURRENCY = 20;
-    /** The only price level at which every order is placed and filled. */
+    /** The price level of the single-symbol workload (symbol 1). */
     public static final long PRICE = 100L;
     /** Base funding every user receives in setup. */
     public static final long BASE_FUNDING_PER_USER = 1_000_000L;
     /** Quote funding every user receives in setup. */
     public static final long QUOTE_FUNDING_PER_USER = 1_000_000_000L;
 
+    /** The price level at which symbol {@code symbolId} is placed and filled. */
+    public static long price(final int symbolId) {
+        return PRICE + (symbolId - 1L);
+    }
+
     /** One resting order in the simulated book. */
-    public record Resting(long orderId, long uid, boolean ask, long price, long size) {}
+    public record Resting(int symbolId, long orderId, long uid, boolean ask, long price, long size) {}
 
     /** The concrete command the workload decides for one iteration. */
     public enum Type {
@@ -53,19 +64,21 @@ public final class LoadWorkload {
     /**
      * @param type the command kind; {@code PLACE} carries the acting user,
      *     {@code CANCEL}/{@code REDUCE} carry the resting order's owner and id
+     * @param symbolId the symbol this command targets
      * @param uid acting user for {@code PLACE}/{@code ORDER_BOOK}, order owner
      *     for {@code CANCEL}/{@code REDUCE}
      * @param orderId fresh id for {@code PLACE}, target id otherwise
      * @param ask ask side for {@code PLACE}
      * @param reserveBidPrice bid reserve for {@code PLACE} (0 for asks)
      */
-    public record Command(Type type, long uid, long orderId, boolean ask, long reserveBidPrice) {}
+    public record Command(Type type, int symbolId, long uid, long orderId, boolean ask, long reserveBidPrice) {}
 
     private final int ops;
     private final int users;
+    private final int symbols;
 
-    private final ArrayDeque<Resting> bids = new ArrayDeque<>();
-    private final ArrayDeque<Resting> asks = new ArrayDeque<>();
+    private final ArrayDeque<Resting>[] bidsBySymbol;
+    private final ArrayDeque<Resting>[] asksBySymbol;
     private final long[] baseFree;
     private final long[] quoteFree;
     private final int[] places;
@@ -81,8 +94,23 @@ public final class LoadWorkload {
      * @param users number of users (uid 1..users), cycled round-robin
      */
     public LoadWorkload(final int ops, final int users) {
+        this(ops, users, 1);
+    }
+
+    /**
+     * @param ops number of main-loop iterations (each yields one command)
+     * @param users number of users (uid 1..users), cycled round-robin
+     * @param symbols number of symbols (symbolId 1..symbols), sharded round-robin
+     */
+    public LoadWorkload(final int ops, final int users, final int symbols) {
+        if (symbols <= 0) {
+            throw new IllegalArgumentException("symbols must be positive, was: " + symbols);
+        }
         this.ops = ops;
         this.users = users;
+        this.symbols = symbols;
+        this.bidsBySymbol = newQueues(symbols);
+        this.asksBySymbol = newQueues(symbols);
         this.baseFree = new long[users + 1];
         this.quoteFree = new long[users + 1];
         this.places = new int[users + 1];
@@ -96,6 +124,15 @@ public final class LoadWorkload {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private static ArrayDeque<Resting>[] newQueues(final int symbols) {
+        final ArrayDeque<Resting>[] queues = (ArrayDeque<Resting>[]) new ArrayDeque<?>[symbols + 1];
+        for (int s = 1; s <= symbols; s++) {
+            queues[s] = new ArrayDeque<>();
+        }
+        return queues;
+    }
+
     /**
      * Decides the command for iteration {@code i} and applies it to the
      * simulated book. The caller submits the returned command to the engine;
@@ -103,103 +140,110 @@ public final class LoadWorkload {
      */
     public Command next(final int i) {
         final int u = 1 + (i % users);
+        final int s = 1 + (i % symbols);
         switch (i % 8) {
             case 0, 1, 2 -> {
-                return placeBid(u);
+                return placeBid(s, u);
             }
             case 3 -> {
-                return placeAsk(u);
+                return placeAsk(s, u);
             }
             case 4 -> {
+                final ArrayDeque<Resting> asks = asksBySymbol[s];
                 if (!asks.isEmpty()) {
-                    return cancelHead(asks);
+                    return cancelHead(s, asks);
                 }
+                final ArrayDeque<Resting> bids = bidsBySymbol[s];
                 if (!bids.isEmpty()) {
-                    return cancelHead(bids);
+                    return cancelHead(s, bids);
                 }
-                return placeAsk(u);
+                return placeAsk(s, u);
             }
             case 5 -> {
-                if (!asks.isEmpty()) {
-                    return reduceHeadAsk();
+                if (!asksBySymbol[s].isEmpty()) {
+                    return reduceHeadAsk(s);
                 }
-                return placeAsk(u);
+                return placeAsk(s, u);
             }
             case 6 -> {
-                return orderBookRequest(u);
+                return orderBookRequest(s, u);
             }
             default -> {
-                return placeAsk(u);
+                return placeAsk(s, u);
             }
         }
     }
 
-    private Command placeBid(final int u) {
+    private Command placeBid(final int symbolId, final int u) {
         final long orderId = orderIdCounter++;
+        final long price = price(symbolId);
         places[u]++;
-        quoteFree[u] -= PRICE;
+        quoteFree[u] -= price;
+        final ArrayDeque<Resting> asks = asksBySymbol[symbolId];
         if (!asks.isEmpty()) {
             final Resting maker = asks.pollFirst();
-            fillAgainstAsk(u, maker.uid);
+            fillAgainstAsk(u, maker.uid, price);
         } else {
-            bids.addLast(new Resting(orderId, u, false, PRICE, 1L));
+            bidsBySymbol[symbolId].addLast(new Resting(symbolId, orderId, u, false, price, 1L));
         }
-        return new Command(Type.PLACE, u, orderId, false, PRICE);
+        return new Command(Type.PLACE, symbolId, u, orderId, false, price);
     }
 
-    private Command placeAsk(final int u) {
+    private Command placeAsk(final int symbolId, final int u) {
         final long orderId = orderIdCounter++;
+        final long price = price(symbolId);
         places[u]++;
         baseFree[u] -= 1L;
+        final ArrayDeque<Resting> bids = bidsBySymbol[symbolId];
         if (!bids.isEmpty()) {
             final Resting maker = bids.pollFirst();
-            fillAgainstBid(u, maker.uid);
+            fillAgainstBid(u, maker.uid, price);
         } else {
-            asks.addLast(new Resting(orderId, u, true, PRICE, 1L));
+            asksBySymbol[symbolId].addLast(new Resting(symbolId, orderId, u, true, price, 1L));
         }
-        return new Command(Type.PLACE, u, orderId, true, 0L);
+        return new Command(Type.PLACE, symbolId, u, orderId, true, 0L);
     }
 
-    private Command cancelHead(final ArrayDeque<Resting> queue) {
+    private Command cancelHead(final int symbolId, final ArrayDeque<Resting> queue) {
         final Resting target = queue.pollFirst();
         cancels++;
         release(target);
-        return new Command(Type.CANCEL, target.uid, target.orderId, target.ask, 0L);
+        return new Command(Type.CANCEL, symbolId, target.uid, target.orderId, target.ask, 0L);
     }
 
-    private Command reduceHeadAsk() {
-        final Resting target = asks.pollFirst();
+    private Command reduceHeadAsk(final int symbolId) {
+        final Resting target = asksBySymbol[symbolId].pollFirst();
         reduces++;
         release(target);
-        return new Command(Type.REDUCE, target.uid, target.orderId, true, 0L);
+        return new Command(Type.REDUCE, symbolId, target.uid, target.orderId, true, 0L);
     }
 
-    private Command orderBookRequest(final int u) {
+    private Command orderBookRequest(final int symbolId, final int u) {
         orderBookRequests++;
-        return new Command(Type.ORDER_BOOK, u, 0L, false, 0L);
+        return new Command(Type.ORDER_BOOK, symbolId, u, 0L, false, 0L);
     }
 
-    private void fillAgainstAsk(final int bidder, final long askerUid) {
+    private void fillAgainstAsk(final int bidder, final long askerUid, final long price) {
         trades++;
         fills[bidder]++;
         fills[(int) askerUid]++;
         baseFree[bidder] += 1L;
-        quoteFree[(int) askerUid] += PRICE;
+        quoteFree[(int) askerUid] += price;
     }
 
-    private void fillAgainstBid(final int asker, final long bidderUid) {
+    private void fillAgainstBid(final int asker, final long bidderUid, final long price) {
         trades++;
         fills[asker]++;
         fills[(int) bidderUid]++;
         baseFree[(int) bidderUid] += 1L;
-        quoteFree[asker] += PRICE;
+        quoteFree[asker] += price;
     }
 
     private void release(final Resting resting) {
         if (resting.ask) {
             baseFree[(int) resting.uid] += 1L;
         } else {
-            quoteFree[(int) resting.uid] += PRICE;
+            quoteFree[(int) resting.uid] += resting.price;
         }
     }
 
@@ -209,6 +253,10 @@ public final class LoadWorkload {
 
     public int users() {
         return users;
+    }
+
+    public int symbols() {
+        return symbols;
     }
 
     /** Expected total fills (trades) after the full workload. */
@@ -257,13 +305,31 @@ public final class LoadWorkload {
         return total;
     }
 
-    /** Expected resting asks after the full workload, oldest first. */
-    public List<Resting> restingAsks() {
-        return List.copyOf(asks);
+    /** Expected resting asks of one symbol, oldest first. */
+    public List<Resting> restingAsks(final int symbolId) {
+        return List.copyOf(asksBySymbol[symbolId]);
     }
 
-    /** Expected resting bids after the full workload, oldest first. */
+    /** Expected resting bids of one symbol, oldest first. */
+    public List<Resting> restingBids(final int symbolId) {
+        return List.copyOf(bidsBySymbol[symbolId]);
+    }
+
+    /** Expected resting asks across all symbols, ascending symbolId then oldest first. */
+    public List<Resting> restingAsks() {
+        return mergeResting(asksBySymbol);
+    }
+
+    /** Expected resting bids across all symbols, ascending symbolId then oldest first. */
     public List<Resting> restingBids() {
-        return List.copyOf(bids);
+        return mergeResting(bidsBySymbol);
+    }
+
+    private static List<Resting> mergeResting(final ArrayDeque<Resting>[] bySymbol) {
+        final List<Resting> merged = new ArrayList<>();
+        for (int s = 1; s < bySymbol.length; s++) {
+            merged.addAll(bySymbol[s]);
+        }
+        return List.copyOf(merged);
     }
 }

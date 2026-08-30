@@ -470,8 +470,8 @@ not just one client session - with placement fields (price, size, order type,
 REJECTED), per-fill deals with counterparty, and leader-assigned timestamps.
 `userTrades(uid, limit)` and `marketTrades(symbolId, limit)` query the bounded
 global trade tape. The ledger is deliberately bounded: each user keeps at most
-`OrderLedger.MAX_ORDERS_PER_USER` records (oldest terminal records are evicted)
-and the tape holds at most `OrderLedger.MAX_MARKET_TRADES` trades. Re-delivered
+`OrderLedger.DEFAULT_MAX_ORDERS_PER_USER` records (oldest terminal records are evicted)
+and the tape holds at most `OrderLedger.DEFAULT_MAX_MARKET_TRADES` trades. Re-delivered
 commands are skipped by reusing the engine's dedup decision (outcome
 `DUPLICATE`), and a replicated RESET clears the ledger.
 
@@ -569,7 +569,8 @@ End-to-end load drivers (exempt from the core determinism rules):
   order that fully fills one unit against a deep resting maker, so the book
   stays bounded.
 - `LoadWorkload` - a deterministic synthetic workload plus an exact simulation
-  of the engine's single-price-level FIFO book. It is the shared expectation
+  of the engine's FIFO book (one price level per symbol; single- or
+  multi-symbol). It is the shared expectation
   model for the system tests: every decided command (place / cancel / reduce /
   order-book request) is applied to the simulation with the engine's exact
   reserve / settle / release semantics, so the simulation predicts the final
@@ -1069,7 +1070,20 @@ single node; tests use smaller values.
 | `journalSlotSize`     | 128     | Bytes per journal ring slot                 |
 | `l2MaxLevels`         | 32      | Max L2 depth returned per side              |
 
-`ClusterConfig` provides node id, cluster members, directories, and channels; the
+Overrides are read at launch rather than hardcoded. `CoreConfig.fromProperties`
+maps `exc.core.*` properties (the same keys as the table, e.g.
+`exc.core.symbolCapacity`) and `CoreConfig.fromSystemProperties()` reads
+`-Dexc.core.*`; missing or blank keys fall back to the defaults above.
+`ClusterLauncher` loads both the cluster and core config from its `--config`
+properties file, while `ReadServiceLauncher` accepts `--core-config=<file>`
+(falling back to `-Dexc.core.*`). The read replica's read-side ledger caps are
+likewise configurable via `ReadReplicaConfig.maxOrdersPerUser` /
+`maxMarketTrades` (`--ledger-max-orders-per-user` /
+`--ledger-max-market-trades`), defaulting to 4096 and 65536.
+
+`ClusterConfig` provides node id, cluster members, directories, and channels,
+including an ingress term length (`exc.aeron.termLength`, default `64k`) that a
+high-rate deployment can raise to reduce flow-control stalls. The
 JVM must run with `--add-opens java.base/jdk.internal.misc=ALL-UNNAMED` and
 `--add-opens java.base/sun.nio.ch=ALL-UNNAMED` for Aeron / Agrona.
 
@@ -1200,13 +1214,16 @@ assumptions leak across containers.
 ### Deterministic workload and verification
 
 `LoadWorkload` is a deterministic generator plus an exact simulation of the
-engine's single-price-level FIFO book (one symbol, price 100, size-1 orders,
-zero fees; bids reserve quote, asks reserve base, exactly as
-`DirectExchangeRisk` does). Its 100k-command mix is places (5 of 8 slots,
-62.5%), cancels (12.5%), reduces (12.5%), and order-book requests (12.5%) over
-100 users, round-robin; a cancel or reduce with an empty target side falls back
-to a place so every command is valid (which pushes the realized place share
-above 62.5%, state-dependently).
+engine's FIFO book: every symbol is a single price level (symbol `s` trades at
+price `100 + (s - 1)`, size-1 orders, zero fees; bids reserve quote, asks
+reserve base, exactly as `DirectExchangeRisk` does). The single-symbol default
+(symbol 1, price 100) remains; a multi-symbol run shards the round-robin across
+`symbols` symbols that share one base / quote currency pair, so per-user
+balances and conservation totals are unchanged. Its 100k-command mix is places
+(5 of 8 slots, 62.5%), cancels (12.5%), reduces (12.5%), and order-book
+requests (12.5%) over 100 users, round-robin; a cancel or reduce with an empty
+target side falls back to a place so every command is valid (which pushes the
+realized place share above 62.5%, state-dependently).
 
 - `load` (write side): every one of the 100,301 commands (301 setup + 100k
   main) must be acknowledged `SUCCESS` with nothing expired, and the fills
@@ -1235,9 +1252,11 @@ docker compose -f docker/docker-compose.yml logs load verify
 docker compose -f docker/docker-compose.yml down -v      # teardown
 ```
 
-Scale with `EXC_OPS` / `EXC_USERS` on the `load` and `verify` services, keeping
-places and fills per user below 4096 (the read replica's per-user ledger and
-trade-tape bounds).
+Scale with `EXC_OPS` / `EXC_USERS` / `EXC_SYMBOLS` on the `load` and `verify`
+services, keeping places and fills per user below the read replica's per-user
+ledger and trade-tape caps (`--trade-limit`, default 4096, and
+`--ledger-max-orders-per-user` / `--ledger-max-market-trades`, defaults 4096 /
+65536). See `deploy/aws/SCALING.md` for sizing guidance.
 
 ---
 

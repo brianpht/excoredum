@@ -18,13 +18,14 @@ single-JVM engine-vs-exchange-core comparison and is covered at the end.
 | Commands (read verify) | `workload_ops` | `--ops` | - |
 | Users | `workload_users` | `--users` | - |
 | Parallel load generators | `load_client_id` | `--client-id` | - |
-| Symbols | (hardcoded, see below) | (hardcoded) | - |
+| Symbols | `workload_symbols` | `--symbols` | - |
 | Node instance type | - | - | `node_instance_type` |
 | App instance type | - | - | `app_instance_type` |
 | Cluster node count | - | - | `cluster_node_count` (3 or 5) |
 
-`workload_ops` and `workload_users` feed `EXC_OPS` / `EXC_USERS` in
-`deploy/aws/ansible/group_vars/load.yml` and `verify.yml`, which the bin
+`workload_ops`, `workload_users`, and `workload_symbols` feed `EXC_OPS` /
+`EXC_USERS` / `EXC_SYMBOLS` in `deploy/aws/ansible/group_vars/load.yml` and
+`verify.yml` (plus `workload_trade_limit` to `EXC_TRADE_LIMIT`), which the bin
 entrypoints (`deploy/aws/bin/load.sh`, `verify.sh`) pass to the runners.
 
 ## Current state and hard limits
@@ -34,31 +35,38 @@ come from the read replica's `OrderLedger`
 (`exc-read/.../read/order/OrderLedger.java`) and the runners' query limits, not
 from the matching engine.
 
-1. **Per-user order history**: `OrderLedger.MAX_ORDERS_PER_USER = 4096`.
+1. **Per-user order history**: `OrderLedger.DEFAULT_MAX_ORDERS_PER_USER = 4096`
+   (configurable via `ReadReplicaConfig.maxOrdersPerUser` /
+   `--ledger-max-orders-per-user`).
    Oldest terminal records are evicted past this. The `LoadWorkload` simulation
    asserts `places(uid)` equals the replica's `orderHistory(uid).size()`, so
    `places(uid) < 4096` must hold for every user.
 
-2. **Per-user trade query**: `ReadVerifyRunner.TRADE_LIMIT = 4096` (also
-   `GatewayBenchRunner.TRADE_LIMIT`). The verifier asserts
-   `userTrades(uid, 4096).size() == fills(uid)`, so `fills(uid) < 4096` must
-   hold for every user.
+2. **Per-user trade query**: `ReadVerifyRunner` / `GatewayBenchRunner`
+   `--trade-limit` (default 4096). The verifier asserts
+   `userTrades(uid, tradeLimit).size() == fills(uid)`, so `fills(uid) <
+   tradeLimit` must hold for every user.
 
-3. **Global market trade tape**: `OrderLedger.MAX_MARKET_TRADES = 65536` (a
-   ring; oldest trades are overwritten). If the workload produces more than
+3. **Global market trade tape**: `OrderLedger.DEFAULT_MAX_MARKET_TRADES = 65536`
+   (configurable via `ReadReplicaConfig.maxMarketTrades` /
+   `--ledger-max-market-trades`; a
+   ring, oldest trades are overwritten). If the workload produces more than
    65536 total trades, early trades are evicted and the read-side `fills`
    count assertions fail for the affected users.
 
-`LoadWorkload` (`exc-bench/.../bench/LoadWorkload.java`) is single-symbol
-(`SYMBOL = 1`), single price level (`PRICE = 100`), size-1 orders, and cycles
-users round-robin (`uid = 1 + (i % users)`). Each iteration is at most one
+`LoadWorkload` (`exc-bench/.../bench/LoadWorkload.java`) supports one or many
+symbols (`--symbols`, default `1`), a single price level per symbol
+(`price(s) = 100 + (s - 1)`, so the single-symbol default is `PRICE = 100`),
+size-1 orders, and cycles users round-robin (`uid = 1 + (i % users)`), sharding
+symbols round-robin (`s = 1 + (i % symbols)`). All symbols share one base /
+quote currency pair. Each iteration is at most one
 place for the acting user, so `places(uid) <= ops / users`. Each fill involves
 two users (taker and maker), so `fills(uid) <= 2 * places(uid)`.
 
-The engine-side capacities come from `CoreConfig.defaults()`
-(`exc-core/.../config/CoreConfig.java`), which is hardcoded in both
-`ClusterLauncher` and `ReadServiceLauncher` (there is currently no properties
-or env override):
+The engine-side capacities come from `CoreConfig` (defaults below)
+(`exc-core/.../config/CoreConfig.java`), overridable at launch via `exc.core.*`
+properties (`ClusterLauncher --config`, `ReadServiceLauncher --core-config`)
+or `-Dexc.core.*` system properties:
 
 | Capacity | Default | Meaning |
 |----------|---------|---------|
@@ -84,7 +92,7 @@ latency-bound, not a throughput ceiling. To raise the command count:
 - Keep total trades under 65536 for read-side verification. Total trades are
   roughly a third of `ops` for this workload, so read-side verification starts
   breaking around the low hundreds of thousands of ops. Past that, either raise
-  `MAX_ORDERS_PER_USER` / `TRADE_LIMIT` / `MAX_MARKET_TRADES`, or run the
+  `maxOrdersPerUser` / `tradeLimit` / `maxMarketTrades`, or run the
   write-side load only (skip `run-verify.yml`) to measure raw throughput.
 - For a throughput ceiling rather than a latency number, run several load
   generators concurrently, each with a distinct `load_client_id` (already
@@ -96,7 +104,7 @@ Minimum users for a target op count (read-side verification enabled):
 |-----|--------------------------|-------|
 | 100000 | 50 | current default is 100 |
 | 500000 | 250 | near the global-tape ceiling for read verify |
-| 1000000 | 500 | read verify also needs `MAX_MARKET_TRADES` raised |
+| 1000000 | 500 | read verify also needs `maxMarketTrades` raised |
 | 3000000 | 1500 | exchange-core scale; read verify needs cap changes |
 
 ## Scaling users
@@ -113,18 +121,18 @@ Minimum users for a target op count (read-side verification enabled):
 
 ## Scaling symbols (tens to hundreds)
 
-This is the largest change. The deployed workload is single-symbol today, so
-multi-symbol support is a code change, not a config change.
+Multi-symbol support is implemented: `LoadWorkload`, `ExternalLoadRunner`, and
+`ReadVerifyRunner` take `--symbols` (default 1), shard the round-robin across
+symbols, and give each symbol its own resting book and price. Remaining work is
+sizing the engine/ledger caps and the single-symbol `GatewayBenchRunner`.
 
 - **Engine ceiling**: `symbolCapacity = 1024`, so tens to hundreds of symbols
   fit without raising it. Passing 1024 symbols (or needing more resting orders)
-  requires exposing `CoreConfig` overrides in `ClusterLauncher` and
-  `ReadServiceLauncher` (both currently call `CoreConfig.defaults()` directly).
-- **Workload**: `LoadWorkload` hardcodes `SYMBOL = 1`. Multi-symbol requires
-  parameterizing the symbol count, sharding the round-robin across symbols, and
-  giving each symbol its own resting book and price. `ExternalLoadRunner.setup`
-  must `addSymbol` for each symbol, and `ReadVerifyRunner` must verify each
-  symbol's L2 and the per-currency conservation totals.
+  requires a `CoreConfig` override (now exposed via `exc.core.*` in
+  `ClusterLauncher` / `ReadServiceLauncher`).
+- **Workload**: already parameterized (`--symbols`); `ExternalLoadRunner.setup`
+  registers every symbol, and `ReadVerifyRunner` verifies each symbol's L2 plus
+  the shared-currency conservation totals.
 - **Order pool**: resting orders are global across symbols
   (`orderPoolCapacity = 65536`). With N symbols each holding ~K resting orders,
   N * K must stay under 65536; a few hundred symbols at ~1000 resting orders
@@ -141,12 +149,12 @@ multi-symbol support is a code change, not a config change.
   8 GB), apps to `c6i.large` (2 vCPU / 4 GB). For a bigger run, raise nodes to
   `c6i.2xlarge` or `c6i.4xlarge`; the load generator is single-threaded and
   benefits from a higher-clock instance rather than more cores.
-- **JVM heap**: the bin entrypoints (`node.sh`, `load.sh`, `read.sh`,
-  `gateway.sh`) do not set `-Xmx`, so each JVM defaults to about a quarter of
-  RAM. Larger runs should pin `-Xms` / `-Xmx` in those scripts.
-- **Aeron term length**: `ClusterConfig` hardcodes `term-length=64k` in the
-  ingress channel. A larger term (1 MB / 8 MB) reduces flow-control stalls at
-  high rate.
+- **JVM heap**: the bin entrypoints (`node.sh`, `read.sh`, `gateway.sh`,
+  `load.sh`, `verify.sh`) pin `-Xms` / `-Xmx` with ZGC by default and accept an
+  `EXC_JAVA_OPTS` override, so larger runs tune the heap via the Ansible
+  `*_java_opts` vars instead of editing scripts.
+- **Aeron term length**: `ClusterConfig` reads `exc.aeron.termLength` (default
+  `64k`). A larger term (1 MB / 8 MB) reduces flow-control stalls at high rate.
 - **Journal ring**: `journalSlotCount = 65536` slots of 128 bytes. If the
   domain-event journal backs up at high throughput (the `journalBackpressure`
   metric climbs), raise the slot count or slot size via a `CoreConfig`
@@ -177,8 +185,7 @@ Two important caveats when comparing:
 
 ## Recommended target configurations
 
-For a multi-symbol deployed run (analysis only; the multi-symbol code change is
-out of scope here):
+For a multi-symbol deployed run:
 
 | Scale | symbols | users | ops | node type | notes |
 |-------|---------|-------|-----|-----------|-------|
@@ -186,7 +193,8 @@ out of scope here):
 | Medium | 64 | 2000 | 2000000 | `c6i.2xlarge` | needs `CoreConfig` order-pool bump and read-side cap changes |
 | Large | 256 | 5000 | 5000000 | `c6i.4xlarge` | needs symbol/order-pool overrides and read-side cap changes |
 
-Each step up requires, in order of cost: (1) multi-symbol `LoadWorkload` and
-verifier support, (2) `CoreConfig` overrides exposed through `ClusterLauncher`
-and `ReadServiceLauncher`, (3) explicit JVM heap and Aeron term-length tuning,
-and (4) larger instance types.
+The code-side prerequisites are done: (1) multi-symbol `LoadWorkload` and
+verifier support, (2) `CoreConfig` overrides through `ClusterLauncher` /
+`ReadServiceLauncher`, and (3) JVM heap and Aeron term-length tuning. Each step
+up then only needs (4) larger instance types plus the read-side cap and order
+pool / symbol overrides noted per scale.

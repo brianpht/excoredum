@@ -41,7 +41,7 @@ public final class ReadVerifyRunner {
     private static final long SETTLE_TIMEOUT_MS = 3 * 60_000L;
     private static final long SETTLE_POLL_MS = 1_000L;
     private static final int MAX_LEVELS = 32;
-    private static final int TRADE_LIMIT = 4096;
+    private static final int DEFAULT_TRADE_LIMIT = 4096;
 
     private ReadVerifyRunner() {}
 
@@ -50,6 +50,8 @@ public final class ReadVerifyRunner {
         String egress = "aeron:udp?endpoint=localhost:0";
         int ops = 100_000;
         int users = 100;
+        int symbols = 1;
+        int tradeLimit = DEFAULT_TRADE_LIMIT;
         for (final String arg : args) {
             final int eq = arg.indexOf('=');
             if (!arg.startsWith("--") || eq < 0) {
@@ -60,20 +62,28 @@ public final class ReadVerifyRunner {
                 case "--egress" -> egress = arg.substring(eq + 1);
                 case "--ops" -> ops = Integer.parseInt(arg.substring(eq + 1));
                 case "--users" -> users = Integer.parseInt(arg.substring(eq + 1));
+                case "--symbols" -> symbols = Integer.parseInt(arg.substring(eq + 1));
+                case "--trade-limit" -> tradeLimit = Integer.parseInt(arg.substring(eq + 1));
                 default -> throw new IllegalArgumentException("unknown argument: " + arg);
             }
         }
 
-        final LoadWorkload workload = new LoadWorkload(ops, users);
+        final LoadWorkload workload = new LoadWorkload(ops, users, symbols);
         for (int i = 0; i < workload.ops(); i++) {
             workload.next(i);
         }
-        final boolean ok = verify(workload, query, egress);
+        final boolean ok = verify(workload, query, egress, tradeLimit);
         System.exit(ok ? 0 : 1);
     }
 
     /** Queries the replica and returns whether the replicated state matches the simulation. */
     public static boolean verify(final LoadWorkload workload, final String query, final String egress) {
+        return verify(workload, query, egress, DEFAULT_TRADE_LIMIT);
+    }
+
+    /** Variant of {@link #verify} with an explicit per-user trade-query limit. */
+    public static boolean verify(
+            final LoadWorkload workload, final String query, final String egress, final int tradeLimit) {
         final ReadClientConfig config = ReadClientConfig.builder()
                 .requestChannel(query)
                 .responseChannel(egress)
@@ -86,7 +96,7 @@ public final class ReadVerifyRunner {
             awaitSettled(client, workload, failures);
 
             for (long uid = 1L; uid <= workload.users(); uid++) {
-                checkUser(client, workload, uid, failures);
+                checkUser(client, workload, uid, tradeLimit, failures);
             }
             checkL2(client, workload, failures);
             checkTotals(client, workload, failures);
@@ -126,7 +136,11 @@ public final class ReadVerifyRunner {
     }
 
     private static void checkUser(
-            final ReadClient client, final LoadWorkload workload, final long uid, final List<String> failures) {
+            final ReadClient client,
+            final LoadWorkload workload,
+            final long uid,
+            final int tradeLimit,
+            final List<String> failures) {
         final UserReport report = client.singleUserReport(uid);
         if (!report.exists()) {
             failures.add("user " + uid + " does not exist on the replica");
@@ -181,12 +195,14 @@ public final class ReadVerifyRunner {
                     "user " + uid + " order history " + history.size() + " != expected places " + workload.places(uid));
         }
 
-        final List<MarketTradeResult> trades = client.userTrades(uid, TRADE_LIMIT);
+        final List<MarketTradeResult> trades = client.userTrades(uid, tradeLimit);
         if (trades.size() != workload.fills(uid)) {
             failures.add("user " + uid + " trade tape " + trades.size() + " != expected fills " + workload.fills(uid));
         } else {
             for (final MarketTradeResult trade : trades) {
-                if (trade.price() != LoadWorkload.PRICE || trade.size() != 1L) {
+                if (trade.size() != 1L
+                        || trade.price() < LoadWorkload.PRICE
+                        || trade.price() >= LoadWorkload.PRICE + workload.symbols()) {
                     failures.add("user " + uid + " unexpected trade " + trade);
                     break;
                 }
@@ -195,18 +211,20 @@ public final class ReadVerifyRunner {
     }
 
     private static void checkL2(final ReadClient client, final LoadWorkload workload, final List<String> failures) {
-        final L2Snapshot snapshot = client.orderBook(LoadWorkload.SYMBOL, MAX_LEVELS);
-        if (!snapshot.found()) {
-            failures.add("L2 snapshot for symbol " + LoadWorkload.SYMBOL + " not found");
-            return;
-        }
-        final List<L2Snapshot.Level> expectedAsks = aggregate(workload.restingAsks());
-        final List<L2Snapshot.Level> expectedBids = aggregate(workload.restingBids());
-        if (!snapshot.asks().equals(expectedAsks)) {
-            failures.add("L2 asks " + snapshot.asks() + " != expected " + expectedAsks);
-        }
-        if (!snapshot.bids().equals(expectedBids)) {
-            failures.add("L2 bids " + snapshot.bids() + " != expected " + expectedBids);
+        for (int symbolId = 1; symbolId <= workload.symbols(); symbolId++) {
+            final L2Snapshot snapshot = client.orderBook(symbolId, MAX_LEVELS);
+            if (!snapshot.found()) {
+                failures.add("L2 snapshot for symbol " + symbolId + " not found");
+                continue;
+            }
+            final List<L2Snapshot.Level> expectedAsks = aggregate(workload.restingAsks(symbolId), symbolId);
+            final List<L2Snapshot.Level> expectedBids = aggregate(workload.restingBids(symbolId), symbolId);
+            if (!snapshot.asks().equals(expectedAsks)) {
+                failures.add("L2 asks for symbol " + symbolId + " " + snapshot.asks() + " != expected " + expectedAsks);
+            }
+            if (!snapshot.bids().equals(expectedBids)) {
+                failures.add("L2 bids for symbol " + symbolId + " " + snapshot.bids() + " != expected " + expectedBids);
+            }
         }
     }
 
@@ -234,7 +252,7 @@ public final class ReadVerifyRunner {
         failures.add("currency " + currency + " missing from conservation totals");
     }
 
-    private static List<L2Snapshot.Level> aggregate(final List<LoadWorkload.Resting> resting) {
+    private static List<L2Snapshot.Level> aggregate(final List<LoadWorkload.Resting> resting, final int symbolId) {
         if (resting.isEmpty()) {
             return List.of();
         }
@@ -242,7 +260,7 @@ public final class ReadVerifyRunner {
         for (final LoadWorkload.Resting order : resting) {
             size += order.size();
         }
-        return List.of(new L2Snapshot.Level(LoadWorkload.PRICE, size, resting.size()));
+        return List.of(new L2Snapshot.Level(LoadWorkload.price(symbolId), size, resting.size()));
     }
 
     private static long balanceOf(final UserReport report, final int currency) {

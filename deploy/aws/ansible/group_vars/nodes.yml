@@ -10,3 +10,5 @@ service_env:
   EXC_CLEAN_START: "{{ clean_start }}"
   EXC_BASE_DIR: "{{ base_dir }}"
   EXC_METRICS_INTERVAL_MS: "{{ metrics_interval_ms }}"
+  EXC_JAVA_OPTS: "{{ node_java_opts }}"
+  EXC_AERON_TERM_LENGTH: "{{ aeron_term_length }}"

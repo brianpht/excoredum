@@ -1,5 +1,7 @@
 package com.exadbe.config;
 
+import java.util.Properties;
+
 /**
  * Immutable core configuration: preallocated capacities and tuning knobs.
  *
@@ -7,6 +9,9 @@ package com.exadbe.config;
  * structure during the operational window.
  */
 public final class CoreConfig {
+
+    /** Property prefix for the operator-facing overrides read by {@link #fromProperties}. */
+    public static final String PROPERTY_PREFIX = "exc.core.";
 
     /** Default number of symbols preallocated. */
     public static final int DEFAULT_SYMBOL_CAPACITY = 1024;
@@ -114,6 +119,43 @@ public final class CoreConfig {
                 DEFAULT_EVENT_BUFFER_CAPACITY,
                 DEFAULT_JOURNAL_SLOT_COUNT,
                 DEFAULT_JOURNAL_SLOT_SIZE);
+    }
+
+    /**
+     * Builds a configuration from {@code exc.core.*} properties. Any key that is
+     * absent or blank falls back to its default, so a partial override file is
+     * valid; validation is applied once at {@link Builder#build()}.
+     */
+    public static CoreConfig fromProperties(final Properties props) {
+        return builder()
+                .symbolCapacity(intProp(props, "symbolCapacity", DEFAULT_SYMBOL_CAPACITY))
+                .accountCapacity(intProp(props, "accountCapacity", DEFAULT_ACCOUNT_CAPACITY))
+                .dedupClientCapacity(intProp(props, "dedupClientCapacity", DEFAULT_DEDUP_CLIENT_CAPACITY))
+                .dedupWindow(intProp(props, "dedupWindow", DEFAULT_DEDUP_WINDOW))
+                .orderPoolCapacity(intProp(props, "orderPoolCapacity", DEFAULT_ORDER_POOL_CAPACITY))
+                .priceBucketCapacity(intProp(props, "priceBucketCapacity", DEFAULT_PRICE_BUCKET_CAPACITY))
+                .l2MaxLevels(intProp(props, "l2MaxLevels", DEFAULT_L2_MAX_LEVELS))
+                .eventBufferCapacity(intProp(props, "eventBufferCapacity", DEFAULT_EVENT_BUFFER_CAPACITY))
+                .journalSlotCount(intProp(props, "journalSlotCount", DEFAULT_JOURNAL_SLOT_COUNT))
+                .journalSlotSize(intProp(props, "journalSlotSize", DEFAULT_JOURNAL_SLOT_SIZE))
+                .build();
+    }
+
+    /** Builds a configuration from {@code -Dexc.core.*} system properties, falling back to defaults. */
+    public static CoreConfig fromSystemProperties() {
+        return fromProperties(System.getProperties());
+    }
+
+    private static int intProp(final Properties props, final String key, final int defaultValue) {
+        final String raw = props.getProperty(PROPERTY_PREFIX + key);
+        if (raw == null || raw.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (final NumberFormatException e) {
+            throw new IllegalArgumentException("invalid integer for " + PROPERTY_PREFIX + key + ": " + raw);
+        }
     }
 
     /** Starts a validated configuration from non-default capacities. */

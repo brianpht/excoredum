@@ -1,6 +1,7 @@
 package com.exadbe.read.config;
 
 import com.exadbe.protocol.QueryStreams;
+import com.exadbe.read.order.OrderLedger;
 import io.aeron.archive.client.AeronArchive;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
@@ -42,6 +43,8 @@ public final class ReadReplicaConfig {
     private final long snapshotLoadTimeoutMs;
     private final Path checkpointFile;
     private final long checkpointIntervalMs;
+    private final int maxOrdersPerUser;
+    private final int maxMarketTrades;
 
     private ReadReplicaConfig(final Builder builder) {
         this.aeronDirectoryName = builder.aeronDirectoryName;
@@ -57,6 +60,8 @@ public final class ReadReplicaConfig {
         this.snapshotLoadTimeoutMs = builder.snapshotLoadTimeoutMs;
         this.checkpointFile = builder.checkpointFile;
         this.checkpointIntervalMs = builder.checkpointIntervalMs;
+        this.maxOrdersPerUser = builder.maxOrdersPerUser;
+        this.maxMarketTrades = builder.maxMarketTrades;
     }
 
     /** Starts a replica configuration with the given media-driver directory. */
@@ -202,6 +207,16 @@ public final class ReadReplicaConfig {
         return checkpointIntervalMs;
     }
 
+    /** Per-user order-history cap for the read-side ledger. */
+    public int maxOrdersPerUser() {
+        return maxOrdersPerUser;
+    }
+
+    /** Global market trade-tape cap for the read-side ledger (power of two). */
+    public int maxMarketTrades() {
+        return maxMarketTrades;
+    }
+
     /** Fluent builder for a read replica configuration. */
     public static final class Builder {
         private final String aeronDirectoryName;
@@ -217,6 +232,8 @@ public final class ReadReplicaConfig {
         private long snapshotLoadTimeoutMs = DEFAULT_SNAPSHOT_LOAD_TIMEOUT_MS;
         private Path checkpointFile;
         private long checkpointIntervalMs = DEFAULT_CHECKPOINT_INTERVAL_MS;
+        private int maxOrdersPerUser = OrderLedger.DEFAULT_MAX_ORDERS_PER_USER;
+        private int maxMarketTrades = OrderLedger.DEFAULT_MAX_MARKET_TRADES;
 
         private Builder(final String aeronDirectoryName) {
             this.aeronDirectoryName = aeronDirectoryName;
@@ -277,6 +294,18 @@ public final class ReadReplicaConfig {
 
         public Builder checkpointIntervalMs(final long value) {
             this.checkpointIntervalMs = value;
+            return this;
+        }
+
+        /** Per-user order-history cap for the read-side ledger. */
+        public Builder maxOrdersPerUser(final int value) {
+            this.maxOrdersPerUser = value;
+            return this;
+        }
+
+        /** Global market trade-tape cap for the read-side ledger (power of two). */
+        public Builder maxMarketTrades(final int value) {
+            this.maxMarketTrades = value;
             return this;
         }
 
