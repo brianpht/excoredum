@@ -15,7 +15,7 @@ Provisioning (installing the runtime, writing config, starting services) is
 done by Ansible over SSH, which pushes the runtime tarball directly - no S3
 bucket and no IAM role / instance profile are required.
 
-Topology (single AZ, `us-east-1a` by default):
+Topology (single AZ, `ap-southeast-1a` by default):
 
 | Role | Count | Instance (default) | Placement group |
 |------|-------|--------------------|-----------------|
@@ -28,6 +28,9 @@ Topology (single AZ, `us-east-1a` by default):
 The cluster nodes are in a cluster placement group for low, consistent
 inter-node commit latency. Clients (load, verify, gateway, read) are outside
 it because a cluster placement group accepts a single instance type.
+
+See [SCALING.md](SCALING.md) for an analysis of how to scale commands, users,
+symbols, and instance sizes for a larger benchmark.
 
 ## Prerequisites
 
@@ -58,12 +61,13 @@ JRE_URL=https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.
 ssh-keygen -t rsa -b 2048 -N "" -f ~/.ssh/excoredum-bench -C "excoredum-bench"
 aws ec2 import-key-pair --key-name excoredum-bench \
   --public-key-material fileb://~/.ssh/excoredum-bench.pub \
-  --region us-east-1
+  --region ap-southeast-1
 ```
 
-> The AWS CLI defaults to your configured region (possibly not `us-east-1`),
-> while Terraform deploys into `us-east-1`. Pass `--region us-east-1` to any
-> `aws ec2` command that must match the deployment.
+> The AWS CLI defaults to your configured region (possibly not
+> `ap-southeast-1`), while Terraform deploys into `ap-southeast-1`. Pass
+> `--region ap-southeast-1` to any `aws ec2` command that must match the
+> deployment.
 
 ## 3. Deploy infrastructure
 
@@ -139,10 +143,13 @@ terraform -chdir=deploy/aws/terraform destroy
 - **Fresh cluster per benchmark**: the load and gateway runners each run their
   own setup (add symbol + users + balances) and are not idempotent - re-running
   one after the other against the same cluster fails with `DUPLICATE`. Reset
-  the cluster between runs (restart the nodes, whose units set
-  `clean_start = true`) or run each benchmark against a fresh environment.
-- **Node public IPs (100.x)**: `us-east-1a` can assign `100.x` public IPs to
-  the cluster nodes that some networks cannot route (SSH times out during the
+  the cluster between runs with
+  `ansible-playbook playbooks/fresh-cluster.yml` (stops every service, wipes
+  the node data directory, and restarts the nodes with `clean_start = true`
+  before bringing the read replica and gateway back up) or run each benchmark
+  against a fresh environment.
+- **Node public IPs (100.x)**: AWS can assign `100.x` public IPs to the
+  cluster nodes that some networks cannot route (SSH times out during the
   banner exchange, while `3.x`/`44.x`/`54.x` work). If node SSH is flaky,
   attach Elastic IPs to the nodes, then `terraform refresh` before regenerating
   the inventory.

@@ -1,0 +1,63 @@
+---
+# Reset the deployed cluster to a fresh, empty state so a benchmark can be
+# re-run without DUPLICATE command failures. Stops every service, wipes the
+# node data directory, restarts the nodes with clean_start = true (which
+# additionally deletes the archive/cluster/driver directories on start), then
+# brings the read replica and gateway back up. Load/verify are oneshot units
+# and hold no state, so they are simply left stopped.
+#
+# Usage:
+#   cd deploy/aws/ansible && ./inventory.sh
+#   ansible-playbook playbooks/fresh-cluster.yml
+
+- name: Stop all excoredum services
+  hosts: all
+  become: true
+  tasks:
+    - name: Stop excoredum
+      ansible.builtin.systemd:
+        name: excoredum
+        state: stopped
+      # Load/verify are oneshot units that are usually not running, so a
+      # failed stop on them must not abort the reset.
+      ignore_errors: true
+
+- name: Wipe node state
+  hosts: nodes
+  become: true
+  tasks:
+    - name: Remove node data directory
+      ansible.builtin.file:
+        path: "{{ base_dir }}"
+        state: absent
+
+- name: Start nodes fresh
+  hosts: nodes
+  become: true
+  vars:
+    clean_start: "true"
+  tasks:
+    - name: Install systemd unit (clean start)
+      ansible.builtin.template:
+        src: excoredum.service.j2
+        dest: /etc/systemd/system/excoredum.service
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start node
+      ansible.builtin.systemd:
+        name: excoredum
+        enabled: true
+        state: started
+
+- name: Start read replica and gateway
+  hosts: read:gateway
+  become: true
+  tasks:
+    - name: Enable and start service
+      ansible.builtin.systemd:
+        name: excoredum
+        enabled: true
+        state: started

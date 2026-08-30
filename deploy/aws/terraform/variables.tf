@@ -1,13 +1,13 @@
 variable "region" {
   description = "AWS region for the benchmark environment."
   type        = string
-  default     = "us-east-1"
+  default     = "ap-southeast-1"
 }
 
 variable "az" {
   description = "Availability zone. All instances are placed in a single AZ for stable inter-node latency."
   type        = string
-  default     = "us-east-1a"
+  default     = "ap-southeast-1a"
 }
 
 variable "subnet_cidr" {
