@@ -19,14 +19,16 @@ single-JVM engine-vs-exchange-core comparison and is covered at the end.
 | Users | `workload_users` | `--users` | - |
 | Parallel load generators | `load_client_id` | `--client-id` | - |
 | Symbols | `workload_symbols` | `--symbols` | - |
+| Drain batch (in-flight) | `load_batch` | `--batch` | - |
 | Node instance type | - | - | `node_instance_type` |
 | App instance type | - | - | `app_instance_type` |
 | Cluster node count | - | - | `cluster_node_count` (3 or 5) |
 
-`workload_ops`, `workload_users`, and `workload_symbols` feed `EXC_OPS` /
-`EXC_USERS` / `EXC_SYMBOLS` in `deploy/aws/ansible/group_vars/load.yml` and
-`verify.yml` (plus `workload_trade_limit` to `EXC_TRADE_LIMIT`), which the bin
-entrypoints (`deploy/aws/bin/load.sh`, `verify.sh`) pass to the runners.
+`workload_ops`, `workload_users`, `workload_symbols`, and `load_batch` feed
+`EXC_OPS` / `EXC_USERS` / `EXC_SYMBOLS` / `EXC_BATCH` in
+`deploy/aws/ansible/group_vars/load.yml` and `verify.yml` (plus
+`workload_trade_limit` to `EXC_TRADE_LIMIT`), which the bin entrypoints
+(`deploy/aws/bin/load.sh`, `verify.sh`) pass to the runners.
 
 ## Current state and hard limits
 
@@ -82,8 +84,16 @@ or `-Dexc.core.*` system properties:
 ## Scaling commands (ops)
 
 The write-side load (`ExternalLoadRunner`) is closed-loop with a single client:
-it submits, then drains every 16 commands, so its measured throughput is
-latency-bound, not a throughput ceiling. To raise the command count:
+it submits, then drains every `--batch` commands (Ansible `load_batch`, default
+16, power of two), so its measured throughput is latency-bound, not a
+throughput ceiling. A larger batch deepens the in-flight pipeline and raises
+throughput roughly proportionally; on `c6i.xlarge` nodes, batch 16 measured
+~34k ops/s and batch 64 measured ~106k ops/s with no extra backpressure or
+retransmits, while batch 128 reached ~148k ops/s but FAILED (16 retransmits
+broke the workload's FIFO-dependent cancel/reduce ordering). Raising the Aeron
+term length to `8m` did not help - batch 128 still failed, with retransmits
+climbing to 128. The practical single-client ceiling is ~64; past that, run
+several clients in parallel. To raise the command count:
 
 - Raise `workload_ops` (`group_vars/all.yml`).
 - Keep `users >= ops / 2000` if the read-side verifier will also run, so both

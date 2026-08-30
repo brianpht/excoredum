@@ -41,6 +41,15 @@ public final class ExternalLoadRunner {
     private static final int BASE = LoadWorkload.BASE_CURRENCY;
     private static final int QUOTE = LoadWorkload.QUOTE_CURRENCY;
 
+    /**
+     * Commands in flight before the runner drains acknowledgements. Must be a
+     * power of two (drain uses a bitmask). Higher values deepen the pipeline
+     * and raise closed-loop throughput, at the cost of more ingress
+     * backpressure and a higher chance that a retransmitted cancel/reduce
+     * lands out of FIFO order.
+     */
+    private static final int DEFAULT_BATCH = 16;
+
     private ExternalLoadRunner() {}
 
     public static void main(final String[] args) throws Exception {
@@ -49,6 +58,7 @@ public final class ExternalLoadRunner {
         int ops = 100_000;
         int users = 100;
         int symbols = 1;
+        int batch = DEFAULT_BATCH;
         long clientId = 1L;
         for (final String arg : args) {
             final int eq = arg.indexOf('=');
@@ -61,19 +71,20 @@ public final class ExternalLoadRunner {
                 case "--ops" -> ops = Integer.parseInt(arg.substring(eq + 1));
                 case "--users" -> users = Integer.parseInt(arg.substring(eq + 1));
                 case "--symbols" -> symbols = Integer.parseInt(arg.substring(eq + 1));
+                case "--batch" -> batch = Integer.parseInt(arg.substring(eq + 1));
                 case "--client-id" -> clientId = Long.parseLong(arg.substring(eq + 1));
                 default -> throw new IllegalArgumentException("unknown argument: " + arg);
             }
         }
 
         final LoadWorkload workload = new LoadWorkload(ops, users, symbols);
-        final boolean ok = run(workload, endpoints, egress, clientId);
+        final boolean ok = run(workload, endpoints, egress, clientId, batch);
         System.exit(ok ? 0 : 1);
     }
 
-    /** Runs the workload against the external cluster with client id {@code 1}. */
+    /** Runs the workload against the external cluster with client id {@code 1} and the default batch. */
     public static boolean run(final LoadWorkload workload, final String endpoints, final String egress) {
-        return run(workload, endpoints, egress, 1L);
+        return run(workload, endpoints, egress, 1L, DEFAULT_BATCH);
     }
 
     /**
@@ -85,6 +96,23 @@ public final class ExternalLoadRunner {
      */
     public static boolean run(
             final LoadWorkload workload, final String endpoints, final String egress, final long clientId) {
+        return run(workload, endpoints, egress, clientId, DEFAULT_BATCH);
+    }
+
+    /**
+     * Variant of {@link #run(LoadWorkload, String, String, long)} with an explicit
+     * drain batch. {@code batch} is the number of commands allowed in flight before
+     * the runner drains acknowledgements and must be a positive power of two.
+     */
+    public static boolean run(
+            final LoadWorkload workload,
+            final String endpoints,
+            final String egress,
+            final long clientId,
+            final int batch) {
+        if (batch < 1 || (batch & (batch - 1)) != 0) {
+            throw new IllegalArgumentException("batch must be a positive power of two, was: " + batch);
+        }
         final long[] lastIdLo = {-1L};
         final long[] results = {0L};
         final long[] success = {0L};
@@ -129,8 +157,9 @@ public final class ExternalLoadRunner {
                 // and a retried command lands at the end of the ingress queue,
                 // reordering it behind later commands. The workload's cancel /
                 // reduce commands depend on strict FIFO, so the runner must
-                // never let an offer fail.
-                if ((i & 15) == 15) {
+                // never let an offer fail. A larger --batch deepens the pipeline
+                // (more throughput) but raises that reordering risk.
+                if ((i & (batch - 1)) == (batch - 1)) {
                     while (client.pendingCount() > 0) {
                         client.poll();
                     }

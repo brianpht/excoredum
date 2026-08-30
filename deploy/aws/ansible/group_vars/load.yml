@@ -8,5 +8,6 @@ service_env:
   EXC_OPS: "{{ workload_ops }}"
   EXC_USERS: "{{ workload_users }}"
   EXC_SYMBOLS: "{{ workload_symbols }}"
+  EXC_BATCH: "{{ load_batch }}"
   EXC_CLIENT_ID: "{{ load_client_id }}"
   EXC_JAVA_OPTS: "{{ load_java_opts }}"

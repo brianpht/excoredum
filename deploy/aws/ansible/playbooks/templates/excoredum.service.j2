@@ -6,12 +6,15 @@ Wants=network-online.target
 [Service]
 Type={{ service_type }}
 {% for key, value in service_env.items() %}
-Environment={{ key }}={{ value }}
+Environment="{{ key }}={{ value }}"
 {% endfor %}
 ExecStart={{ service_exec }}
 {% if service_type == 'simple' %}
 Restart=on-failure
 {% endif %}
+# The load/verify runners are oneshot units whose ExecStart (the full workload)
+# can run for tens of minutes; the default 90s start timeout would kill them.
+TimeoutStartSec=infinity
 StandardOutput=journal
 StandardError=journal
 

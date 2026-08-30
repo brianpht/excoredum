@@ -119,6 +119,7 @@ services:
     environment:
       EXC_INGRESS: "0=node-0:20100,1=node-1:20200,2=node-2:20300"
       EXC_SYMBOLS: "${EXC_SYMBOLS:-1}"
+      EXC_BATCH: "${EXC_BATCH:-16}"
       # EXC_OPS: "100000"
       # EXC_USERS: "100"
     command: ["/usr/local/bin/entrypoint-load.sh"]
