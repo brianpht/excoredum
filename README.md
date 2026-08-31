@@ -179,6 +179,7 @@ term length `1m`, read ledger `maxMarketTrades = 2^21`. Workload: 5,000,000 ops
 | `exc-write-client`  | Write-side SDK: leader-change handling, idempotent retry, egress events |
 | `exc-read`          | CQRS read replica and HA journal consumers (order ledger, trade tape) |
 | `exc-read-client`   | Read-side SDK over plain Aeron request/response streams          |
+| `exc-gateway`       | HTTP/JSON + WebSocket boundary over the read/write SDKs (REST, streaming; see [docs/GATEWAY.md](docs/GATEWAY.md)) |
 | `exc-bench`         | End-to-end latency harness (HdrHistogram tails)                  |
 | `exc-xcore-bench`   | Comparative benchmarks vs exchange-core 0.5.3                    |
 | `exc-examples`      | Runnable examples (in-process cluster + client SDK)              |

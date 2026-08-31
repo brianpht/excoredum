@@ -21,7 +21,6 @@ cat > /tmp/cluster.properties <<EOF
 exc.clusterMembers=${MEMBERS}
 exc.host=${HOST}
 exc.baseDir=${BASE}
-exc.core.symbolCapacity=${EXC_CORE_SYMBOL_CAPACITY:-}
 exc.core.accountCapacity=${EXC_CORE_ACCOUNT_CAPACITY:-}
 exc.core.dedupClientCapacity=${EXC_CORE_DEDUP_CLIENT_CAPACITY:-}
 exc.core.dedupWindow=${EXC_CORE_DEDUP_WINDOW:-}

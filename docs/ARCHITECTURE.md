@@ -76,7 +76,7 @@ and symbol / user sharding are out of scope for now.
 
 ```
 excoredum/
-|-- settings.gradle.kts             Gradle multi-module (10 modules)
+|-- settings.gradle.kts             Gradle multi-module (11 modules)
 |-- build.gradle.kts                Shared conventions: JDK 21, spotless, checkstyle, -Werror
 |-- gradle/libs.versions.toml       Version catalog (Aeron, Agrona, SBE, JMH, HdrHistogram, ...)
 |-- config/checkstyle/checkstyle.xml        Baseline style rules for all modules
@@ -167,9 +167,22 @@ excoredum/
 |       |-- OrderState.java                Order lifecycle state names
 |       +-- BackpressureException.java / QueryTimeoutException.java / QueryException.java
 |
+|-- exc-gateway/                    HTTP/JSON + WebSocket boundary (Netty)
+|   +-- src/main/java/com/exadbe/gateway/
+|       |-- GatewayLauncher.java            Entry point: pumps + HTTP server + market pump
+|       |-- config/GatewayConfig.java       Properties-driven config (validated at build)
+|       |-- http/                           Router, HttpServer, HttpHandler, admin guard
+|       |-- read/ReadPump.java              ReadClient pump thread + request bridge
+|       |-- write/WritePump.java            ExcClient pump thread + result bridge
+|       +-- stream/                         StreamBroadcaster, egress + market pumps
+|
 |-- exc-bench/                      End-to-end latency harness
 |   +-- src/main/java/com/exadbe/bench/
 |       |-- ExcBenchHarness.java            Boots a cluster + client, closed-loop HdrHistogram latency
+|       |-- LoadWorkload.java               Deterministic workload + exact book simulation
+|       |-- ExternalLoadRunner.java         Drives a deployed cluster over the network
+|       |-- ReadVerifyRunner.java           Asserts a read replica matches the simulation
+|       |-- GatewayBenchRunner.java         Same workload through the HTTP/WS gateway
 |       +-- LatencyResult.java              Throughput + percentile record
 |
 |-- exc-xcore-bench/                Comparative benchmarks vs exchange-core 0.5.3
@@ -558,6 +571,30 @@ The query surface mirrors the replica's in-process API: `userExists(uid)`,
 | Result holders      | `BalanceResult`, `L2Snapshot`, `UserReport`, `OrderRecordResult`, `MarketTradeResult`, `TotalBalanceResult`, `OrderState` |
 | `BackpressureException` / `QueryTimeoutException` / `QueryException` | Query failure signalling |
 
+### exc-gateway - HTTP / JSON Boundary
+
+A Netty HTTP/1.1 + WebSocket service in front of the two SDKs: REST
+endpoints translate to read-side queries (`ReadPump` over `ReadClient`) and
+write-side commands (`WritePump` over `ExcClient`), and a
+`StreamBroadcaster` fans market events out to `/ws` subscribers from both the
+write client's egress and a periodic `MarketPump` replica snapshot. JSON and
+system-clock time stay in this module; the engine and SDKs are untouched, and
+neither pump blocks a Netty event loop (submit + poll run on dedicated pump
+threads; responses hop back onto the channel executor). Trading and read
+endpoints are unauthenticated (uid is caller-supplied); admin endpoints sit
+behind an `X-User-Id` allow-list plus an optional shared `X-Api-Key`. The
+full wire reference, streaming shapes, and configuration live in
+[docs/GATEWAY.md](GATEWAY.md).
+
+| Component           | Responsibility                                                       |
+|---------------------|----------------------------------------------------------------------|
+| `GatewayLauncher`   | Entry point: wires pumps, router, HTTP server, and market pump      |
+| `GatewayConfig`     | Properties-driven config, validated at build (port, channels, admin, symbols, WS cap) |
+| `Router`            | Route table, request validation, admin guard, health                |
+| `HttpHandler`       | Status mapping and the JSON error envelope; never blocks the event loop |
+| `ReadPump` / `WritePump` | Single-threaded SDK drivers; 429 on a full in-flight window, 504 on timeout / expiry |
+| `StreamBroadcaster` | Thread-safe fan-out; slow-subscriber drops counted, subscriber cap enforced at handshake |
+
 ### exc-bench - Latency Harness
 
 End-to-end load drivers (exempt from the core determinism rules):
@@ -685,7 +722,7 @@ TRUNCATED).
 | `RISK_ASK_PRICE_LOWER_THAN_FEE` | Ask price cannot cover the taker fee (for an ask FOK-BUDGET: the walked proceeds cannot cover the total taker fee) |
 | `INVALID_SYMBOL` | Unknown symbol |
 | `OVERFLOW` | 64-bit arithmetic overflow |
-| `INVALID_AMOUNT` | Defined in the schema; not produced by the current engine |
+| `INVALID_AMOUNT` | A reserved sentinel value (orderId / uid) or a non-positive size / price / budget operand |
 | `UNSUPPORTED_COMMAND` | Unknown command type |
 | `USER_ALREADY_EXISTS` | Account already present (including the reserved fee account) |
 | `USER_NOT_FOUND` | Unknown account |
@@ -1075,7 +1112,7 @@ single node; tests use smaller values.
 
 Overrides are read at launch rather than hardcoded. `CoreConfig.fromProperties`
 maps `exc.core.*` properties (the same keys as the table, e.g.
-`exc.core.symbolCapacity`) and `CoreConfig.fromSystemProperties()` reads
+`exc.core.accountCapacity`) and `CoreConfig.fromSystemProperties()` reads
 `-Dexc.core.*`; missing or blank keys fall back to the defaults above.
 `ClusterLauncher` loads both the cluster and core config from its `--config`
 properties file, while `ReadServiceLauncher` accepts `--core-config=<file>`
@@ -1158,6 +1195,11 @@ snapshot write / read time. The hot path only increments a counter.
 | `SnapshotWarmRestartIntegrationTest` | Cluster     | Warm restart recovers state from a native snapshot      |
 | `LeaderKillFailoverTest`             | Fault       | Three-node leader kill; exactly-once, no loss or dup    |
 | `InFlightRetryAcrossFailoverFaultTest` | Fault     | Leader killed with a command batch still in flight; idempotent retry delivers every command exactly once (one result per id, one hold per balance) |
+| `DependentCommandsKeepOrderAcrossFailoverFaultTest` | Fault | Leader killed with dependent place/cancel pairs in flight; retransmit keeps submission order (every cancel resolves SUCCESS, no order survives) |
+| `ReplicaCheckpointCorruptionTest`    | Unit        | Bad magic, truncated, negative-length, and invariant-violating checkpoints all fall back to a clean cold start |
+| `ReplicaFailoverEscalationTest`      | Unit        | Error-driven failovers with no position progress escalate into a rebuild from the log start |
+| `RouterTest` / `HttpHandlerTest` / `EgressStreamTest` | Unit | Gateway route matching and validation, HTTP status mapping and JSON envelope, WebSocket frame shapes |
+| `GatewayEndToEndIntegrationTest`     | Integration | HTTP gateway serves reads, writes, admin guard, and WS trade streaming against an in-process cluster |
 | `JournalHaFailoverTest`              | Fault       | Journal survives a leader kill; trades exactly-once     |
 | `JournalLiveFailoverTest`            | Fault       | Live consumer fails over to a survivor without loss     |
 | `ChaosSoakTest`                      | Soak        | Long-running mixed workload (full / partial GTC-IOC matching, cancel / reduce, balance credit / debit, non-zero fees); asserts every command completes with no rejection, p99.9 latency budget, bounded GC |

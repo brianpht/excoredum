@@ -14,7 +14,6 @@ QUERY="${EXC_QUERY:-aeron:udp?endpoint=0.0.0.0:44000}"
 JAVA_OPTS="${EXC_JAVA_OPTS:--Xms1g -Xmx1g -XX:+UseZGC}"
 
 cat > /tmp/read-core.properties <<EOF
-exc.core.symbolCapacity=${EXC_CORE_SYMBOL_CAPACITY:-}
 exc.core.accountCapacity=${EXC_CORE_ACCOUNT_CAPACITY:-}
 exc.core.dedupClientCapacity=${EXC_CORE_DEDUP_CLIENT_CAPACITY:-}
 exc.core.dedupWindow=${EXC_CORE_DEDUP_WINDOW:-}

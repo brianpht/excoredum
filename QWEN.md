@@ -55,6 +55,7 @@ data flows, determinism rules, and order-book semantics.
 | `exc-write-client` | Write-side client SDK (depends only on `exc-protocol`): leader-change handling, idempotent retry, correlation, egress events. |
 | `exc-read`     | CQRS read replica and HA journal consumers (replay + dedup + failover), balance report generation, per-user order history ledger and market trade tape rebuilt from the log. |
 | `exc-read-client` | Read-side SDK: sync wrappers + async `submit`/`poll`/listener over plain Aeron request/response streams (request-id correlation, idempotent retry, bounded in-flight window). Depends only on `exc-protocol`, like `exc-write-client`. |
+| `exc-gateway`  | Netty HTTP/JSON + WebSocket boundary in front of the read/write SDKs (REST endpoints, market streaming). Not part of the deterministic hot path; JSON stays here. See `docs/GATEWAY.md`. |
 | `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram).  |
 | `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3: replay parity, engine/pipeline latency, e2e, JMH. Exempt from determinism rules. |
 | `exc-tests`    | Unit, property, integration, cluster, and fault suites + test fixtures.  |

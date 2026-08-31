@@ -72,7 +72,6 @@ or `-Dexc.core.*` system properties:
 
 | Capacity | Default | Meaning |
 |----------|---------|---------|
-| `symbolCapacity` | 1024 | Max symbols (order books) |
 | `accountCapacity` | 65536 | Max user accounts |
 | `orderPoolCapacity` | 65536 | Max resting orders across all symbols |
 | `priceBucketCapacity` | 8192 | Max live price levels across all symbols |
@@ -152,9 +151,10 @@ price. The command type is derived from the per-symbol iteration index
 place/cancel/reduce cycle regardless of the symbol count; a symbol count that is
 a multiple of 8 no longer collapses to a single command type.
 
-- **Engine ceiling**: `symbolCapacity = 1024`, so tens to hundreds of symbols
-  fit without raising it. Passing 1024 symbols (or needing more resting orders)
-  requires a `CoreConfig` override (now exposed via `exc.core.*` in
+- **Engine ceiling**: the symbol/book maps grow on demand, so symbol count is
+  not a fixed cap; the resting-order ceiling is `orderPoolCapacity` (nodes
+  allocate a fresh node on the cold path beyond it). Needing more resting
+  orders requires a `CoreConfig` override (exposed via `exc.core.*` in
   `ClusterLauncher` / `ReadServiceLauncher`).
 - **Workload**: already parameterized (`--symbols`); `ExternalLoadRunner.setup`
   registers every symbol, and `ReadVerifyRunner` verifies each symbol's L2 plus
