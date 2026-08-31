@@ -46,6 +46,11 @@ public final class ReadReplica implements AutoCloseable {
 
     private static final int FRAGMENT_LIMIT = 64;
 
+    // Aeron's 128 KB socket receive default overflows under replay bursts; size
+    // it above the largest term buffer so packets are never dropped by the OS.
+    private static final int SOCKET_RCVBUF_LENGTH = 16 * 1024 * 1024;
+    private static final int SOCKET_SNDBUF_LENGTH = 16 * 1024 * 1024;
+
     // Consecutive error-driven failovers at the same applied position before
     // the replica rebuilds from the log start instead of cycling sources: every
     // member replays the same committed prefix, so a fragment that throws on
@@ -107,7 +112,9 @@ public final class ReadReplica implements AutoCloseable {
                     .aeronDirectoryName(config.aeronDirectoryName())
                     .threadingMode(ThreadingMode.SHARED)
                     .dirDeleteOnStart(true)
-                    .dirDeleteOnShutdown(true));
+                    .dirDeleteOnShutdown(true)
+                    .socketRcvbufLength(SOCKET_RCVBUF_LENGTH)
+                    .socketSndbufLength(SOCKET_SNDBUF_LENGTH));
             aeronClient = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectoryName()));
         } catch (final RuntimeException e) {
             closeQuietly(aeronClient, driver);

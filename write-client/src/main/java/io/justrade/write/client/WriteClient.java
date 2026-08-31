@@ -44,6 +44,9 @@ import org.agrona.collections.Long2ObjectHashMap;
 public final class WriteClient implements EgressListener, AutoCloseable {
 
     private static final float LOAD_FACTOR = 0.65f;
+    // Size the socket buffers above the largest term buffer so egress bursts never overflow the OS socket.
+    private static final int SOCKET_RCVBUF_LENGTH = 16 * 1024 * 1024;
+    private static final int SOCKET_SNDBUF_LENGTH = 16 * 1024 * 1024;
 
     private final ClientConfig config;
     private final ResultHandler handler;
@@ -138,7 +141,9 @@ public final class WriteClient implements EgressListener, AutoCloseable {
             embedded = MediaDriver.launchEmbedded(new MediaDriver.Context()
                     .threadingMode(ThreadingMode.SHARED)
                     .dirDeleteOnStart(true)
-                    .dirDeleteOnShutdown(true));
+                    .dirDeleteOnShutdown(true)
+                    .socketRcvbufLength(SOCKET_RCVBUF_LENGTH)
+                    .socketSndbufLength(SOCKET_SNDBUF_LENGTH));
             dir = embedded.aeronDirectoryName();
         }
         this.ownMediaDriver = embedded;

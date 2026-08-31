@@ -1301,7 +1301,7 @@ Scale with `JUSTRADE_OPS` / `JUSTRADE_USERS` / `JUSTRADE_SYMBOLS` on the `load` 
 services, keeping places and fills per user below the read replica's per-user
 ledger and trade-tape caps (`--trade-limit`, default 4096, and
 `--ledger-max-orders-per-user` / `--ledger-max-market-trades`, defaults 4096 /
-65536). See `deploy/aws/SCALING.md` for sizing guidance.
+65536). See `deploy/aws/PERFORMANCE.md` for sizing guidance.
 
 ---
 

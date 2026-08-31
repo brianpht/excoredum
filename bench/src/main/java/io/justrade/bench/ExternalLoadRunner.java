@@ -50,6 +50,9 @@ public final class ExternalLoadRunner {
      */
     private static final int DEFAULT_BATCH = 16;
 
+    /** Default command re-offer deadline in milliseconds (matches ClientConfig's 2s default). */
+    private static final long DEFAULT_RETRY_BACKOFF_MS = 2_000L;
+
     private ExternalLoadRunner() {}
 
     public static void main(final String[] args) throws Exception {
@@ -60,6 +63,10 @@ public final class ExternalLoadRunner {
         int symbols = 1;
         int batch = DEFAULT_BATCH;
         long clientId = 1L;
+        long retryBackoffMs = DEFAULT_RETRY_BACKOFF_MS;
+        BenchProfile profile = null;
+        boolean batchExplicit = false;
+        boolean retryExplicit = false;
         for (final String arg : args) {
             final int eq = arg.indexOf('=');
             if (!arg.startsWith("--") || eq < 0) {
@@ -71,14 +78,32 @@ public final class ExternalLoadRunner {
                 case "--ops" -> ops = Integer.parseInt(arg.substring(eq + 1));
                 case "--users" -> users = Integer.parseInt(arg.substring(eq + 1));
                 case "--symbols" -> symbols = Integer.parseInt(arg.substring(eq + 1));
-                case "--batch" -> batch = Integer.parseInt(arg.substring(eq + 1));
+                case "--profile" -> profile = BenchProfile.fromName(arg.substring(eq + 1));
+                case "--batch" -> {
+                    batch = Integer.parseInt(arg.substring(eq + 1));
+                    batchExplicit = true;
+                }
                 case "--client-id" -> clientId = Long.parseLong(arg.substring(eq + 1));
+                case "--retry-backoff-ms" -> {
+                    retryBackoffMs = Long.parseLong(arg.substring(eq + 1));
+                    retryExplicit = true;
+                }
                 default -> throw new IllegalArgumentException("unknown argument: " + arg);
+            }
+        }
+        // A profile sets the defaults; explicit --batch / --retry-backoff-ms win
+        // regardless of argument order.
+        if (profile != null) {
+            if (!batchExplicit) {
+                batch = profile.batch();
+            }
+            if (!retryExplicit) {
+                retryBackoffMs = profile.retryBackoffMs();
             }
         }
 
         final LoadWorkload workload = new LoadWorkload(ops, users, symbols);
-        final boolean ok = run(workload, endpoints, egress, clientId, batch);
+        final boolean ok = run(workload, endpoints, egress, clientId, batch, retryBackoffMs);
         System.exit(ok ? 0 : 1);
     }
 
@@ -110,8 +135,26 @@ public final class ExternalLoadRunner {
             final String egress,
             final long clientId,
             final int batch) {
+        return run(workload, endpoints, egress, clientId, batch, DEFAULT_RETRY_BACKOFF_MS);
+    }
+
+    /**
+     * Variant of {@link #run(LoadWorkload, String, String, long, int)} with an explicit
+     * command re-offer deadline in milliseconds. A deadline shorter than the observed
+     * end-to-end tail latency causes spurious re-offers of already-applied commands.
+     */
+    public static boolean run(
+            final LoadWorkload workload,
+            final String endpoints,
+            final String egress,
+            final long clientId,
+            final int batch,
+            final long retryBackoffMs) {
         if (batch < 1 || (batch & (batch - 1)) != 0) {
             throw new IllegalArgumentException("batch must be a positive power of two, was: " + batch);
+        }
+        if (retryBackoffMs <= 0L) {
+            throw new IllegalArgumentException("retryBackoffMs must be positive, was: " + retryBackoffMs);
         }
         final long[] lastIdLo = {-1L};
         final long[] results = {0L};
@@ -136,8 +179,10 @@ public final class ExternalLoadRunner {
                     }
                 };
 
-        final ClientConfig config =
-                ClientConfig.builder(clientId, endpoints).egressChannel(egress).build();
+        final ClientConfig config = ClientConfig.builder(clientId, endpoints)
+                .egressChannel(egress)
+                .retryBackoffNs(retryBackoffMs * 1_000_000L)
+                .build();
         final WriteClient client = connectWithRetry(config, handler);
         try {
             client.tradeGroupListener(group -> fills[0] += group.totalVolume());

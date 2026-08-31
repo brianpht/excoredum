@@ -29,8 +29,8 @@ The cluster nodes are in a cluster placement group for low, consistent
 inter-node commit latency. Clients (load, verify, gateway, read) are outside
 it because a cluster placement group accepts a single instance type.
 
-See [SCALING.md](SCALING.md) for an analysis of how to scale commands, users,
-symbols, and instance sizes for a larger benchmark.
+See [PERFORMANCE.md](PERFORMANCE.md) for the recorded benchmark metrics, run
+settings, latency/throughput tuning, and engine/ledger sizing guidance.
 
 ## Prerequisites
 
@@ -82,7 +82,7 @@ terraform -chdir=deploy/aws/terraform apply
 key_name = "justrade-bench"      # EC2 key pair name (Ansible SSH)
 ssh_cidr = "203.0.113.0/24"       # restrict SSH + gateway HTTP to your IP
 
-# Large run (256 symbols / 5000 users / 5M ops); see SCALING.md for the full table
+# Large run (256 symbols / 5000 users / 5M ops); see PERFORMANCE.md for the full table
 node_instance_type = "c6i.4xlarge"
 app_instance_type  = "c6i.xlarge"
 ```
@@ -117,7 +117,7 @@ operator). Tune the benchmark in `deploy/aws/ansible/group_vars/all.yml`:
 
 The `JUSTRADE_CORE_*` engine capacities (symbol / account / order-pool / journal,
 etc.) can also be added to `nodes.yml` / `read.yml` `service_env` when a run
-needs to raise them. See [SCALING.md](SCALING.md) for sizing guidance.
+needs to raise them. See [PERFORMANCE.md](PERFORMANCE.md) for sizing guidance.
 
 ## 5. Run the load test and verify
 

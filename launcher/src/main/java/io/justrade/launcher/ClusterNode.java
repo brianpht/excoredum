@@ -52,6 +52,11 @@ public final class ClusterNode implements AutoCloseable {
 
     private static final int JOURNAL_FRAGMENT_LIMIT = 64;
 
+    // Aeron's 128 KB socket receive default is smaller than the ingress term
+    // buffer (1m); a full term buffer then overflows the socket and drops packets.
+    private static final int SOCKET_RCVBUF_LENGTH = 16 * 1024 * 1024;
+    private static final int SOCKET_SNDBUF_LENGTH = 16 * 1024 * 1024;
+
     private final ClusteredMediaDriver clusteredMediaDriver;
     private final ClusteredServiceContainer container;
     private final CountersManager countersManager;
@@ -118,7 +123,9 @@ public final class ClusterNode implements AutoCloseable {
                 .aeronDirectoryName(config.aeronDirectoryName())
                 .threadingMode(ThreadingMode.SHARED)
                 .dirDeleteOnStart(true)
-                .dirDeleteOnShutdown(true);
+                .dirDeleteOnShutdown(true)
+                .socketRcvbufLength(SOCKET_RCVBUF_LENGTH)
+                .socketSndbufLength(SOCKET_SNDBUF_LENGTH);
 
         final Archive.Context archiveContext = new Archive.Context()
                 .aeronDirectoryName(config.aeronDirectoryName())

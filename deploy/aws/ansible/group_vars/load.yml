@@ -8,6 +8,7 @@ service_env:
   JUSTRADE_OPS: "{{ workload_ops }}"
   JUSTRADE_USERS: "{{ workload_users }}"
   JUSTRADE_SYMBOLS: "{{ workload_symbols }}"
+  JUSTRADE_PROFILE: "{{ load_profile }}"
   JUSTRADE_BATCH: "{{ load_batch }}"
   JUSTRADE_CLIENT_ID: "{{ load_client_id }}"
   JUSTRADE_JAVA_OPTS: "{{ load_java_opts }}"

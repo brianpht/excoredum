@@ -28,6 +28,9 @@ public final class HaJournalConsumer implements AutoCloseable {
     private static final long CONNECT_TIMEOUT_NS = TimeUnit.SECONDS.toNanos(5);
     private static final long DEFAULT_LIVENESS_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(10);
     private static final long RECONNECT_BACKOFF_MS = 250L;
+    // Size the socket buffers above the largest term buffer so live replay bursts never overflow the OS socket.
+    private static final int SOCKET_RCVBUF_LENGTH = 16 * 1024 * 1024;
+    private static final int SOCKET_SNDBUF_LENGTH = 16 * 1024 * 1024;
 
     private final MediaDriver mediaDriver;
     private final Aeron aeron;
@@ -85,7 +88,9 @@ public final class HaJournalConsumer implements AutoCloseable {
                     .aeronDirectoryName(aeronDirectoryName)
                     .threadingMode(ThreadingMode.SHARED)
                     .dirDeleteOnStart(true)
-                    .dirDeleteOnShutdown(true));
+                    .dirDeleteOnShutdown(true)
+                    .socketRcvbufLength(SOCKET_RCVBUF_LENGTH)
+                    .socketSndbufLength(SOCKET_SNDBUF_LENGTH));
             aeronClient = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectoryName));
         } catch (final RuntimeException e) {
             closeQuietly(aeronClient, driver);

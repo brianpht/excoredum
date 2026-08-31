@@ -22,6 +22,9 @@ public final class JournalReplayReader implements AutoCloseable {
     private static final int JOURNAL_REPLAY_STREAM_ID = 44;
     // Bounded so a stuck endpoint resolution cannot freeze the poll thread.
     private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 2_000L;
+    // Size the socket buffers above the largest term buffer so replay bursts never overflow the OS socket.
+    private static final int SOCKET_RCVBUF_LENGTH = 16 * 1024 * 1024;
+    private static final int SOCKET_SNDBUF_LENGTH = 16 * 1024 * 1024;
 
     private final MediaDriver mediaDriver;
     private final Aeron aeron;
@@ -45,7 +48,9 @@ public final class JournalReplayReader implements AutoCloseable {
                     .aeronDirectoryName(config.aeronDirectoryName())
                     .threadingMode(ThreadingMode.SHARED)
                     .dirDeleteOnStart(true)
-                    .dirDeleteOnShutdown(true));
+                    .dirDeleteOnShutdown(true)
+                    .socketRcvbufLength(SOCKET_RCVBUF_LENGTH)
+                    .socketSndbufLength(SOCKET_SNDBUF_LENGTH));
             aeronClient = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectoryName()));
             archiveClient = AeronArchive.connect(new AeronArchive.Context()
                     .aeron(aeronClient)

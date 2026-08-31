@@ -1,4 +1,4 @@
-# Large-scale benchmark run (see deploy/aws/SCALING.md). Copy to
+# Large-scale benchmark run (see deploy/aws/PERFORMANCE.md). Copy to
 # terraform.tfvars and fill in the operator-specific values:
 #
 #   cp terraform.tfvars.example terraform.tfvars

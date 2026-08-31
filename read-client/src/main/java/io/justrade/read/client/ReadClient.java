@@ -59,6 +59,9 @@ public final class ReadClient implements AutoCloseable {
     private static final int RESPONSE_FRAGMENT_LIMIT = 64;
     private static final int REQUEST_BUFFER_CAPACITY = 1024;
     private static final long RESOLVE_ENDPOINT_TIMEOUT_MS = 10_000L;
+    // Size the socket buffers above the largest term buffer so response bursts never overflow the OS socket.
+    private static final int SOCKET_RCVBUF_LENGTH = 16 * 1024 * 1024;
+    private static final int SOCKET_SNDBUF_LENGTH = 16 * 1024 * 1024;
 
     private final ReadClientConfig config;
     private final MediaDriver ownMediaDriver;
@@ -116,7 +119,9 @@ public final class ReadClient implements AutoCloseable {
             embedded = MediaDriver.launchEmbedded(new MediaDriver.Context()
                     .threadingMode(ThreadingMode.SHARED)
                     .dirDeleteOnStart(true)
-                    .dirDeleteOnShutdown(true));
+                    .dirDeleteOnShutdown(true)
+                    .socketRcvbufLength(SOCKET_RCVBUF_LENGTH)
+                    .socketSndbufLength(SOCKET_SNDBUF_LENGTH));
             dir = embedded.aeronDirectoryName();
         }
         this.ownMediaDriver = embedded;

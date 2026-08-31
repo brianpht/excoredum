@@ -116,7 +116,12 @@ public final class ClientConfig {
         private String aeronDirectoryName;
         private String egressChannel = "aeron:udp?endpoint=localhost:0";
         private long messageTimeoutNs = TimeUnit.SECONDS.toNanos(30);
-        private long retryBackoffNs = TimeUnit.MILLISECONDS.toNanos(250);
+        // Re-offer deadline must exceed the end-to-end tail latency: an ACK that
+        // arrives after the deadline makes the client re-offer an already-applied
+        // command, which the engine dedups but which the caller still counts as an
+        // extra result. Two seconds tolerates the multi-hundred-ms tail spikes
+        // seen under load; the dedup window still bounds resends for exactly-once.
+        private long retryBackoffNs = TimeUnit.SECONDS.toNanos(2);
         private int maxRetries;
         private int maxInFlight = 1024;
         private int dedupWindow = 1024;

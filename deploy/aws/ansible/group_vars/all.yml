@@ -13,9 +13,11 @@ workload_users: "5000"
 workload_symbols: "256"
 workload_trade_limit: "4096"
 load_client_id: "1"
-# Write-side in-flight drain batch (power of two). Higher deepens the pipeline
-# and raises throughput, at the cost of more ingress backpressure.
-load_batch: "64"
+# Write-side load profile: "latency" (shallow pipeline, lowest tail) or
+# "throughput" (deep pipeline, ~3x throughput). An explicit load_batch (power
+# of two) overrides the profile's drain batch.
+load_profile: "throughput"
+load_batch: "128"
 
 # Tuning knobs for the JVM and the engine / ledger capacities. An empty value
 # means "use the compiled-in default" (the bin scripts fall back when the env

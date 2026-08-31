@@ -42,6 +42,19 @@
         dest: "{{ gateway_config_path }}"
       when: inventory_hostname in groups['gateway']
 
+    - name: Raise OS socket buffer limits for Aeron
+      ansible.builtin.copy:
+        content: |
+          # 16 MB Aeron socket buffers (SO_RCVBUF doubles, so rmem_max allows 32 MB).
+          net.core.rmem_max = 33554432
+          net.core.wmem_max = 33554432
+        dest: /etc/sysctl.d/99-justrade.conf
+        mode: "0644"
+
+    - name: Apply socket buffer limits
+      ansible.builtin.shell:
+        cmd: sysctl -p /etc/sysctl.d/99-justrade.conf
+
     - name: Install systemd unit
       ansible.builtin.template:
         src: justrade.service.j2

@@ -11,16 +11,26 @@ EGRESS="aeron:udp?endpoint=${_ip%% *}:0"
 OPS="${JUSTRADE_OPS:-100000}"
 USERS="${JUSTRADE_USERS:-100}"
 SYMBOLS="${JUSTRADE_SYMBOLS:-1}"
-BATCH="${JUSTRADE_BATCH:-16}"
+PROFILE="${JUSTRADE_PROFILE:-}"
+BATCH="${JUSTRADE_BATCH:-}"
 CLIENT_ID="${JUSTRADE_CLIENT_ID:-1}"
 JAVA_OPTS="${JUSTRADE_JAVA_OPTS:--Xms512m -Xmx1g -XX:+UseZGC}"
 
-echo "justrade load: ${OPS} ops / ${USERS} users / ${SYMBOLS} symbols / batch ${BATCH} against ${ENDPOINTS} (clientId=${CLIENT_ID}, egress ${EGRESS})"
+# --profile selects a latency/throughput preset; an explicit --batch overrides
+# the preset's drain depth. With neither set, the runner uses its own default.
+RUNNER_ARGS="--endpoints=${ENDPOINTS} --egress=${EGRESS} --ops=${OPS} --users=${USERS} --symbols=${SYMBOLS} --client-id=${CLIENT_ID}"
+if [ -n "${PROFILE}" ]; then
+    RUNNER_ARGS="${RUNNER_ARGS} --profile=${PROFILE}"
+fi
+if [ -n "${BATCH}" ]; then
+    RUNNER_ARGS="${RUNNER_ARGS} --batch=${BATCH}"
+fi
+
+echo "justrade load: ${OPS} ops / ${USERS} users / ${SYMBOLS} symbols / profile ${PROFILE:-default} against ${ENDPOINTS} (clientId=${CLIENT_ID}, egress ${EGRESS})"
 exec /opt/justrade/jre/bin/java \
     $JAVA_OPTS \
     --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
     --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
     -cp "/opt/justrade/bench/lib/*" \
     io.justrade.bench.ExternalLoadRunner \
-    --endpoints="${ENDPOINTS}" --egress="${EGRESS}" \
-    --ops="${OPS}" --users="${USERS}" --symbols="${SYMBOLS}" --batch="${BATCH}" --client-id="${CLIENT_ID}"
+    ${RUNNER_ARGS}
