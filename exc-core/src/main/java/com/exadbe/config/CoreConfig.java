@@ -13,9 +13,6 @@ public final class CoreConfig {
     /** Property prefix for the operator-facing overrides read by {@link #fromProperties}. */
     public static final String PROPERTY_PREFIX = "exc.core.";
 
-    /** Default number of symbols preallocated. */
-    public static final int DEFAULT_SYMBOL_CAPACITY = 1024;
-
     /** Default number of user accounts preallocated. */
     public static final int DEFAULT_ACCOUNT_CAPACITY = 1 << 16;
 
@@ -48,7 +45,6 @@ public final class CoreConfig {
     /** Default size in bytes of one journal ring slot. */
     public static final int DEFAULT_JOURNAL_SLOT_SIZE = 128;
 
-    private final int symbolCapacity;
     private final int accountCapacity;
     private final int dedupClientCapacity;
     private final int dedupWindow;
@@ -60,7 +56,6 @@ public final class CoreConfig {
     private final int journalSlotSize;
 
     private CoreConfig(
-            final int symbolCapacity,
             final int accountCapacity,
             final int dedupClientCapacity,
             final int dedupWindow,
@@ -70,7 +65,6 @@ public final class CoreConfig {
             final int eventBufferCapacity,
             final int journalSlotCount,
             final int journalSlotSize) {
-        requirePositive("symbolCapacity", symbolCapacity);
         requirePositive("accountCapacity", accountCapacity);
         requirePositive("dedupClientCapacity", dedupClientCapacity);
         requirePowerOfTwo("dedupWindow", dedupWindow);
@@ -83,7 +77,6 @@ public final class CoreConfig {
             // A slot must hold at least the length header plus one byte.
             throw new IllegalArgumentException("journalSlotSize must exceed 4, was: " + journalSlotSize);
         }
-        this.symbolCapacity = symbolCapacity;
         this.accountCapacity = accountCapacity;
         this.dedupClientCapacity = dedupClientCapacity;
         this.dedupWindow = dedupWindow;
@@ -109,7 +102,6 @@ public final class CoreConfig {
 
     public static CoreConfig defaults() {
         return new CoreConfig(
-                DEFAULT_SYMBOL_CAPACITY,
                 DEFAULT_ACCOUNT_CAPACITY,
                 DEFAULT_DEDUP_CLIENT_CAPACITY,
                 DEFAULT_DEDUP_WINDOW,
@@ -128,7 +120,6 @@ public final class CoreConfig {
      */
     public static CoreConfig fromProperties(final Properties props) {
         return builder()
-                .symbolCapacity(intProp(props, "symbolCapacity", DEFAULT_SYMBOL_CAPACITY))
                 .accountCapacity(intProp(props, "accountCapacity", DEFAULT_ACCOUNT_CAPACITY))
                 .dedupClientCapacity(intProp(props, "dedupClientCapacity", DEFAULT_DEDUP_CLIENT_CAPACITY))
                 .dedupWindow(intProp(props, "dedupWindow", DEFAULT_DEDUP_WINDOW))
@@ -165,7 +156,6 @@ public final class CoreConfig {
 
     /** Fluent builder with validation at {@link #build()}. */
     public static final class Builder {
-        private int symbolCapacity = DEFAULT_SYMBOL_CAPACITY;
         private int accountCapacity = DEFAULT_ACCOUNT_CAPACITY;
         private int dedupClientCapacity = DEFAULT_DEDUP_CLIENT_CAPACITY;
         private int dedupWindow = DEFAULT_DEDUP_WINDOW;
@@ -175,11 +165,6 @@ public final class CoreConfig {
         private int eventBufferCapacity = DEFAULT_EVENT_BUFFER_CAPACITY;
         private int journalSlotCount = DEFAULT_JOURNAL_SLOT_COUNT;
         private int journalSlotSize = DEFAULT_JOURNAL_SLOT_SIZE;
-
-        public Builder symbolCapacity(final int value) {
-            this.symbolCapacity = value;
-            return this;
-        }
 
         public Builder accountCapacity(final int value) {
             this.accountCapacity = value;
@@ -228,7 +213,6 @@ public final class CoreConfig {
 
         public CoreConfig build() {
             return new CoreConfig(
-                    symbolCapacity,
                     accountCapacity,
                     dedupClientCapacity,
                     dedupWindow,
@@ -239,10 +223,6 @@ public final class CoreConfig {
                     journalSlotCount,
                     journalSlotSize);
         }
-    }
-
-    public int symbolCapacity() {
-        return symbolCapacity;
     }
 
     public int accountCapacity() {

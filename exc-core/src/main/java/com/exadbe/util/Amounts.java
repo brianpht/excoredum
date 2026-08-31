@@ -26,9 +26,4 @@ public final class Amounts {
         final long lo = a * b;
         return Math.multiplyHigh(a, b) != (lo >> 63);
     }
-
-    /** Returns {@code true} if {@code amount} is strictly negative. */
-    public static boolean isNegative(final long amount) {
-        return amount < 0L;
-    }
 }

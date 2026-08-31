@@ -31,9 +31,6 @@ class CoreConfigTest {
     void capacitiesMustBePositive() {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> CoreConfig.builder().symbolCapacity(0).build());
-        assertThrows(
-                IllegalArgumentException.class,
                 () -> CoreConfig.builder().accountCapacity(-1).build());
         assertThrows(
                 IllegalArgumentException.class,

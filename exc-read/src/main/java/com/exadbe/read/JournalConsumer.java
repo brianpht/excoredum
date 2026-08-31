@@ -64,8 +64,16 @@ public final class JournalConsumer {
 
     private void onFragment(final DirectBuffer buffer, final int offset, final int length, final Header header) {
         lastPosition = header.position();
+        if (length < MessageHeaderDecoder.ENCODED_LENGTH) {
+            return;
+        }
         headerDecoder.wrap(buffer, offset);
         if (headerDecoder.templateId() != JournalEventDecoder.TEMPLATE_ID) {
+            return;
+        }
+        // A header that claims a block longer than the fragment must be dropped
+        // before the decoder reads past the frame into adjacent bytes.
+        if (MessageHeaderDecoder.ENCODED_LENGTH + headerDecoder.blockLength() > length) {
             return;
         }
         eventDecoder.wrap(

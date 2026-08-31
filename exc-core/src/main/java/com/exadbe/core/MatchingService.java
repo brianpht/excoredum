@@ -114,10 +114,19 @@ public final class MatchingService implements ClusteredService {
             final int length,
             final Header header) {
 
+        if (length < MessageHeaderDecoder.ENCODED_LENGTH) {
+            return;
+        }
         messageHeaderDecoder.wrap(buffer, offset);
         if (messageHeaderDecoder.schemaId() != MessageHeaderDecoder.SCHEMA_ID
                 || messageHeaderDecoder.templateId() != CommandEnvelopeDecoder.TEMPLATE_ID) {
             // Not a command we recognise; ignore rather than corrupt state.
+            return;
+        }
+        // A header that claims a block longer than the message must be dropped
+        // before the decoder reads past it; this is the one place garbage-in
+        // can reach the state machine.
+        if (MessageHeaderDecoder.ENCODED_LENGTH + messageHeaderDecoder.blockLength() > length) {
             return;
         }
 

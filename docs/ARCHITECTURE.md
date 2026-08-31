@@ -1063,7 +1063,6 @@ single node; tests use smaller values.
 
 | Setting               | Default | Purpose                                     |
 |-----------------------|---------|---------------------------------------------|
-| `symbolCapacity`      | 2^10    | Preallocated symbol-spec slots              |
 | `accountCapacity`     | 2^16    | Preallocated account-map slots              |
 | `dedupClientCapacity` | 2^12    | Preallocated dedup clients                  |
 | `dedupWindow`         | 2^10    | Most recent commands retained per client    |

@@ -170,9 +170,17 @@ final class SnapshotSubscriber implements AutoCloseable {
 
     private void onFragment(
             final DirectBuffer buffer, final int offset, final int length, final io.aeron.logbuffer.Header header) {
+        if (length < MessageHeaderDecoder.ENCODED_LENGTH) {
+            return;
+        }
         excHeader.wrap(buffer, offset);
         if (excHeader.schemaId() != MessageHeaderDecoder.SCHEMA_ID) {
             // Cluster-schema framing that prefixes the service snapshot.
+            return;
+        }
+        // A record claiming a block longer than the fragment would let the
+        // record decoder read adjacent bytes; drop it.
+        if (MessageHeaderDecoder.ENCODED_LENGTH + excHeader.blockLength() > length) {
             return;
         }
         if (!loadStarted) {

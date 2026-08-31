@@ -313,7 +313,24 @@ public final class ReadReplicaConfig {
             if (archiveControlChannels == null || archiveControlChannels.length == 0) {
                 throw new IllegalArgumentException("at least one archive control channel is required");
             }
+            // A zero here is always a typo, never a tuning choice: it would fail
+            // over on every poll, hammer the archive or disk every cycle, or be
+            // silently substituted by Aeron's own default.
+            requirePositiveMs("livenessTimeoutMs", livenessTimeoutMs);
+            requirePositiveMs("archiveMessageTimeoutMs", archiveMessageTimeoutMs);
+            requirePositiveMs("snapshotLoadTimeoutMs", snapshotLoadTimeoutMs);
+            requirePositiveMs("snapshotPollIntervalMs", snapshotPollIntervalMs);
+            requirePositiveMs("checkpointIntervalMs", checkpointIntervalMs);
+            if (failoverBackoffMs < 0L) {
+                throw new IllegalArgumentException("failoverBackoffMs must not be negative, was: " + failoverBackoffMs);
+            }
             return new ReadReplicaConfig(this);
+        }
+
+        private static void requirePositiveMs(final String name, final long value) {
+            if (value <= 0L) {
+                throw new IllegalArgumentException(name + " must be positive, was: " + value);
+            }
         }
     }
 }

@@ -271,6 +271,12 @@ final class LiveLogSubscriber implements AutoCloseable {
         if (excHeader.templateId() != CommandEnvelopeDecoder.TEMPLATE_ID) {
             return;
         }
+        // A header that claims a block longer than the fragment must be dropped
+        // before the decoder reads past the frame into adjacent bytes.
+        if (serviceOffset + com.exadbe.protocol.MessageHeaderDecoder.ENCODED_LENGTH + excHeader.blockLength()
+                > offset + length) {
+            return;
+        }
         envelopeDecoder.wrap(
                 buffer,
                 serviceOffset + com.exadbe.protocol.MessageHeaderDecoder.ENCODED_LENGTH,
