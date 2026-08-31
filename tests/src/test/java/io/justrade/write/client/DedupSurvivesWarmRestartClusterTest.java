@@ -9,7 +9,7 @@ import io.justrade.launcher.ClusterConfig;
 import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.CommandResultCode;
 import io.justrade.protocol.QueryStreams;
-import io.justrade.read.ExcReadReplica;
+import io.justrade.read.ReadReplica;
 import io.justrade.read.config.ReadReplicaConfig;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
@@ -56,7 +56,7 @@ class DedupSurvivesWarmRestartClusterTest {
                     (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) ->
                             codes.put(idLo, code);
 
-            try (ExcClient client = new ExcClient(
+            try (WriteClient client = new WriteClient(
                     ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                             .build(),
                     handler)) {
@@ -106,7 +106,7 @@ class DedupSurvivesWarmRestartClusterTest {
                     "localhost",
                     QueryStreams.QUERY_REQUEST_CHANNEL,
                     QueryStreams.QUERY_REQUEST_STREAM_ID);
-            try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+            try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                 pollReplica(replica, () -> replica.userCount() >= 1 && replica.orderCount() == 1);
                 assertEquals(990L, replica.balance(UID, BASE), "the resting ask holds 10 base");
 
@@ -117,7 +117,7 @@ class DedupSurvivesWarmRestartClusterTest {
                 final ResultHandler resendHandler =
                         (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) ->
                                 resendCodes.put(idLo, code);
-                try (ExcClient resend = new ExcClient(
+                try (WriteClient resend = new WriteClient(
                         ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                                 .initialClientSeq(PLACE_SEQ)
                                 .build(),
@@ -162,7 +162,7 @@ class DedupSurvivesWarmRestartClusterTest {
         }
     }
 
-    private static void awaitLeader(final ExcClient client) {
+    private static void awaitLeader(final WriteClient client) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -174,7 +174,7 @@ class DedupSurvivesWarmRestartClusterTest {
         throw new AssertionError("no leader established within timeout");
     }
 
-    private static long submit(final ExcClient client, final java.util.function.LongSupplier op) {
+    private static long submit(final WriteClient client, final java.util.function.LongSupplier op) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -187,7 +187,7 @@ class DedupSurvivesWarmRestartClusterTest {
         throw new AssertionError("could not submit within timeout");
     }
 
-    private static void drainUntil(final ExcClient client, final BooleanSupplier done) {
+    private static void drainUntil(final WriteClient client, final BooleanSupplier done) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -210,7 +210,7 @@ class DedupSurvivesWarmRestartClusterTest {
         throw new AssertionError(message);
     }
 
-    private static void pollReplica(final ExcReadReplica replica, final BooleanSupplier condition) {
+    private static void pollReplica(final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             replica.poll();

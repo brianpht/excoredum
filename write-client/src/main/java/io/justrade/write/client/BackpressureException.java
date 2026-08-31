@@ -1,10 +1,10 @@
 package io.justrade.write.client;
 
 /**
- * Thrown by {@link ExcClient#submit} when the in-flight command window is full.
+ * Thrown by {@link WriteClient#submit} when the in-flight command window is full.
  *
  * <p>Signals backpressure explicitly to the caller rather than silently dropping
- * the command. The caller should {@link ExcClient#poll} to drain
+ * the command. The caller should {@link WriteClient#poll} to drain
  * acknowledgements and retry.
  */
 public final class BackpressureException extends RuntimeException {

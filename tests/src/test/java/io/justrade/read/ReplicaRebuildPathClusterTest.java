@@ -10,8 +10,8 @@ import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.QueryStreams;
 import io.justrade.read.config.ReadReplicaConfig;
 import io.justrade.write.client.BackpressureException;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -56,7 +56,7 @@ class ReplicaRebuildPathClusterTest {
             final ClientConfig clientConfig = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1))
                     .keepaliveIntervalNs(0L)
                     .build();
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 final ReadReplicaConfig replicaConfig = ReadReplicaConfig.builder(
                                 baseDir.resolve("replica1").resolve("driver").toString())
                         .channels(config.archiveControlChannel())
@@ -65,7 +65,7 @@ class ReplicaRebuildPathClusterTest {
                         .checkpointFile(checkpointFile)
                         .checkpointIntervalMs(250L)
                         .build();
-                try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+                try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                     submit(client, () -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L));
                     for (long uid = 1L; uid <= OLD_USERS; uid++) {
                         final long u = uid;
@@ -96,7 +96,7 @@ class ReplicaRebuildPathClusterTest {
             final ClientConfig clientConfig = ClientConfig.builder(2L, ClusterConfig.ingressEndpoints(1))
                     .keepaliveIntervalNs(0L)
                     .build();
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 long lastId = submit(client, () -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L));
                 lastId = submit(client, () -> client.addUser(1L));
                 lastId = submit(client, () -> client.adjustBalance(1L, BASE, 5_000L));
@@ -116,7 +116,7 @@ class ReplicaRebuildPathClusterTest {
                         .checkpointFile(checkpointFile)
                         .checkpointIntervalMs(250L)
                         .build();
-                try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+                try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                     assertEquals(
                             OLD_USERS,
                             replica.userCount(),
@@ -162,7 +162,7 @@ class ReplicaRebuildPathClusterTest {
         }
     }
 
-    private static void drain(final ExcClient client, final BooleanSupplier condition) {
+    private static void drain(final WriteClient client, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -174,7 +174,7 @@ class ReplicaRebuildPathClusterTest {
         throw new AssertionError("condition never met within timeout");
     }
 
-    private static long submit(final ExcClient client, final LongSupplier command) {
+    private static long submit(final WriteClient client, final LongSupplier command) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -188,7 +188,7 @@ class ReplicaRebuildPathClusterTest {
     }
 
     private static void pollUntil(
-            final ExcClient client, final ExcReadReplica replica, final BooleanSupplier condition) {
+            final WriteClient client, final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -201,7 +201,7 @@ class ReplicaRebuildPathClusterTest {
         throw new AssertionError("replica never reached the expected state");
     }
 
-    private static void drain(final ExcClient client, final ExcReadReplica replica, final BooleanSupplier condition) {
+    private static void drain(final WriteClient client, final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

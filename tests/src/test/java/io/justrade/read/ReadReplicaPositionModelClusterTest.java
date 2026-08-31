@@ -27,8 +27,8 @@ import io.justrade.read.order.OrderLedger;
 import io.justrade.read.report.ReportGenerator;
 import io.justrade.telemetry.CoreMetrics;
 import io.justrade.write.client.BackpressureException;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -178,7 +178,7 @@ class ReadReplicaPositionModelClusterTest {
                             results.add(idLo);
             final ClientConfig clientConfig = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                     .build();
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 submitBatch(results, client, configs);
             }
 
@@ -253,7 +253,7 @@ class ReadReplicaPositionModelClusterTest {
                             results.add(idLo);
             final ClientConfig clientConfig = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                     .build();
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 awaitLeader(client);
                 submitBatch(results, client, configs);
 
@@ -322,8 +322,8 @@ class ReadReplicaPositionModelClusterTest {
                     QueryStreams.QUERY_REQUEST_CHANNEL,
                     QueryStreams.QUERY_REQUEST_STREAM_ID);
 
-            try (ExcClient client = new ExcClient(clientConfig, handler);
-                    ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+            try (WriteClient client = new WriteClient(clientConfig, handler);
+                    ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                 submitBatch1(client, lastIdLo, replica);
                 pollUntil(client, replica, () -> replica.userCount() == 5 && replica.orderCount() == 1);
                 assertEquals(0, replica.currentSource(), "the replica initially follows the primary source");
@@ -408,7 +408,7 @@ class ReadReplicaPositionModelClusterTest {
             final ResultHandler phaseOneHandler =
                     (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) ->
                             lastIdLo[0] = idLo;
-            try (ExcClient client = new ExcClient(
+            try (WriteClient client = new WriteClient(
                     ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build(), phaseOneHandler)) {
                 awaitResult(client, client.addSymbol(SYM, BASE, QUOTE, 1L, 1L), lastIdLo);
                 awaitResult(client, client.addUser(MAKER), lastIdLo);
@@ -438,7 +438,7 @@ class ReadReplicaPositionModelClusterTest {
                             lastFilled[0] = filledSize;
                         }
                     };
-            try (ExcClient client = new ExcClient(
+            try (WriteClient client = new WriteClient(
                     ClientConfig.builder(2L, ClusterConfig.ingressEndpoints(1)).build(), phaseTwoHandler)) {
                 client.tradeListener(
                         (idHi, idLo, index, symbolId, makerOrderId, makerUid, takerUid, price, size, makerCompleted) ->
@@ -532,7 +532,7 @@ class ReadReplicaPositionModelClusterTest {
         return channels;
     }
 
-    private static void submitBatch(final Set<Long> results, final ExcClient client, final ClusterConfig[] configs) {
+    private static void submitBatch(final Set<Long> results, final WriteClient client, final ClusterConfig[] configs) {
         awaitLeader(client);
         final int expected = 18;
         submit(client, () -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L));
@@ -547,7 +547,7 @@ class ReadReplicaPositionModelClusterTest {
         drainUntil(client, results, expected);
     }
 
-    private static void submitBatch1(final ExcClient client, final long[] lastIdLo, final ExcReadReplica replica) {
+    private static void submitBatch1(final WriteClient client, final long[] lastIdLo, final ReadReplica replica) {
         await(submit(client, () -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L)), client, replica, lastIdLo);
         for (long uid = 1L; uid <= 5L; uid++) {
             final long u = uid;
@@ -559,7 +559,7 @@ class ReadReplicaPositionModelClusterTest {
         await(submit(client, () -> client.placeGtc(SYM, 2L, false, 105L, 4L, 105L, 2L, 0)), client, replica, lastIdLo);
     }
 
-    private static void submitBatch2(final ExcClient client, final long[] lastIdLo, final ExcReadReplica replica) {
+    private static void submitBatch2(final WriteClient client, final long[] lastIdLo, final ReadReplica replica) {
         for (long uid = 6L; uid <= 10L; uid++) {
             final long u = uid;
             await(submit(client, () -> client.addUser(u)), client, replica, lastIdLo);
@@ -570,7 +570,7 @@ class ReadReplicaPositionModelClusterTest {
         await(submit(client, () -> client.placeGtc(SYM, 4L, false, 100L, 2L, 100L, 7L, 0)), client, replica, lastIdLo);
     }
 
-    private static void awaitResult(final ExcClient client, final long commandIdLo, final long[] lastIdLo) {
+    private static void awaitResult(final WriteClient client, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -583,7 +583,7 @@ class ReadReplicaPositionModelClusterTest {
     }
 
     private static void await(
-            final long commandIdLo, final ExcClient client, final ExcReadReplica replica, final long[] lastIdLo) {
+            final long commandIdLo, final WriteClient client, final ReadReplica replica, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -597,7 +597,7 @@ class ReadReplicaPositionModelClusterTest {
     }
 
     private static void pollUntil(
-            final ExcClient client, final ExcReadReplica replica, final BooleanSupplier condition) {
+            final WriteClient client, final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -610,7 +610,7 @@ class ReadReplicaPositionModelClusterTest {
         throw new AssertionError("replica never reached the expected state");
     }
 
-    private static long submit(final ExcClient client, final LongSupplier op) {
+    private static long submit(final WriteClient client, final LongSupplier op) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -623,7 +623,7 @@ class ReadReplicaPositionModelClusterTest {
         throw new AssertionError("could not submit command within timeout");
     }
 
-    private static void drainUntil(final ExcClient client, final Set<Long> results, final int target) {
+    private static void drainUntil(final WriteClient client, final Set<Long> results, final int target) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -635,7 +635,7 @@ class ReadReplicaPositionModelClusterTest {
         throw new AssertionError("only " + results.size() + " of " + target + " results within timeout");
     }
 
-    private static void awaitLeader(final ExcClient client) {
+    private static void awaitLeader(final WriteClient client) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

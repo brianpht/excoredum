@@ -20,7 +20,7 @@ final class ReplicaFailoverEscalationTest {
 
     @Test
     void repeatedFailoversWithoutProgressEscalateToRebuild(@TempDir final Path baseDir) {
-        try (ExcReadReplica replica = newReplica(baseDir)) {
+        try (ReadReplica replica = newReplica(baseDir)) {
             for (int i = 0; i < 7; i++) {
                 assertFalse(replica.failoverWithoutProgress(100L), "no escalation before the threshold");
             }
@@ -39,7 +39,7 @@ final class ReplicaFailoverEscalationTest {
 
     @Test
     void progressBetweenFailoversNeverEscalates(@TempDir final Path baseDir) {
-        try (ExcReadReplica replica = newReplica(baseDir)) {
+        try (ReadReplica replica = newReplica(baseDir)) {
             for (long position = 1L; position <= 100L; position++) {
                 assertFalse(replica.failoverWithoutProgress(position), "an advancing position resets the count");
             }
@@ -47,12 +47,12 @@ final class ReplicaFailoverEscalationTest {
         }
     }
 
-    private static ExcReadReplica newReplica(final Path baseDir) {
+    private static ReadReplica newReplica(final Path baseDir) {
         final ReadReplicaConfig config = ReadReplicaConfig.builder(
                         baseDir.resolve("driver").toString())
                 .channels("aeron:udp?endpoint=localhost:20999")
                 .localHost("localhost")
                 .build();
-        return new ExcReadReplica(config, CoreConfig.defaults());
+        return new ReadReplica(config, CoreConfig.defaults());
     }
 }

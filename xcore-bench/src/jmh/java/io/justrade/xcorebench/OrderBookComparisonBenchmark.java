@@ -58,8 +58,8 @@ public class OrderBookComparisonBenchmark {
     @Param
     private Impl impl;
 
-    private OrderBookNaive excPlaceCancelBook;
-    private OrderBookNaive excMatchBook;
+    private OrderBookNaive justradePlaceCancelBook;
+    private OrderBookNaive justradeMatchBook;
     private IOrderBook xcorePlaceCancelBook;
     private IOrderBook xcoreMatchBook;
     private CommandOutcome outcome;
@@ -75,10 +75,10 @@ public class OrderBookComparisonBenchmark {
         replayChunk = WorkloadGenerator.generate(2048, 512, 256, SYMBOL, false, false, 42);
 
         if (impl == Impl.JUSTRADE_NAIVE) {
-            excPlaceCancelBook = new OrderBookNaive(SYMBOL);
-            excMatchBook = new OrderBookNaive(SYMBOL);
+            justradePlaceCancelBook = new OrderBookNaive(SYMBOL);
+            justradeMatchBook = new OrderBookNaive(SYMBOL);
             outcome.reset(0L, 0L);
-            excMatchBook.placeGtc(1L, true, 100L, Long.MAX_VALUE / 4L, 0L, 99L, 0L, outcome);
+            justradeMatchBook.placeGtc(1L, true, 100L, Long.MAX_VALUE / 4L, 0L, 99L, 0L, outcome);
         } else {
             xcorePlaceCancelBook = newBook();
             xcoreMatchBook = newBook();
@@ -119,8 +119,8 @@ public class OrderBookComparisonBenchmark {
         final long id = ++orderId;
         if (impl == Impl.JUSTRADE_NAIVE) {
             outcome.reset(0L, id);
-            excPlaceCancelBook.placeGtc(id, false, 50L, 10L, 50L, 1L, 0L, outcome);
-            excPlaceCancelBook.cancel(id, 1L, outcome);
+            justradePlaceCancelBook.placeGtc(id, false, 50L, 10L, 50L, 1L, 0L, outcome);
+            justradePlaceCancelBook.cancel(id, 1L, outcome);
         } else {
             fillPlace(id);
             IOrderBook.processCommand(xcorePlaceCancelBook, placeCmd);
@@ -143,7 +143,7 @@ public class OrderBookComparisonBenchmark {
         final long id = ++orderId;
         if (impl == Impl.JUSTRADE_NAIVE) {
             outcome.reset(0L, id);
-            return excMatchBook.matchIoc(id, false, 100L, 1L, 100L, TAKER_UID, outcome);
+            return justradeMatchBook.matchIoc(id, false, 100L, 1L, 100L, TAKER_UID, outcome);
         }
         fillPlace(id);
         placeCmd.orderType = OrderType.IOC;
@@ -161,7 +161,7 @@ public class OrderBookComparisonBenchmark {
     @Benchmark
     public BookStats replayChunk() {
         if (impl == Impl.JUSTRADE_NAIVE) {
-            return ExcBookRunner.replay(replayChunk, SYMBOL);
+            return JustradeBookRunner.replay(replayChunk, SYMBOL);
         }
         return XcoreBookRunner.replay(replayChunk, SYMBOL, replayFactory);
     }

@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Bridges the {@code ExcClient} egress listeners to the {@link StreamBroadcaster}.
+ * Bridges the {@code WriteClient} egress listeners to the {@link StreamBroadcaster}.
  * Each event is published as a JSON envelope with a {@code type} discriminator
  * ({@code TRADE}, {@code REDUCE}, {@code REJECT}, {@code L2}). Runs on the write
  * pump thread; the {@code OrderBookSnapshot} holder is reused, so the L2 levels

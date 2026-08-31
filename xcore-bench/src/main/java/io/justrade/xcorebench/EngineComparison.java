@@ -21,7 +21,7 @@ public final class EngineComparison {
         report.note("justrade: single-thread MatchingEngine.process (decode + dedup + risk + match), allocation-free");
         report.note("xcore: ExchangeCore disruptor pipeline (risk + match + result future), allocates per command");
 
-        final LatencyResult justrade = ExcEngineRunner.run(warmupOps, measureOps);
+        final LatencyResult justrade = JustradeEngineRunner.run(warmupOps, measureOps);
         final LatencyResult xcore = XcorePipelineRunner.run(warmupOps, measureOps);
 
         report.table(

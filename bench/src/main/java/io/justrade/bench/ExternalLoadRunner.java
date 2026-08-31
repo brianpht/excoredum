@@ -2,8 +2,8 @@ package io.justrade.bench;
 
 import io.justrade.protocol.CommandResultCode;
 import io.justrade.write.client.BackpressureException;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import org.HdrHistogram.Histogram;
 import org.agrona.collections.Long2ObjectHashMap;
@@ -16,7 +16,7 @@ import org.agrona.collections.Long2ObjectHashMap;
  * exactly. Also prints throughput and end-to-end latency tails from the
  * client's own histogram.
  *
- * <p>Unlike {@link ExcBenchHarness}, this runner does not boot a cluster; it
+ * <p>Unlike {@link BenchHarness}, this runner does not boot a cluster; it
  * connects to a running one over the network, so it can be containerized and
  * pointed at a dockerized cluster. The client retries the connection until the
  * cluster elects a leader, so the runner may start before the cluster is
@@ -138,7 +138,7 @@ public final class ExternalLoadRunner {
 
         final ClientConfig config =
                 ClientConfig.builder(clientId, endpoints).egressChannel(egress).build();
-        final ExcClient client = connectWithRetry(config, handler);
+        final WriteClient client = connectWithRetry(config, handler);
         try {
             client.tradeGroupListener(group -> fills[0] += group.totalVolume());
 
@@ -191,12 +191,12 @@ public final class ExternalLoadRunner {
         }
     }
 
-    private static ExcClient connectWithRetry(final ClientConfig config, final ResultHandler handler) {
+    private static WriteClient connectWithRetry(final ClientConfig config, final ResultHandler handler) {
         final long deadline = System.currentTimeMillis() + CONNECT_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
                 System.out.println("connecting to cluster at " + config.ingressEndpoints() + " ...");
-                return new ExcClient(config, handler);
+                return new WriteClient(config, handler);
             } catch (final RuntimeException e) {
                 System.out.println(
                         "cluster not ready (" + e.getMessage() + "), retrying in " + CONNECT_RETRY_MS + " ms");
@@ -206,7 +206,7 @@ public final class ExternalLoadRunner {
         throw new IllegalStateException("could not connect to cluster within " + CONNECT_TIMEOUT_MS + " ms");
     }
 
-    private static void setup(final ExcClient client, final LoadWorkload workload, final long[] lastIdLo) {
+    private static void setup(final WriteClient client, final LoadWorkload workload, final long[] lastIdLo) {
         for (int symbolId = 1; symbolId <= workload.symbols(); symbolId++) {
             await(client, client.addSymbol(symbolId, BASE, QUOTE, 1L, 1L), lastIdLo);
         }
@@ -217,7 +217,7 @@ public final class ExternalLoadRunner {
         }
     }
 
-    private static long submitOne(final ExcClient client, final LoadWorkload.Command command) {
+    private static long submitOne(final WriteClient client, final LoadWorkload.Command command) {
         for (; ; ) {
             try {
                 return switch (command.type()) {
@@ -250,7 +250,7 @@ public final class ExternalLoadRunner {
         };
     }
 
-    private static void await(final ExcClient client, final long commandIdLo, final long[] lastIdLo) {
+    private static void await(final WriteClient client, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + SETUP_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -263,7 +263,7 @@ public final class ExternalLoadRunner {
     }
 
     private static void printReport(
-            final ExcClient client,
+            final WriteClient client,
             final LoadWorkload workload,
             final int setupCommands,
             final long elapsedNanos,

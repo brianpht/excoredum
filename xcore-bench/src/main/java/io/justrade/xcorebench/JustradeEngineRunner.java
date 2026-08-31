@@ -23,7 +23,7 @@ import org.agrona.concurrent.UnsafeBuffer;
  * the Aeron transport and consensus. Commands are pre-encoded into one buffer
  * so the steady-state loop is allocation-free.
  */
-public final class ExcEngineRunner {
+public final class JustradeEngineRunner {
 
     private static final int SYMBOL = BookComparison.SYMBOL_ID;
     // Must match WorkloadGenerator.spotSymbol so both engines trade the same pair.
@@ -36,7 +36,7 @@ public final class ExcEngineRunner {
     private static final int STRIDE = 192;
     private static final int SETUP_COMMANDS = 6;
 
-    private ExcEngineRunner() {}
+    private JustradeEngineRunner() {}
 
     /** Runs warmup plus measured taker fills against one deep resting maker. */
     public static LatencyResult run(final int warmupOps, final int measureOps) {

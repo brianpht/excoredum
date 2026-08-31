@@ -21,7 +21,7 @@ import org.junit.jupiter.api.io.TempDir;
  * of being dropped on a dead session.
  */
 @Tag("integration")
-class ExcClientKeepaliveIntegrationTest {
+class ClientKeepaliveIntegrationTest {
 
     private static final long IDLE_MS = 13_000L;
     private static final long TIMEOUT_MS = 30_000L;
@@ -43,7 +43,7 @@ class ExcClientKeepaliveIntegrationTest {
             final ClientConfig config =
                     ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
-            try (ExcClient client = new ExcClient(config, handler)) {
+            try (WriteClient client = new WriteClient(config, handler)) {
                 // First command: establish the session.
                 await(client, client.addUser(1L), lastIdLo);
                 assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
@@ -72,7 +72,7 @@ class ExcClientKeepaliveIntegrationTest {
         }
     }
 
-    private static void await(final ExcClient client, final long commandIdLo, final long[] lastIdLo) {
+    private static void await(final WriteClient client, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

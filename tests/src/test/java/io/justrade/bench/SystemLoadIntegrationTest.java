@@ -5,8 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.justrade.config.CoreConfig;
 import io.justrade.launcher.ClusterConfig;
 import io.justrade.launcher.ClusterNode;
-import io.justrade.read.ExcReadReplica;
 import io.justrade.read.QueryResponder;
+import io.justrade.read.ReadReplica;
 import io.justrade.read.config.ReadReplicaConfig;
 import java.nio.file.Path;
 import org.agrona.concurrent.BackoffIdleStrategy;
@@ -44,7 +44,7 @@ class SystemLoadIntegrationTest {
 
             final ReadReplicaConfig replicaConfig = ReadReplicaConfig.localhost(
                     baseDir.resolve("replica").resolve("driver").toString(), clusterConfig.archiveControlChannel());
-            try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults());
+            try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults());
                     QueryResponder responder = new QueryResponder(replica, replicaConfig)) {
                 final Thread serviceThread = startServiceLoop(replica, responder);
                 try {
@@ -60,7 +60,7 @@ class SystemLoadIntegrationTest {
         }
     }
 
-    private static Thread startServiceLoop(final ExcReadReplica replica, final QueryResponder responder) {
+    private static Thread startServiceLoop(final ReadReplica replica, final QueryResponder responder) {
         final Thread thread = new Thread(() -> {
             final BackoffIdleStrategy idle = new BackoffIdleStrategy();
             while (!Thread.currentThread().isInterrupted()) {

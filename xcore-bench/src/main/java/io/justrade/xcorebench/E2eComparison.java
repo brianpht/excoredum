@@ -1,6 +1,6 @@
 package io.justrade.xcorebench;
 
-import io.justrade.bench.ExcBenchHarness;
+import io.justrade.bench.BenchHarness;
 import io.justrade.bench.LatencyResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,7 +20,7 @@ public final class E2eComparison {
     public static String run(final int warmupOps, final int measureOps) throws Exception {
         final ComparisonReport report = new ComparisonReport().heading("End-to-end closed-loop round-trip latency");
         report.note(String.format("shape: same engine shape; warmup=%d ops=%d", warmupOps, measureOps));
-        report.note("justrade: in-process single-node Aeron Cluster + ExcClient (consensus + archive on the path)");
+        report.note("justrade: in-process single-node Aeron Cluster + WriteClient (consensus + archive on the path)");
         report.note("xcore: in-process ExchangeCore pipeline (no consensus / replication)");
 
         final LatencyResult xcore = XcorePipelineRunner.run(warmupOps, measureOps);
@@ -28,7 +28,7 @@ public final class E2eComparison {
         final LatencyResult justrade;
         final Path baseDir = Files.createTempDirectory("xcore-bench-");
         try {
-            justrade = ExcBenchHarness.run(baseDir, warmupOps, measureOps);
+            justrade = BenchHarness.run(baseDir, warmupOps, measureOps);
         } finally {
             deleteRecursively(baseDir);
         }

@@ -9,8 +9,8 @@ import io.justrade.launcher.ClusterConfig;
 import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.MatcherEventType;
 import io.justrade.write.client.BackpressureException;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
 import java.util.HashSet;
@@ -72,7 +72,7 @@ class JournalLiveFailoverTest {
         try {
             final ClientConfig config = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                     .build();
-            try (ExcClient client = new ExcClient(config, handler)) {
+            try (WriteClient client = new WriteClient(config, handler)) {
                 awaitLeader(client);
 
                 int expected = 0;
@@ -137,7 +137,7 @@ class JournalLiveFailoverTest {
         }
     }
 
-    private static void pump(final ExcClient client, final HaJournalConsumer consumer, final BooleanSupplier done) {
+    private static void pump(final WriteClient client, final HaJournalConsumer consumer, final BooleanSupplier done) {
         final long deadline = System.currentTimeMillis() + DRAIN_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline && !done.getAsBoolean()) {
             client.poll();
@@ -146,7 +146,7 @@ class JournalLiveFailoverTest {
         }
     }
 
-    private static void awaitLeader(final ExcClient client) {
+    private static void awaitLeader(final WriteClient client) {
         final long deadline = System.currentTimeMillis() + CONNECT_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -158,7 +158,7 @@ class JournalLiveFailoverTest {
         throw new AssertionError("no leader established within timeout");
     }
 
-    private static void submit(final ExcClient client, final LongSupplier op) {
+    private static void submit(final WriteClient client, final LongSupplier op) {
         final long deadline = System.currentTimeMillis() + DRAIN_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -172,7 +172,7 @@ class JournalLiveFailoverTest {
         throw new AssertionError("could not submit command within timeout");
     }
 
-    private static void drainUntil(final ExcClient client, final Set<Long> results, final int target) {
+    private static void drainUntil(final WriteClient client, final Set<Long> results, final int target) {
         final long deadline = System.currentTimeMillis() + DRAIN_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

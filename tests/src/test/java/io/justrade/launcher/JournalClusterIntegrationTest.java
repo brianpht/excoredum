@@ -5,8 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.justrade.config.CoreConfig;
 import io.justrade.protocol.CommandResultCode;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Tag;
@@ -43,7 +43,7 @@ class JournalClusterIntegrationTest {
             final ClientConfig config =
                     ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
-            try (ExcClient client = new ExcClient(config, handler)) {
+            try (WriteClient client = new WriteClient(config, handler)) {
                 awaitResult(client, client.addSymbol(SYM, BASE, QUOTE, 1L, 1L), lastCommandIdLo);
                 awaitResult(client, client.addUser(MAKER), lastCommandIdLo);
                 awaitResult(client, client.adjustBalance(MAKER, BASE, 1_000L), lastCommandIdLo);
@@ -68,7 +68,7 @@ class JournalClusterIntegrationTest {
         }
     }
 
-    private static void awaitResult(final ExcClient client, final long commandIdLo, final long[] lastCommandIdLo) {
+    private static void awaitResult(final WriteClient client, final long commandIdLo, final long[] lastCommandIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

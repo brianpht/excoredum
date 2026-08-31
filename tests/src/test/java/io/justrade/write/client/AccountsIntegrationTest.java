@@ -20,7 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
  * BALANCE_ADJUSTMENT result codes end to end via the typed client helpers.
  */
 @Tag("integration")
-class ExcAccountsIntegrationTest {
+class AccountsIntegrationTest {
 
     private static final long TIMEOUT_MS = 15_000L;
     private static final int USD = 840;
@@ -54,7 +54,7 @@ class ExcAccountsIntegrationTest {
         final ClientConfig config =
                 ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
-        try (ExcClient client = new ExcClient(config, handler)) {
+        try (WriteClient client = new WriteClient(config, handler)) {
             awaitResult(client, client.addUser(7L), lastCommandIdLo);
             assertEquals(CommandResultCode.SUCCESS, lastCode[0]);
 
@@ -69,7 +69,7 @@ class ExcAccountsIntegrationTest {
         }
     }
 
-    private static void awaitResult(final ExcClient client, final long commandIdLo, final long[] lastCommandIdLo) {
+    private static void awaitResult(final WriteClient client, final long commandIdLo, final long[] lastCommandIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

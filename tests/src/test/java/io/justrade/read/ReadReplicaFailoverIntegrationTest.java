@@ -12,8 +12,8 @@ import io.justrade.protocol.QueryStreams;
 import io.justrade.read.config.ReadReplicaConfig;
 import io.justrade.read.report.TotalCurrencyBalance;
 import io.justrade.write.client.BackpressureException;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
 import java.util.function.BooleanSupplier;
@@ -62,14 +62,14 @@ class ReadReplicaFailoverIntegrationTest {
                             lastIdLo[0] = idLo;
             final ClientConfig clientConfig = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                     .build();
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 final ReadReplicaConfig replicaConfig = ReadReplicaConfig.localhost(
                         baseDir.resolve("replica").resolve("driver").toString(),
                         channels,
                         "localhost",
                         QueryStreams.QUERY_REQUEST_CHANNEL,
                         QueryStreams.QUERY_REQUEST_STREAM_ID);
-                try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+                try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                     submitBatch1(client, lastIdLo, replica);
                     pollUntil(client, replica, () -> replica.userCount() == 5 && replica.orderCount() == 1);
                     assertEquals(0, replica.currentSource(), "the replica initially follows the primary source");
@@ -149,14 +149,14 @@ class ReadReplicaFailoverIntegrationTest {
                             lastIdLo[0] = idLo;
             final ClientConfig clientConfig = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                     .build();
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 final ReadReplicaConfig replicaConfig = ReadReplicaConfig.localhost(
                         baseDir.resolve("replica").resolve("driver").toString(),
                         channels,
                         "localhost",
                         QueryStreams.QUERY_REQUEST_CHANNEL,
                         QueryStreams.QUERY_REQUEST_STREAM_ID);
-                try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+                try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                     submitBatch1(client, lastIdLo, replica);
                     pollUntil(client, replica, () -> replica.userCount() == 5 && replica.orderCount() == 1);
                     final long positionBefore = replica.appliedPosition();
@@ -219,7 +219,7 @@ class ReadReplicaFailoverIntegrationTest {
         }
     }
 
-    private static void submitBatch1(final ExcClient client, final long[] lastIdLo, final ExcReadReplica replica) {
+    private static void submitBatch1(final WriteClient client, final long[] lastIdLo, final ReadReplica replica) {
         // Symbol plus users 1..5 with funding; a resting ask 10 @ 100 and a
         // crossing bid fills 4 of it.
         await(client, replica, submit(client, () -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L)), lastIdLo);
@@ -233,7 +233,7 @@ class ReadReplicaFailoverIntegrationTest {
         await(client, replica, submit(client, () -> client.placeGtc(SYM, 2L, false, 105L, 4L, 105L, 2L, 0)), lastIdLo);
     }
 
-    private static void submitBatch2(final ExcClient client, final long[] lastIdLo, final ExcReadReplica replica) {
+    private static void submitBatch2(final WriteClient client, final long[] lastIdLo, final ReadReplica replica) {
         // Users 6..10 plus a resting ask 5 @ 100 crossed by a bid 2 @ 100.
         for (long uid = 6L; uid <= 10L; uid++) {
             final long u = uid;
@@ -245,7 +245,7 @@ class ReadReplicaFailoverIntegrationTest {
         await(client, replica, submit(client, () -> client.placeGtc(SYM, 4L, false, 100L, 2L, 100L, 7L, 0)), lastIdLo);
     }
 
-    private static long submit(final ExcClient client, final LongSupplier command) {
+    private static long submit(final WriteClient client, final LongSupplier command) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -259,7 +259,7 @@ class ReadReplicaFailoverIntegrationTest {
     }
 
     private static void await(
-            final ExcClient client, final ExcReadReplica replica, final long commandIdLo, final long[] lastIdLo) {
+            final WriteClient client, final ReadReplica replica, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -273,7 +273,7 @@ class ReadReplicaFailoverIntegrationTest {
     }
 
     private static void pollUntil(
-            final ExcClient client, final ExcReadReplica replica, final BooleanSupplier condition) {
+            final WriteClient client, final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

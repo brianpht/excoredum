@@ -24,7 +24,7 @@ import org.junit.jupiter.api.io.TempDir;
  * is answered with an L2 snapshot on the same session.
  */
 @Tag("integration")
-class ExcEgressEventsIntegrationTest {
+class EgressEventsIntegrationTest {
 
     private static final long TIMEOUT_MS = 15_000L;
     private static final long CLIENT_ID = 1L;
@@ -85,7 +85,7 @@ class ExcEgressEventsIntegrationTest {
         final ClientConfig config = ClientConfig.builder(CLIENT_ID, ClusterConfig.ingressEndpoints(1))
                 .build();
 
-        try (ExcClient client = new ExcClient(config, handler)) {
+        try (WriteClient client = new WriteClient(config, handler)) {
             client.tradeListener(
                     (idHi, idLo, index, symbolId, makerOrderId, makerUid, takerUid, price, size, makerCompleted) ->
                             fills.incrementAndGet());
@@ -190,7 +190,7 @@ class ExcEgressEventsIntegrationTest {
         }
     }
 
-    private static void awaitResult(final ExcClient client, final long commandIdLo, final long[] lastCommandIdLo) {
+    private static void awaitResult(final WriteClient client, final long commandIdLo, final long[] lastCommandIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -202,7 +202,7 @@ class ExcEgressEventsIntegrationTest {
         throw new AssertionError("no result for commandIdLo=" + commandIdLo);
     }
 
-    private static void awaitCount(final ExcClient client, final AtomicInteger counter, final int expected) {
+    private static void awaitCount(final WriteClient client, final AtomicInteger counter, final int expected) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

@@ -24,7 +24,7 @@ import org.junit.jupiter.api.io.TempDir;
  * a deterministic result for each.
  */
 @Tag("integration")
-class ExcClientIntegrationTest {
+class ClientIntegrationTest {
 
     private static final long TIMEOUT_MS = 15_000L;
 
@@ -63,7 +63,7 @@ class ExcClientIntegrationTest {
         final ClientConfig config =
                 ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
-        try (ExcClient client = new ExcClient(config, handler)) {
+        try (WriteClient client = new WriteClient(config, handler)) {
             final int commandCount = 8;
             for (int i = 0; i < commandCount; i++) {
                 final long uid = 100L + i;
@@ -104,7 +104,7 @@ class ExcClientIntegrationTest {
         final ClientConfig config =
                 ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
-        try (ExcClient client = new ExcClient(config, handler)) {
+        try (WriteClient client = new WriteClient(config, handler)) {
             awaitResult(client, client.addSymbol(sym, base, quote, 1L, 1L), lastCommandIdLo);
             awaitResult(client, client.addUser(maker), lastCommandIdLo);
             awaitResult(client, client.adjustBalance(maker, base, 1_000L), lastCommandIdLo);
@@ -122,7 +122,7 @@ class ExcClientIntegrationTest {
         }
     }
 
-    private static void awaitResult(final ExcClient client, final long commandIdLo, final long[] lastCommandIdLo) {
+    private static void awaitResult(final WriteClient client, final long commandIdLo, final long[] lastCommandIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

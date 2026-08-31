@@ -2,7 +2,7 @@
 
 > The read/write boundary in front of the deterministic CQRS matching engine. A
 > client talks plain HTTP/JSON (and subscribes over WebSocket); the gateway translates
-> that into `ReadClient` queries and `ExcClient` commands. It never touches
+> that into `ReadClient` queries and `WriteClient` commands. It never touches
 > `core`, and JSON stays at this boundary (as the engine rules require).
 
 ---
@@ -18,7 +18,7 @@ The gateway is deliberately thin and asynchronous:
 
 - **Reads** are answered by a read replica's `QueryResponder` over plain Aeron
   request/response streams (`ReadClient`).
-- **Writes** are commands to the Raft cluster (`ExcClient`), each acknowledged by
+- **Writes** are commands to the Raft cluster (`WriteClient`), each acknowledged by
   a deterministic `CommandResult`.
 - **Streaming** (Phase 2) fans out egress trade/reduce/reject/L2 events plus
   periodic market snapshots to WebSocket subscribers.
@@ -37,7 +37,7 @@ flowchart TB
     subgraph GW
         HTTP[HttpServer + Router]
         READP[ReadPump thread] --- RC[ReadClient]
-        WRITEP[WritePump thread] --- WC[ExcClient]
+        WRITEP[WritePump thread] --- WC[WriteClient]
         WS[WebSocketHandler]
         BC[StreamBroadcaster]
         MP[MarketPump thread]
@@ -72,14 +72,14 @@ Two pumps own the two SDK clients; the Netty event loops never block.
 
 ## Concurrency model
 
-`ReadClient` and `ExcClient` are **single-threaded** (`submit` + `poll` on one
+`ReadClient` and `WriteClient` are **single-threaded** (`submit` + `poll` on one
 thread). Each pump therefore owns a dedicated thread with a lock-free queue:
 
 ```mermaid
 sequenceDiagram
     participant H as Netty event loop
     participant P as pump thread (ReadPump / WritePump)
-    participant C as client (ReadClient / ExcClient)
+    participant C as client (ReadClient / WriteClient)
 
     H->>P: enqueue a submit task
     P->>P: drain queue: submit (get id) then register future
@@ -154,9 +154,9 @@ by symbol; the gateway broadcasts to all subscribers. Event types:
 
 | `type`       | Fields                                                                          | Source                  |
 |--------------|---------------------------------------------------------------------------------|-------------------------|
-| `TRADE`      | `commandIdLo`, `eventIndex`, `symbolId`, `makerOrderId`, `makerUid`, `takerUid`, `price`, `size`, `makerCompleted` | `ExcClient` egress (write pump) |
-| `REDUCE`     | `commandIdLo`, `eventIndex`, `symbolId`, `orderId`, `uid`, `reducedBy`, `price`, `completed` | `ExcClient` egress |
-| `REJECT`     | `commandIdLo`, `eventIndex`, `symbolId`, `orderId`, `uid`, `rejectedSize`, `price` | `ExcClient` egress |
+| `TRADE`      | `commandIdLo`, `eventIndex`, `symbolId`, `makerOrderId`, `makerUid`, `takerUid`, `price`, `size`, `makerCompleted` | `WriteClient` egress (write pump) |
+| `REDUCE`     | `commandIdLo`, `eventIndex`, `symbolId`, `orderId`, `uid`, `reducedBy`, `price`, `completed` | `WriteClient` egress |
+| `REJECT`     | `commandIdLo`, `eventIndex`, `symbolId`, `orderId`, `uid`, `rejectedSize`, `price` | `WriteClient` egress |
 | `L2`         | `symbolId`, `asks[]`, `bids[]` (`{price, size, orders}`), plus one source marker (below) | egress snapshot or `MarketPump` |
 | `MARKET_TAPE`| `symbolId`, `trades[]` (`{timestamp, price, size, makerOrderId, makerUid, takerUid}`) | `MarketPump` |
 

@@ -81,7 +81,7 @@ final class SnapshotSubscriber implements AutoCloseable {
     private final MatchingEngine engine;
     private final String localHost;
     private final SnapshotManager snapshotManager = new SnapshotManager();
-    private final MessageHeaderDecoder excHeader = new MessageHeaderDecoder();
+    private final MessageHeaderDecoder msgHeader = new MessageHeaderDecoder();
     private final FragmentHandler fragmentHandler = this::onFragment;
     private final LongHashSet sniffedRecordings = new LongHashSet();
 
@@ -173,14 +173,14 @@ final class SnapshotSubscriber implements AutoCloseable {
         if (length < MessageHeaderDecoder.ENCODED_LENGTH) {
             return;
         }
-        excHeader.wrap(buffer, offset);
-        if (excHeader.schemaId() != MessageHeaderDecoder.SCHEMA_ID) {
+        msgHeader.wrap(buffer, offset);
+        if (msgHeader.schemaId() != MessageHeaderDecoder.SCHEMA_ID) {
             // Cluster-schema framing that prefixes the service snapshot.
             return;
         }
         // A record claiming a block longer than the fragment would let the
         // record decoder read adjacent bytes; drop it.
-        if (MessageHeaderDecoder.ENCODED_LENGTH + excHeader.blockLength() > length) {
+        if (MessageHeaderDecoder.ENCODED_LENGTH + msgHeader.blockLength() > length) {
             return;
         }
         if (!loadStarted) {

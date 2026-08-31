@@ -22,8 +22,8 @@ import io.justrade.read.config.ReadReplicaConfig;
 import io.justrade.snapshot.SnapshotManager;
 import io.justrade.telemetry.CoreMetrics;
 import io.justrade.write.client.BackpressureException;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -74,7 +74,7 @@ class SnapshotNegativeClusterTest {
             final ClientConfig clientConfig = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1))
                     .keepaliveIntervalNs(0L)
                     .build();
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 final ReadReplicaConfig replicaConfig = ReadReplicaConfig.builder(
                                 baseDir.resolve("replica").resolve("driver").toString())
                         .channels(config.archiveControlChannel())
@@ -82,7 +82,7 @@ class SnapshotNegativeClusterTest {
                         .query(QueryStreams.QUERY_REQUEST_CHANNEL, QueryStreams.QUERY_REQUEST_STREAM_ID)
                         .snapshotPollIntervalMs(250L)
                         .build();
-                try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+                try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                     submit(client, () -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L));
                     for (long uid = 1L; uid <= 5L; uid++) {
                         final long u = uid;
@@ -133,7 +133,7 @@ class SnapshotNegativeClusterTest {
             final ClientConfig clientConfig = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1))
                     .keepaliveIntervalNs(0L)
                     .build();
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 final ReadReplicaConfig replicaConfig = ReadReplicaConfig.builder(
                                 baseDir.resolve("replica").resolve("driver").toString())
                         .channels(config.archiveControlChannel())
@@ -141,7 +141,7 @@ class SnapshotNegativeClusterTest {
                         .query(QueryStreams.QUERY_REQUEST_CHANNEL, QueryStreams.QUERY_REQUEST_STREAM_ID)
                         .snapshotPollIntervalMs(250L)
                         .build();
-                try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+                try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                     submit(client, () -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L));
                     for (long uid = 1L; uid <= 5L; uid++) {
                         final long u = uid;
@@ -436,7 +436,7 @@ class SnapshotNegativeClusterTest {
      * signal like a user count can trigger while balance commands for that user
      * are still in flight.
      */
-    private static void settle(final ExcClient client, final ExcReadReplica replica) {
+    private static void settle(final WriteClient client, final ReadReplica replica) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         long last = -1L;
         int stable = 0;
@@ -457,7 +457,7 @@ class SnapshotNegativeClusterTest {
         throw new AssertionError("replica never settled at a stable position");
     }
 
-    private static long submit(final ExcClient client, final LongSupplier command) {
+    private static long submit(final WriteClient client, final LongSupplier command) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -470,7 +470,7 @@ class SnapshotNegativeClusterTest {
         throw new AssertionError("could not submit within timeout");
     }
 
-    private static void drain(final ExcClient client, final ExcReadReplica replica, final BooleanSupplier condition) {
+    private static void drain(final WriteClient client, final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

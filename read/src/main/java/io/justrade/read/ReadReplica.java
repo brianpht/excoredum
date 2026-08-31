@@ -42,7 +42,7 @@ import java.util.concurrent.TimeUnit;
  * that delivers no fragments and no successful archive op within
  * {@link ReadReplicaConfig#livenessTimeoutMs()} is failed over.
  */
-public final class ExcReadReplica implements AutoCloseable {
+public final class ReadReplica implements AutoCloseable {
 
     private static final int FRAGMENT_LIMIT = 64;
 
@@ -88,7 +88,7 @@ public final class ExcReadReplica implements AutoCloseable {
     private long nextCheckpointMs;
     private long lastCheckpointPosition = -1L;
 
-    public ExcReadReplica(final ReadReplicaConfig config, final CoreConfig coreConfig) {
+    public ReadReplica(final ReadReplicaConfig config, final CoreConfig coreConfig) {
         this.config = config;
         this.coreConfig = coreConfig;
         this.engine = new MatchingEngine(coreConfig, new CoreMetrics());

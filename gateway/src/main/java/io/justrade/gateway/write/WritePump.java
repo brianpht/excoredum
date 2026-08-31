@@ -5,7 +5,7 @@ import io.justrade.gateway.http.ApiException;
 import io.justrade.gateway.stream.EgressStream;
 import io.justrade.gateway.stream.StreamBroadcaster;
 import io.justrade.write.client.BackpressureException;
-import io.justrade.write.client.ExcClient;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -15,16 +15,16 @@ import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
 
 /**
- * Owns an {@link ExcClient} on a single dedicated thread. The thread loop
+ * Owns an {@link WriteClient} on a single dedicated thread. The thread loop
  * drains a lock-free queue of pending submits (submitting the command and
- * registering its future) and then calls {@link ExcClient#poll()}, so submit
+ * registering its future) and then calls {@link WriteClient#poll()}, so submit
  * and poll always happen on the one thread that owns the client (the client is
  * not thread-safe). A result is only ever delivered inside {@code poll()},
  * which runs after submits are registered, so a fast reply cannot be missed.
  */
 public final class WritePump implements AutoCloseable {
 
-    private final ExcClient client;
+    private final WriteClient client;
     private final WriteResultBridge bridge = new WriteResultBridge();
     private final EgressStream egress;
     private final ConcurrentLinkedQueue<Submit> queue = new ConcurrentLinkedQueue<>();
@@ -38,7 +38,7 @@ public final class WritePump implements AutoCloseable {
     }
 
     public WritePump(final ClientConfig config, final StreamBroadcaster broadcaster) {
-        this.client = new ExcClient(config, bridge);
+        this.client = new WriteClient(config, bridge);
         this.egress = new EgressStream(broadcaster);
         this.client.tradeListener(egress);
         this.client.reduceListener(egress);
@@ -51,7 +51,7 @@ public final class WritePump implements AutoCloseable {
 
     /**
      * Submits a command. The {@code submitter} runs on the pump thread and must
-     * call exactly one {@code ExcClient} typed submit returning a command id.
+     * call exactly one {@code WriteClient} typed submit returning a command id.
      *
      * @return a future completed on the pump thread when the command result arrives
      */
@@ -61,7 +61,7 @@ public final class WritePump implements AutoCloseable {
         return result;
     }
 
-    // Typed submits; each runs the underlying ExcClient call on the pump thread.
+    // Typed submits; each runs the underlying WriteClient call on the pump thread.
 
     public CompletableFuture<WriteResultDto> addSymbol(
             final int symbolId,

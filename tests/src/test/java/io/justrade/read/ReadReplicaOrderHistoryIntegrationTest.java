@@ -11,8 +11,8 @@ import io.justrade.protocol.CommandResultCode;
 import io.justrade.read.config.ReadReplicaConfig;
 import io.justrade.read.order.MarketTrade;
 import io.justrade.read.order.OrderRecord;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
 import java.util.List;
@@ -58,7 +58,7 @@ class ReadReplicaOrderHistoryIntegrationTest {
         final ClientConfig clientConfig =
                 ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
-        try (ExcClient client = new ExcClient(clientConfig, handler)) {
+        try (WriteClient client = new WriteClient(clientConfig, handler)) {
             await(client, client.addSymbol(SYM, BASE, QUOTE, 1L, 1L), lastIdLo);
             await(client, client.addUser(MAKER), lastIdLo);
             await(client, client.adjustBalance(MAKER, BASE, 1_000L), lastIdLo);
@@ -80,7 +80,7 @@ class ReadReplicaOrderHistoryIntegrationTest {
 
             final ReadReplicaConfig replicaConfig = ReadReplicaConfig.localhost(
                     baseDir.resolve("replica").resolve("driver").toString(), clusterConfig.archiveControlChannel());
-            try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+            try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                 pollUntil(replica, () -> replica.order(1L) != null && replica.order(2L) != null);
 
                 final OrderRecord maker = replica.order(1L);
@@ -138,7 +138,7 @@ class ReadReplicaOrderHistoryIntegrationTest {
                 final ReadReplicaConfig secondConfig = ReadReplicaConfig.localhost(
                         baseDir.resolve("replica2").resolve("driver").toString(),
                         clusterConfig.archiveControlChannel());
-                try (ExcReadReplica second = new ExcReadReplica(secondConfig, CoreConfig.defaults())) {
+                try (ReadReplica second = new ReadReplica(secondConfig, CoreConfig.defaults())) {
                     pollUntil(second, () -> second.order(1L) != null && second.order(4L) != null);
                     assertEquals(OrderRecord.STATE_CANCELLED, second.order(1L).state());
                     assertEquals(6L, second.order(1L).filled());
@@ -151,7 +151,7 @@ class ReadReplicaOrderHistoryIntegrationTest {
         }
     }
 
-    private static void pollUntil(final ExcReadReplica replica, final java.util.function.BooleanSupplier condition) {
+    private static void pollUntil(final ReadReplica replica, final java.util.function.BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             replica.poll();
@@ -163,7 +163,7 @@ class ReadReplicaOrderHistoryIntegrationTest {
         throw new AssertionError("replica never reached the expected state");
     }
 
-    private static void await(final ExcClient client, final long commandIdLo, final long[] lastIdLo) {
+    private static void await(final WriteClient client, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

@@ -23,7 +23,7 @@ import org.junit.jupiter.api.io.TempDir;
  * delivered on the egress.
  */
 @Tag("integration")
-class ExcOrderBookIntegrationTest {
+class OrderBookIntegrationTest {
 
     private static final long TIMEOUT_MS = 15_000L;
     private static final int SYM = 1;
@@ -68,7 +68,7 @@ class ExcOrderBookIntegrationTest {
         final ClientConfig config =
                 ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
-        try (ExcClient client = new ExcClient(config, handler)) {
+        try (WriteClient client = new WriteClient(config, handler)) {
             client.tradeListener(
                     (idHi, idLo, index, symbolId, makerOrderId, makerUid, takerUid, price, size, makerCompleted) -> {
                         trades.incrementAndGet();
@@ -102,7 +102,7 @@ class ExcOrderBookIntegrationTest {
         }
     }
 
-    private static void awaitResult(final ExcClient client, final long commandIdLo, final long[] lastCommandIdLo) {
+    private static void awaitResult(final WriteClient client, final long commandIdLo, final long[] lastCommandIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

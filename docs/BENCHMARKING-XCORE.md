@@ -14,7 +14,7 @@ Four layers, each a separate mode of the same CLI:
 |----------|-------------------------------------------------|---------------------------------------------|
 | `book`   | `OrderBookNaive`                                 | `OrderBookNaiveImpl` and `OrderBookDirectImpl` |
 | `engine` | `MatchingEngine.process` (single thread: SBE decode, dedup, symbol / user checks, risk, matching, dedup store) | `ExchangeCore` disruptor pipeline (grouping, risk, matching, risk release, result future) |
-| `e2e`    | In-process single-node Aeron Cluster driven by `ExcClient` (consensus + archive on the path) | Same disruptor pipeline (no consensus, no replication) |
+| `e2e`    | In-process single-node Aeron Cluster driven by `WriteClient` (consensus + archive on the path) | Same disruptor pipeline (no consensus, no replication) |
 | (all modes) | Closed-loop ops/s reported with the latency tables | same |
 
 Only `book` is a strict apples-to-apples comparison: both sides run the

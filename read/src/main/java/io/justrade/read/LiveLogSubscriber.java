@@ -52,7 +52,7 @@ final class LiveLogSubscriber implements AutoCloseable {
     private final io.aeron.cluster.codecs.MessageHeaderDecoder consensusHeader =
             new io.aeron.cluster.codecs.MessageHeaderDecoder();
     private final SessionMessageHeaderDecoder sessionHeader = new SessionMessageHeaderDecoder();
-    private final io.justrade.protocol.MessageHeaderDecoder excHeader = new io.justrade.protocol.MessageHeaderDecoder();
+    private final io.justrade.protocol.MessageHeaderDecoder msgHeader = new io.justrade.protocol.MessageHeaderDecoder();
     private final CommandEnvelopeDecoder envelopeDecoder = new CommandEnvelopeDecoder();
     private final FragmentHandler fragmentHandler = this::onFragment;
 
@@ -267,21 +267,21 @@ final class LiveLogSubscriber implements AutoCloseable {
         if (serviceOffset + io.justrade.protocol.MessageHeaderDecoder.ENCODED_LENGTH > offset + length) {
             return;
         }
-        excHeader.wrap(buffer, serviceOffset);
-        if (excHeader.templateId() != CommandEnvelopeDecoder.TEMPLATE_ID) {
+        msgHeader.wrap(buffer, serviceOffset);
+        if (msgHeader.templateId() != CommandEnvelopeDecoder.TEMPLATE_ID) {
             return;
         }
         // A header that claims a block longer than the fragment must be dropped
         // before the decoder reads past the frame into adjacent bytes.
-        if (serviceOffset + io.justrade.protocol.MessageHeaderDecoder.ENCODED_LENGTH + excHeader.blockLength()
+        if (serviceOffset + io.justrade.protocol.MessageHeaderDecoder.ENCODED_LENGTH + msgHeader.blockLength()
                 > offset + length) {
             return;
         }
         envelopeDecoder.wrap(
                 buffer,
                 serviceOffset + io.justrade.protocol.MessageHeaderDecoder.ENCODED_LENGTH,
-                excHeader.blockLength(),
-                excHeader.version());
+                msgHeader.blockLength(),
+                msgHeader.version());
         engine.process(envelopeDecoder, timestamp, outcome);
         ledger.applyCommand(timestamp, envelopeDecoder, outcome);
         listener.onCommand(timestamp, envelopeDecoder, outcome);

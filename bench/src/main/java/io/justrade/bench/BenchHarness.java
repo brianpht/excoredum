@@ -4,8 +4,8 @@ import io.justrade.config.CoreConfig;
 import io.justrade.launcher.ClusterConfig;
 import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.CommandResultCode;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,7 +25,7 @@ import org.HdrHistogram.Histogram;
  * ./gradlew :bench:run --args="--warmup=5000 --ops=20000"
  * }</pre>
  */
-public final class ExcBenchHarness {
+public final class BenchHarness {
 
     private static final int SYMBOL = 1;
     private static final int BASE = 10;
@@ -35,7 +35,7 @@ public final class ExcBenchHarness {
     private static final long PRICE = 100L;
     private static final long TIMEOUT_MS = 30_000L;
 
-    private ExcBenchHarness() {}
+    private BenchHarness() {}
 
     public static void main(final String[] args) throws Exception {
         int warmupOps = 5_000;
@@ -74,7 +74,7 @@ public final class ExcBenchHarness {
                 ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
         try (ClusterNode node = new ClusterNode(ClusterConfig.singleNodeLocalhost(0, baseDir), CoreConfig.defaults());
-                ExcClient client = new ExcClient(config, handler)) {
+                WriteClient client = new WriteClient(config, handler)) {
 
             await(client, client.addSymbol(SYMBOL, BASE, QUOTE, 1L, 1L), lastIdLo);
             await(client, client.addUser(MAKER), lastIdLo);
@@ -127,7 +127,7 @@ public final class ExcBenchHarness {
         }
     }
 
-    private static void await(final ExcClient client, final long commandIdLo, final long[] lastIdLo) {
+    private static void await(final WriteClient client, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

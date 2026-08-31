@@ -41,7 +41,7 @@ import org.agrona.collections.Long2ObjectHashMap;
  * same thread. Steady-state submission is allocation-free (pending commands are
  * pooled).
  */
-public final class ExcClient implements EgressListener, AutoCloseable {
+public final class WriteClient implements EgressListener, AutoCloseable {
 
     private static final float LOAD_FACTOR = 0.65f;
 
@@ -117,7 +117,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     private boolean sessionLost;
     private long nextReconnectNanos;
 
-    public ExcClient(final ClientConfig config, final ResultHandler handler) {
+    public WriteClient(final ClientConfig config, final ResultHandler handler) {
         this.config = config;
         this.handler = handler;
         // Size the pending map so it never rehashes while the in-flight window

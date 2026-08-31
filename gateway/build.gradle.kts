@@ -1,6 +1,6 @@
 // gateway: a Netty HTTP/JSON boundary in front of the deterministic CQRS
 // matching engine. It is NOT part of the core hot path: it translates UI REST
-// calls into read-side queries (ReadClient) and write-side commands (ExcClient).
+// calls into read-side queries (ReadClient) and write-side commands (WriteClient).
 // JSON stays at this boundary; the engine and its SDKs are untouched.
 
 plugins {

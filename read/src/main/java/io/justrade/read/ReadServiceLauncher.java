@@ -81,7 +81,7 @@ public final class ReadServiceLauncher {
 
         final IdleStrategy idle = new BackoffIdleStrategy();
         long pollFailures = 0L;
-        try (ExcReadReplica replica = new ExcReadReplica(config, coreConfig);
+        try (ReadReplica replica = new ReadReplica(config, coreConfig);
                 QueryResponder responder = new QueryResponder(replica, config)) {
             System.out.println("read replica following " + archiveControlChannels + ", serving queries on "
                     + config.queryRequestChannel() + " (Ctrl-C to stop)");

@@ -123,7 +123,7 @@ justrade/
 |
 |-- write-client/                 Write-side client SDK (depends only on protocol)
 |   +-- src/main/java/io/justrade/write/client/
-|       |-- ExcClient.java                  Async submit / poll, leader-change resend, correlation, event decode
+|       |-- WriteClient.java                  Async submit / poll, leader-change resend, correlation, event decode
 |       |-- config/ClientConfig.java        Immutable client configuration (builder)
 |       |-- ResultHandler.java              Result callback correlated by command id
 |       |-- TradeEventListener.java         Trade-event callback
@@ -138,7 +138,7 @@ justrade/
 |
 |-- read/                       Read replica (CQRS query side)
 |   +-- src/main/java/io/justrade/read/
-|       |-- ExcReadReplica.java             Poll-driven follower: own driver + archive client + engine
+|       |-- ReadReplica.java             Poll-driven follower: own driver + archive client + engine
 |       |-- LiveLogSubscriber.java          Replays the consensus log, applies commands to the engine and the ledger
 |       |-- order/
 |       |   |-- OrderLedger.java            Per-user order lifecycle history + bounded market trade tape
@@ -173,12 +173,12 @@ justrade/
 |       |-- config/GatewayConfig.java       Properties-driven config (validated at build)
 |       |-- http/                           Router, HttpServer, HttpHandler, admin guard
 |       |-- read/ReadPump.java              ReadClient pump thread + request bridge
-|       |-- write/WritePump.java            ExcClient pump thread + result bridge
+|       |-- write/WritePump.java            WriteClient pump thread + result bridge
 |       +-- stream/                         StreamBroadcaster, egress + market pumps
 |
 |-- bench/                      End-to-end latency harness
 |   +-- src/main/java/io/justrade/bench/
-|       |-- ExcBenchHarness.java            Boots a cluster + client, closed-loop HdrHistogram latency
+|       |-- BenchHarness.java            Boots a cluster + client, closed-loop HdrHistogram latency
 |       |-- LoadWorkload.java               Deterministic workload + exact book simulation
 |       |-- ExternalLoadRunner.java         Drives a deployed cluster over the network
 |       |-- ReadVerifyRunner.java           Asserts a read replica matches the simulation
@@ -189,10 +189,10 @@ justrade/
 |   |-- src/main/java/io/justrade/xcorebench/
 |   |   |-- WorkloadGenerator.java          Deterministic port of exchange-core's TestOrdersGenerator
 |   |   |-- Workload.java                   Replayable command sequence as primitive arrays
-|   |   |-- ExcBookRunner.java              Replay through OrderBookNaive (reference)
+|   |   |-- JustradeBookRunner.java              Replay through OrderBookNaive (reference)
 |   |   |-- XcoreBookRunner.java            Replay through OrderBookNaiveImpl / OrderBookDirectImpl
 |   |   |-- BookStats.java                  Event counters + full-depth L2 digest for cross-validation
-|   |   |-- ExcEngineRunner.java            Closed-loop full-dispatch latency (decode + dedup + risk + match)
+|   |   |-- JustradeEngineRunner.java            Closed-loop full-dispatch latency (decode + dedup + risk + match)
 |   |   |-- XcorePipelineRunner.java        Closed-loop ExchangeCore disruptor pipeline latency
 |   |   |-- BookComparison.java             book mode: replay throughput + parity check
 |   |   |-- EngineComparison.java           engine mode: dispatch vs pipeline tables
@@ -217,7 +217,7 @@ justrade/
 ```mermaid
 flowchart TB
     subgraph CLIENTSIDE["Client (write-client)"]
-        CLIENT["ExcClient\nidempotent retry, correlation"]
+        CLIENT["WriteClient\nidempotent retry, correlation"]
     end
 
     subgraph NODE["Cluster Node (launcher)"]
@@ -252,7 +252,7 @@ flowchart TB
 
     subgraph READ["Read Replica (read)"]
         direction TB
-        RR["ExcReadReplica"]
+        RR["ReadReplica"]
         LLS["LiveLogSubscriber\n(stream 100)"]
         ME2["MatchingEngine"]
         LED["OrderLedger"]
@@ -378,7 +378,7 @@ snapshots, and per-command trade grouping) on top of an Aeron cluster client.
 
 | Component               | Responsibility                                                    |
 |-------------------------|-------------------------------------------------------------------|
-| `ExcClient`             | Async submit / poll: resend on leader change, correlate results by command id, decode every egress frame, group fills per command, idle keepalives, session recovery |
+| `WriteClient`             | Async submit / poll: resend on leader change, correlate results by command id, decode every egress frame, group fills per command, idle keepalives, session recovery |
 | `ClientConfig`          | Immutable client configuration (endpoints, timeouts, retry, in-flight window); defaults: 30 s message timeout, 250 ms retry backoff, `maxRetries` 0 (retry indefinitely), 1024 in flight, 2 s keepalive |
 | `ResultHandler`         | Callback invoked when a `CommandResult` correlates to a request; `onExpired` fires when the retry budget is exhausted so no command is silently dropped |
 | `TradeEventListener`    | Callback invoked per fill when a `TradeEvent` is delivered on egress |
@@ -397,7 +397,7 @@ Typed helpers cover the full command set: `addSymbol`, `addUser`,
 
 **Session liveness.** The cluster closes a client session that sends no ingress
 for its session timeout (10 s by default), after which every offer fails and
-commands silently stop applying. `ExcClient` therefore submits a NOP keepalive
+commands silently stop applying. `WriteClient` therefore submits a NOP keepalive
 when idle for `keepaliveIntervalNs` (2 s by default, zero disables), and if the
 session is lost anyway (cluster restart, egress CLOSED / ERROR event) it
 reconnects on a later poll and retransmits everything pending. Keepalives are
@@ -415,7 +415,7 @@ by the dedup ring's empty-slot sentinel and is rejected with `INVALID_AMOUNT`.
 ### read - Read Replica (CQRS)
 
 The read (query) side. Unlike the deterministic core it may use the system clock
-and heap allocation. `ExcReadReplica` runs a non-voting node with its own embedded
+and heap allocation. `ReadReplica` runs a non-voting node with its own embedded
 Media Driver and Aeron Archive client. It connects to a cluster member's Archive
 and follows the consensus log recording (stream 100), applying each command to a
 private `MatchingEngine`; engine dedup keeps any re-delivered prefix idempotent.
@@ -515,7 +515,7 @@ journal is recorded on stream 200 (`aeron:ipc`) and replayed by
 
 | Component           | Responsibility                                                       |
 |---------------------|----------------------------------------------------------------------|
-| `ExcReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log and fails over by resuming from the applied position; snapshot bootstrap, ledger rebuild, local checkpoint; balance / count / report / L2 / order-history queries; `isCaughtUp()` and `setCommandListener(...)` |
+| `ReadReplica`    | Embedded driver, archive client, engine; `poll()` follows the log and fails over by resuming from the applied position; snapshot bootstrap, ledger rebuild, local checkpoint; balance / count / report / L2 / order-history queries; `isCaughtUp()` and `setCommandListener(...)` |
 | `LiveLogSubscriber` | Subscribes the consensus recording, verifies the recording covers the requested position, parses cluster framing, applies commands to the engine and the ledger |
 | `SnapshotSubscriber`| Loads the newest service snapshot into the engine (advance-only guard, integrity check, corrupt handling) |
 | `LedgerRebuilder`   | Replays the full consensus log on a throwaway engine to restore the complete order ledger after a snapshot fast-forward |
@@ -540,7 +540,7 @@ The read-side SDK, deliberately decoupled like `write-client`: it depends only o
 `protocol` (never `core` or `read`). `ReadClient` opens a plain Aeron
 publication to a read replica's query request stream and an ephemeral response
 subscription, and encodes `QueryRequest` frames with a per-call `requestId`.
-Two API modes share one core, mirroring `ExcClient`:
+Two API modes share one core, mirroring `WriteClient`:
 
 - **Asynchronous**: `submitBalance(uid, currency)`-style methods return a
   `requestId` without blocking (throwing `BackpressureException` when the
@@ -575,7 +575,7 @@ The query surface mirrors the replica's in-process API: `userExists(uid)`,
 
 A Netty HTTP/1.1 + WebSocket service in front of the two SDKs: REST
 endpoints translate to read-side queries (`ReadPump` over `ReadClient`) and
-write-side commands (`WritePump` over `ExcClient`), and a
+write-side commands (`WritePump` over `WriteClient`), and a
 `StreamBroadcaster` fans market events out to `/ws` subscribers from both the
 write client's egress and a periodic `MarketPump` replica snapshot. JSON and
 system-clock time stay in this module; the engine and SDKs are untouched, and
@@ -599,7 +599,7 @@ full wire reference, streaming shapes, and configuration live in
 
 End-to-end load drivers (exempt from the core determinism rules):
 
-- `ExcBenchHarness` - the latency harness. It boots an in-process single-node
+- `BenchHarness` - the latency harness. It boots an in-process single-node
   cluster and drives it with the real client in a closed loop (one command
   outstanding at a time), recording client-observed round-trip latency in an
   HdrHistogram and reporting tail percentiles. Each measured op is a taker
@@ -615,7 +615,7 @@ End-to-end load drivers (exempt from the core determinism rules):
   cross-validates it against the real engine command by command.
 - `ExternalLoadRunner` - drives a running (possibly multi-node, possibly
   containerized) cluster over the network: submits the `LoadWorkload` through
-  `ExcClient` and verifies the write side (every result `SUCCESS`, nothing
+  `WriteClient` and verifies the write side (every result `SUCCESS`, nothing
   expired, egress fills equal the simulation), reporting throughput and
   round-trip latency tails.
 - `ReadVerifyRunner` - replays the same `LoadWorkload` simulation and asserts
@@ -641,7 +641,7 @@ fairness notes.
 
 `QuickStartExample` boots an in-process single-node cluster (`ClusterNode` +
 `ClusterConfig.singleNodeLocalhost` + `CoreConfig.defaults()`) and walks a small
-trading scenario through the `ExcClient` SDK, printing every egress surface as
+trading scenario through the `WriteClient` SDK, printing every egress surface as
 it happens: per-fill trades, per-command trade groups, a reduce, a reject, and
 an L2 snapshot. Run with `./gradlew :examples:run`.
 
@@ -859,7 +859,7 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-    participant C as ExcClient
+    participant C as WriteClient
     participant CM as Consensus Module (Leader)
     participant MS as MatchingService
     participant ME as MatchingEngine
@@ -877,7 +877,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant C as ExcClient
+    participant C as WriteClient
     participant ME as MatchingEngine
     participant DT as DedupTable
 
@@ -938,7 +938,7 @@ sequenceDiagram
 
 On source loss (a liveness timeout, no fragments, or a failed probe), the
 replica fails over to the next configured member archive in order
-(`ExcReadReplica` keeps an ordered list of archive control channels;
+(`ReadReplica` keeps an ordered list of archive control channels;
 `--archive=ch1,ch2,ch3` configures it). Engine and ledger state are kept: the
 new source resumes the replay from the position already applied, so
 `appliedPosition` stays monotonic across the switch and the catch-up window is
@@ -988,7 +988,7 @@ sequenceDiagram
     participant LR as LedgerRebuilder
     participant CP as ReplicaCheckpoint
 
-    Note over AR,CP: Cold start (no local checkpoint), orchestrated by ExcReadReplica.poll()
+    Note over AR,CP: Cold start (no local checkpoint), orchestrated by ReadReplica.poll()
     SS ->> AR: replay newest service snapshot (stream 42)
     AR -->> SS: snapshot records (advance-only guard, corrupt discarded, state rebuilt)
     SS ->> ME: load engine state at the snapshot logPosition
@@ -1166,12 +1166,12 @@ snapshot write / read time. The hot path only increments a counter.
 | `OrderLedgerTest`                    | Unit        | Ledger lifecycle, fills, dedup skip, eviction, userCookie |
 | `QueryCodecRoundTripTest`            | Unit        | Query request / response codecs round-trip every group and scalar |
 | `EventCodecExtRoundTripTest`         | Unit        | v5 index / count extension fields round-trip past the uint16 ceiling while the legacy field wraps |
-| `ExcClientIntegrationTest`           | Integration | Client submit / poll, command-id correlation            |
-| `ExcClientKeepaliveIntegrationTest`  | Integration | Idle client survives cluster session timeout via NOP keepalives |
-| `ExcAccountsIntegrationTest`         | Integration | Account lifecycle result codes end to end               |
-| `ExcOrderBookIntegrationTest`        | Integration | Resting maker matched by taker, trade on egress         |
-| `ExcReduceRejectEventsIntegrationTest` | Integration | Cancel / reduce / IOC / FOK reduce and reject on egress, with price and completion |
-| `ExcEgressEventsIntegrationTest`     | Integration | Taker sweep as one trade group; L2 snapshot on egress   |
+| `ClientIntegrationTest`           | Integration | Client submit / poll, command-id correlation            |
+| `ClientKeepaliveIntegrationTest`  | Integration | Idle client survives cluster session timeout via NOP keepalives |
+| `AccountsIntegrationTest`         | Integration | Account lifecycle result codes end to end               |
+| `OrderBookIntegrationTest`        | Integration | Resting maker matched by taker, trade on egress         |
+| `ReduceRejectEventsIntegrationTest` | Integration | Cancel / reduce / IOC / FOK reduce and reject on egress, with price and completion |
+| `EgressEventsIntegrationTest`     | Integration | Taker sweep as one trade group; L2 snapshot on egress   |
 | `BenchHarnessSmokeTest`              | Integration | End-to-end latency harness boots and measures           |
 | `XcoreBenchSmokeTest`                | Integration | exchange-core replay cross-validates; pipeline boots    |
 | `ReadReplicaIntegrationTest`         | Integration | Replica reproduces users, balances, resting depth, L2   |
@@ -1245,7 +1245,7 @@ flowchart LR
 |-------------|-------------------------------|----------------------------------------------------------------------|
 | `node-0/1/2`| `ClusterLauncher`             | Raft members; each uses ports `20100 + n*100 .. +4` (ingress, consensus, log, catchup, archive) |
 | `read`      | `ReadServiceLauncher`         | CQRS replica following node-0's archive (node-1 / node-2 as failover sources), answers queries on `0.0.0.0:44000` |
-| `load`      | `ExternalLoadRunner`          | Submits the workload through `ExcClient`; verifies the write side     |
+| `load`      | `ExternalLoadRunner`          | Submits the workload through `WriteClient`; verifies the write side     |
 | `verify`    | `ReadVerifyRunner`            | Replays the simulation; asserts the read side matches it exactly      |
 
 All services share one image (`justrade:test`, built by `docker/Dockerfile`:
@@ -1284,7 +1284,7 @@ command by command (`LoadWorkloadEngineParityTest`), a mismatch is a genuine
 system bug rather than a flaky assertion. The test has already caught three
 real defects: multi-frame query responses decoded without reassembly
 (`ReadClient` lacked a `FragmentAssembler`), ingress offers that failed with a
-transient `ADMIN_ACTION` being retried out of order (`ExcClient.offerUntilSent`
+transient `ADMIN_ACTION` being retried out of order (`WriteClient.offerUntilSent`
 now blocks until the driver accepts, preserving submission order), and
 retransmits beyond the engine's dedup window double-applying (the client now
 expires commands whose retry the window can no longer cover).

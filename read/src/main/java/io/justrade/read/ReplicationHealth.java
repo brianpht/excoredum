@@ -2,7 +2,7 @@ package io.justrade.read;
 
 /**
  * Replication health published by the read replica. The replica is driven by its
- * caller's thread (see {@link ExcReadReplica#poll()}), which is the sole writer;
+ * caller's thread (see {@link ReadReplica#poll()}), which is the sole writer;
  * the volatile fields give cross-thread visibility for an operator reading status.
  */
 public final class ReplicationHealth {

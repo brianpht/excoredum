@@ -9,8 +9,8 @@ import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.CommandResultCode;
 import io.justrade.protocol.MatcherEventType;
 import io.justrade.read.config.ReadReplicaConfig;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Tag;
@@ -48,7 +48,7 @@ class JournalReplayIntegrationTest {
             final ClientConfig clientConfig =
                     ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 await(client, client.addSymbol(SYM, BASE, QUOTE, 1L, 1L), lastIdLo);
                 await(client, client.addUser(MAKER), lastIdLo);
                 await(client, client.adjustBalance(MAKER, BASE, 1_000L), lastIdLo);
@@ -115,7 +115,7 @@ class JournalReplayIntegrationTest {
         }
     }
 
-    private static void await(final ExcClient client, final long commandIdLo, final long[] lastIdLo) {
+    private static void await(final WriteClient client, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

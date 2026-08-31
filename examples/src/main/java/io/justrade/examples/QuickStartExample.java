@@ -4,7 +4,7 @@ import io.justrade.config.CoreConfig;
 import io.justrade.launcher.ClusterConfig;
 import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.CommandResultCode;
-import io.justrade.write.client.ExcClient;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -56,7 +56,7 @@ public final class QuickStartExample {
         final ClientConfig config =
                 ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
-        try (ExcClient client = new ExcClient(
+        try (WriteClient client = new WriteClient(
                 config, (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) -> {
                     lastCommandIdLo[0] = idLo;
                     lastCode[0] = code;
@@ -170,7 +170,7 @@ public final class QuickStartExample {
     }
 
     /** Polls until the result for {@code commandIdLo} has arrived. */
-    private static void await(final ExcClient client, final long commandIdLo, final long[] lastCommandIdLo) {
+    private static void await(final WriteClient client, final long commandIdLo, final long[] lastCommandIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

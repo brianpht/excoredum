@@ -32,7 +32,7 @@ import org.agrona.concurrent.UnsafeBuffer;
  * {@link QueryResponse} to the client's ephemeral response subscription.
  *
  * <p>Single-writer: {@link #poll()} must be called from the replica's polling
- * thread (the same thread that calls {@code ExcReadReplica#poll()}), so the
+ * thread (the same thread that calls {@code ReadReplica#poll()}), so the
  * engine and ledger are only ever touched by one thread. Responses are encoded
  * into a preallocated buffer with an exact per-element budget check; a response
  * that would overflow is truncated with status {@link QueryStatusCode#TRUNCATED}
@@ -50,7 +50,7 @@ public final class QueryResponder implements AutoCloseable {
     private static final byte[] UDP_CHANNEL_PREFIX = {'a', 'e', 'r', 'o', 'n', ':', 'u', 'd', 'p'};
     private static final byte[] IPC_CHANNEL_PREFIX = {'a', 'e', 'r', 'o', 'n', ':', 'i', 'p', 'c'};
 
-    private final ExcReadReplica replica;
+    private final ReadReplica replica;
     private final Aeron aeron;
     private final Subscription requests;
     private final FragmentAssembler requestAssembler;
@@ -82,7 +82,7 @@ public final class QueryResponder implements AutoCloseable {
      * @param config replica configuration, whose media driver directory this
      *     responder shares so its own Aeron client talks to the same driver
      */
-    public QueryResponder(final ExcReadReplica replica, final ReadReplicaConfig config) {
+    public QueryResponder(final ReadReplica replica, final ReadReplicaConfig config) {
         this.replica = replica;
         this.aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(config.aeronDirectoryName()));
         this.requestAssembler = new FragmentAssembler(this::onRequest);

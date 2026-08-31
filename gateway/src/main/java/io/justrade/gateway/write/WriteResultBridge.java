@@ -8,10 +8,10 @@ import java.util.HashMap;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Bridges {@link ExcClient} result delivery to the HTTP handlers: the single
+ * Bridges {@link WriteClient} result delivery to the HTTP handlers: the single
  * {@link ResultHandler} completes a per-command {@link CompletableFuture} by
  * command id low word. Runs on the write pump thread (the same thread that
- * calls {@code ExcClient.poll()}), so it must not block.
+ * calls {@code WriteClient.poll()}), so it must not block.
  */
 public final class WriteResultBridge implements ResultHandler {
 

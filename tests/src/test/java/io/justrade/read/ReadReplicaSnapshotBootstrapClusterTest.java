@@ -10,8 +10,8 @@ import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.QueryStreams;
 import io.justrade.read.config.ReadReplicaConfig;
 import io.justrade.write.client.BackpressureException;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
 import java.util.HashSet;
@@ -58,7 +58,7 @@ class ReadReplicaSnapshotBootstrapClusterTest {
             final ResultHandler handler =
                     (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) ->
                             results.add(idLo);
-            try (ExcClient client = new ExcClient(
+            try (WriteClient client = new WriteClient(
                     ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                             .build(),
                     handler)) {
@@ -81,7 +81,7 @@ class ReadReplicaSnapshotBootstrapClusterTest {
                     "localhost",
                     QueryStreams.QUERY_REQUEST_CHANNEL,
                     QueryStreams.QUERY_REQUEST_STREAM_ID);
-            try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+            try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                 // The engine converges via snapshot bootstrap + tail following.
                 pollReplica(replica, () -> replica.userCount() == 5 && replica.orderCount() == 1);
                 assertTrue(
@@ -108,7 +108,7 @@ class ReadReplicaSnapshotBootstrapClusterTest {
                 final ResultHandler postHandler =
                         (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) ->
                                 postBootstrap[0] = idLo;
-                try (ExcClient postClient = new ExcClient(
+                try (WriteClient postClient = new WriteClient(
                         ClientConfig.builder(2L, ClusterConfig.ingressEndpoints(NODES))
                                 .build(),
                         postHandler)) {
@@ -131,7 +131,7 @@ class ReadReplicaSnapshotBootstrapClusterTest {
         }
     }
 
-    private static void submitBatch(final ExcClient client) {
+    private static void submitBatch(final WriteClient client) {
         submit(client, () -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L));
         for (long uid = 1L; uid <= 5L; uid++) {
             final long u = uid;
@@ -143,7 +143,7 @@ class ReadReplicaSnapshotBootstrapClusterTest {
         submit(client, () -> client.placeGtc(SYM, 2L, false, 105L, 4L, 105L, 2L, 0));
     }
 
-    private static void awaitLeader(final ExcClient client) {
+    private static void awaitLeader(final WriteClient client) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -166,7 +166,7 @@ class ReadReplicaSnapshotBootstrapClusterTest {
         throw new AssertionError("snapshot was not taken before the timeout");
     }
 
-    private static void pollReplica(final ExcReadReplica replica, final BooleanSupplier condition) {
+    private static void pollReplica(final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             replica.poll();
@@ -184,7 +184,7 @@ class ReadReplicaSnapshotBootstrapClusterTest {
                 + " source=" + replica.currentSource());
     }
 
-    private static void submit(final ExcClient client, final LongSupplier op) {
+    private static void submit(final WriteClient client, final LongSupplier op) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -198,7 +198,7 @@ class ReadReplicaSnapshotBootstrapClusterTest {
         throw new AssertionError("could not submit command within timeout");
     }
 
-    private static void submitWithResult(final ExcClient client, final LongSupplier op, final long[] resultIdLo) {
+    private static void submitWithResult(final WriteClient client, final LongSupplier op, final long[] resultIdLo) {
         long idLo = -1L;
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (idLo < 0L) {
@@ -222,7 +222,7 @@ class ReadReplicaSnapshotBootstrapClusterTest {
         throw new AssertionError("no result for post-bootstrap command within timeout");
     }
 
-    private static void drainUntil(final ExcClient client, final Set<Long> results, final int target) {
+    private static void drainUntil(final WriteClient client, final Set<Long> results, final int target) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

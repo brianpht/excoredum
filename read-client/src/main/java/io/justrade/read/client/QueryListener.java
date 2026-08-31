@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * Callback sink for asynchronous query delivery. Register with
  * {@link ReadClient#setListener(QueryListener)}; every callback runs on the
- * thread that calls {@link ReadClient#poll()}, matching how {@code ExcClient}
+ * thread that calls {@link ReadClient#poll()}, matching how {@code WriteClient}
  * delivers egress events.
  *
  * <p>Each callback carries the {@code requestId} returned by the matching

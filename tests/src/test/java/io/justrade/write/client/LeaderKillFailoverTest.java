@@ -55,7 +55,7 @@ class LeaderKillFailoverTest {
         try {
             final ClientConfig config = ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                     .build();
-            try (ExcClient client = new ExcClient(config, handler)) {
+            try (WriteClient client = new WriteClient(config, handler)) {
                 awaitLeader(client);
 
                 long uid = 1L;
@@ -96,7 +96,7 @@ class LeaderKillFailoverTest {
         }
     }
 
-    private static void awaitLeader(final ExcClient client) {
+    private static void awaitLeader(final WriteClient client) {
         final long deadline = System.currentTimeMillis() + CONNECT_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -108,7 +108,7 @@ class LeaderKillFailoverTest {
         throw new AssertionError("no leader established within timeout");
     }
 
-    private static long submitUser(final ExcClient client, final long uid) {
+    private static long submitUser(final WriteClient client, final long uid) {
         final long deadline = System.currentTimeMillis() + DRAIN_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -121,7 +121,7 @@ class LeaderKillFailoverTest {
         throw new AssertionError("could not submit addUser(" + uid + ") within timeout");
     }
 
-    private static void drainUntil(final ExcClient client, final java.util.function.BooleanSupplier done) {
+    private static void drainUntil(final WriteClient client, final java.util.function.BooleanSupplier done) {
         final long deadline = System.currentTimeMillis() + DRAIN_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

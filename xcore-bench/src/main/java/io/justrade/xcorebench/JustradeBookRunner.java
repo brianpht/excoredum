@@ -7,9 +7,9 @@ import io.justrade.engine.risk.SymbolSpec;
 import io.justrade.protocol.CommandResultCode;
 
 /** Replays a {@link Workload} through justrade's {@link OrderBookNaive}. */
-public final class ExcBookRunner {
+public final class JustradeBookRunner {
 
-    private ExcBookRunner() {}
+    private JustradeBookRunner() {}
 
     /** Replays the full workload against a fresh book and returns the digest. */
     public static BookStats replay(final Workload workload, final int symbolId) {

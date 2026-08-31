@@ -3,7 +3,7 @@ package io.justrade.write.client.config;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Immutable configuration for an {@link io.justrade.write.client.ExcClient}.
+ * Immutable configuration for an {@link io.justrade.write.client.WriteClient}.
  *
  * <p>When {@code aeronDirectoryName} is {@code null}, the client launches its own
  * embedded media driver, so it survives the shutdown of any individual cluster

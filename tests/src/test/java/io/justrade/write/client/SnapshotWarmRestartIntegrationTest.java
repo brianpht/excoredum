@@ -49,7 +49,7 @@ class SnapshotWarmRestartIntegrationTest {
                     };
             final ClientConfig clientConfig =
                     ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 awaitResult(client, client.addSymbol(SYM, BASE, QUOTE, 1L, 1L), lastIdLo);
                 awaitResult(client, client.addUser(MAKER), lastIdLo);
                 awaitResult(client, client.adjustBalance(MAKER, BASE, 1_000L), lastIdLo);
@@ -83,7 +83,7 @@ class SnapshotWarmRestartIntegrationTest {
                     };
             final ClientConfig clientConfig =
                     ClientConfig.builder(2L, ClusterConfig.ingressEndpoints(1)).build();
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 client.tradeListener(
                         (idHi,
                                 idLo,
@@ -132,7 +132,7 @@ class SnapshotWarmRestartIntegrationTest {
         throw new AssertionError("snapshot was not taken before the timeout");
     }
 
-    private static void awaitResult(final ExcClient client, final long commandIdLo, final long[] lastIdLo) {
+    private static void awaitResult(final WriteClient client, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

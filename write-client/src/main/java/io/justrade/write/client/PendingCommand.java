@@ -5,7 +5,7 @@ import org.agrona.concurrent.UnsafeBuffer;
 /**
  * A pooled, reusable holder for an in-flight command: its pre-encoded bytes (for
  * idempotent resend), identity, and retry bookkeeping. Instances are recycled by
- * {@link ExcClient} so steady-state submission is allocation-free.
+ * {@link WriteClient} so steady-state submission is allocation-free.
  */
 final class PendingCommand {
 

@@ -13,12 +13,12 @@ import io.justrade.gateway.stream.StreamBroadcaster;
 import io.justrade.gateway.write.WritePump;
 import io.justrade.launcher.ClusterConfig;
 import io.justrade.launcher.ClusterNode;
-import io.justrade.read.ExcReadReplica;
 import io.justrade.read.QueryResponder;
+import io.justrade.read.ReadReplica;
 import io.justrade.read.client.config.ReadClientConfig;
 import io.justrade.read.config.ReadReplicaConfig;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -72,7 +72,7 @@ class GatewayEndToEndIntegrationTest {
                 (idHi, idLo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) -> lastIdLo[0] = idLo;
         final ClientConfig clientConfig =
                 ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
-        try (ExcClient client = new ExcClient(clientConfig, handler)) {
+        try (WriteClient client = new WriteClient(clientConfig, handler)) {
             await(client, client.addSymbol(SYM, BASE, QUOTE, 1L, 1L), lastIdLo);
             await(client, client.addUser(MAKER), lastIdLo);
             await(client, client.adjustBalance(MAKER, BASE, 1_000L), lastIdLo);
@@ -88,7 +88,7 @@ class GatewayEndToEndIntegrationTest {
     private static void runGateway(final ClusterConfig clusterConfig, final Path baseDir) throws Exception {
         final ReadReplicaConfig replicaConfig = ReadReplicaConfig.localhost(
                 baseDir.resolve("replica").resolve("driver").toString(), clusterConfig.archiveControlChannel());
-        try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults());
+        try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults());
                 QueryResponder responder = new QueryResponder(replica, replicaConfig)) {
             final Thread serviceThread = startServiceLoop(replica, responder);
             try {
@@ -316,7 +316,7 @@ class GatewayEndToEndIntegrationTest {
     }
 
     // ---- replica service loop (mirrors ReadServiceLauncher) ----
-    private static Thread startServiceLoop(final ExcReadReplica replica, final QueryResponder responder) {
+    private static Thread startServiceLoop(final ReadReplica replica, final QueryResponder responder) {
         final Thread thread = new Thread(() -> {
             final BackoffIdleStrategy idle = new BackoffIdleStrategy();
             while (!Thread.currentThread().isInterrupted()) {
@@ -350,7 +350,7 @@ class GatewayEndToEndIntegrationTest {
         throw new AssertionError("replica never reached the expected state");
     }
 
-    private static void await(final ExcClient client, final long commandIdLo, final long[] lastIdLo) {
+    private static void await(final WriteClient client, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

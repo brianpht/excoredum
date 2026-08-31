@@ -125,7 +125,7 @@ final class ReplicaCheckpointCorruptionTest {
                 .localHost("localhost")
                 .checkpointFile(checkpoint)
                 .build();
-        try (ExcReadReplica replica = new ExcReadReplica(config, CoreConfig.defaults())) {
+        try (ReadReplica replica = new ReadReplica(config, CoreConfig.defaults())) {
             assertEquals(1L, replica.health().checkpointFailures(), "the corruption must be surfaced");
             assertFalse(replica.userExists(UID), "a corrupt checkpoint must not leave engine state behind");
         }

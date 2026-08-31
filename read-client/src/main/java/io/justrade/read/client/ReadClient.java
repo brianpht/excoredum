@@ -27,7 +27,7 @@ import org.agrona.concurrent.UnsafeBuffer;
  * The read-side SDK: queries a running read replica's {@code QueryResponder}
  * over plain Aeron request/response streams. Consumes only the
  * {@code protocol} wire contract, never {@code core} or
- * {@code read}, mirroring how {@code ExcClient} stays decoupled from the
+ * {@code read}, mirroring how {@code WriteClient} stays decoupled from the
  * engine.
  *
  * <p>Two API modes share one core:

@@ -9,7 +9,7 @@ import io.justrade.config.CoreConfig;
 import io.justrade.launcher.ClusterConfig;
 import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.CommandResultCode;
-import io.justrade.read.ExcReadReplica;
+import io.justrade.read.ReadReplica;
 import io.justrade.read.config.ReadReplicaConfig;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
@@ -49,7 +49,7 @@ class ReadReplicaIntegrationTest {
             final ClientConfig clientConfig =
                     ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1)).build();
 
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 await(client, client.addSymbol(SYM, BASE, QUOTE, 1L, 1L), lastIdLo);
                 await(client, client.addUser(MAKER), lastIdLo);
                 await(client, client.adjustBalance(MAKER, BASE, 1_000L), lastIdLo);
@@ -63,7 +63,7 @@ class ReadReplicaIntegrationTest {
             final ReadReplicaConfig replicaConfig = ReadReplicaConfig.localhost(
                     baseDir.resolve("replica").resolve("driver").toString(), clusterConfig.archiveControlChannel());
 
-            try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+            try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                 final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
                 while (System.currentTimeMillis() < deadline
                         && !(replica.userExists(TAKER) && replica.balance(TAKER, BASE) == 4L)) {
@@ -115,7 +115,7 @@ class ReadReplicaIntegrationTest {
         }
     }
 
-    private static void await(final ExcClient client, final long commandIdLo, final long[] lastIdLo) {
+    private static void await(final WriteClient client, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

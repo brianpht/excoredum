@@ -16,7 +16,7 @@ class BenchHarnessSmokeTest {
     @Test
     @Timeout(120)
     void measuresRoundTripLatency(@TempDir final Path baseDir) {
-        final LatencyResult result = ExcBenchHarness.run(baseDir, 50, 200);
+        final LatencyResult result = BenchHarness.run(baseDir, 50, 200);
         assertEquals(200L, result.ops());
         assertTrue(result.throughputPerSec() > 0.0, "throughput must be positive");
         assertTrue(result.p50Nanos() > 0L, "p50 latency must be recorded");

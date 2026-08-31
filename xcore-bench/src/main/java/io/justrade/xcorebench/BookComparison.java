@@ -74,12 +74,12 @@ public final class BookComparison {
         // Reference: justrade's book.
         BookStats reference = null;
         final List<List<String>> rows = new ArrayList<>();
-        long[] excTimes = new long[config.iterations()];
+        long[] justradeTimes = new long[config.iterations()];
         for (int i = 0; i < config.iterations(); i++) {
-            reference = ExcBookRunner.replay(workload, SYMBOL_ID);
-            excTimes[i] = reference.replayNanos();
+            reference = JustradeBookRunner.replay(workload, SYMBOL_ID);
+            justradeTimes[i] = reference.replayNanos();
         }
-        rows.add(row(reference.name(), workload.count(), excTimes));
+        rows.add(row(reference.name(), workload.count(), justradeTimes));
 
         for (final XcoreBookRunner.BookFactory factory : factories) {
             BookStats stats = null;

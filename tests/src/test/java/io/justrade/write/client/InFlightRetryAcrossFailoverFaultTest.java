@@ -8,7 +8,7 @@ import io.justrade.launcher.ClusterConfig;
 import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.CommandResultCode;
 import io.justrade.protocol.QueryStreams;
-import io.justrade.read.ExcReadReplica;
+import io.justrade.read.ReadReplica;
 import io.justrade.read.config.ReadReplicaConfig;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Path;
@@ -58,7 +58,7 @@ class InFlightRetryAcrossFailoverFaultTest {
                 };
 
         try {
-            try (ExcClient client = new ExcClient(
+            try (WriteClient client = new WriteClient(
                     ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(NODES))
                             .build(),
                     handler)) {
@@ -108,7 +108,7 @@ class InFlightRetryAcrossFailoverFaultTest {
                         "localhost",
                         QueryStreams.QUERY_REQUEST_CHANNEL,
                         QueryStreams.QUERY_REQUEST_STREAM_ID);
-                try (ExcReadReplica replica = new ExcReadReplica(replicaConfig, CoreConfig.defaults())) {
+                try (ReadReplica replica = new ReadReplica(replicaConfig, CoreConfig.defaults())) {
                     pollReplica(replica, () -> replica.orderCount() == ORDERS);
                     for (long uid = 1L; uid <= ORDERS; uid++) {
                         assertEquals(
@@ -125,7 +125,7 @@ class InFlightRetryAcrossFailoverFaultTest {
         }
     }
 
-    private static void awaitLeader(final ExcClient client) {
+    private static void awaitLeader(final WriteClient client) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -137,7 +137,7 @@ class InFlightRetryAcrossFailoverFaultTest {
         throw new AssertionError("no leader established within timeout");
     }
 
-    private static long submit(final ExcClient client, final java.util.function.LongSupplier op) {
+    private static long submit(final WriteClient client, final java.util.function.LongSupplier op) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -150,7 +150,7 @@ class InFlightRetryAcrossFailoverFaultTest {
         throw new AssertionError("could not submit within timeout");
     }
 
-    private static void drainUntil(final ExcClient client, final BooleanSupplier done) {
+    private static void drainUntil(final WriteClient client, final BooleanSupplier done) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -162,7 +162,7 @@ class InFlightRetryAcrossFailoverFaultTest {
         throw new AssertionError("condition not met within timeout");
     }
 
-    private static void pollReplica(final ExcReadReplica replica, final BooleanSupplier condition) {
+    private static void pollReplica(final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             replica.poll();

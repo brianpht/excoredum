@@ -7,8 +7,8 @@ import io.justrade.config.CoreConfig;
 import io.justrade.launcher.ClusterConfig;
 import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.CommandResultCode;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
@@ -94,7 +94,7 @@ class ChaosSoakTest {
                     .maxInFlight(1024)
                     .build();
 
-            try (ExcClient client = new ExcClient(clientConfig, handler)) {
+            try (WriteClient client = new WriteClient(clientConfig, handler)) {
                 awaitLeader(client);
                 final long setupSubmitted = setup(client, lastCommandIdLo, lastCode);
 
@@ -146,7 +146,7 @@ class ChaosSoakTest {
      * funding; returns the number of commands submitted.
      */
     private static long setup(
-            final ExcClient client, final long[] lastCommandIdLo, final CommandResultCode[] lastCode) {
+            final WriteClient client, final long[] lastCommandIdLo, final CommandResultCode[] lastCode) {
         long submitted = 0;
         awaitResult(
                 client, client.addSymbol(SYM, BASE, QUOTE, 1L, 1L, TAKER_FEE, MAKER_FEE), lastCommandIdLo, lastCode);
@@ -191,7 +191,7 @@ class ChaosSoakTest {
      * @return number of commands submitted
      */
     private static long drive(
-            final ExcClient client,
+            final WriteClient client,
             final long[] lastCommandIdLo,
             final CommandResultCode[] lastCode,
             final int rounds) {
@@ -273,7 +273,7 @@ class ChaosSoakTest {
     }
 
     private static void awaitResult(
-            final ExcClient client,
+            final WriteClient client,
             final long commandIdLo,
             final long[] lastCommandIdLo,
             final CommandResultCode[] lastCode) {
@@ -288,7 +288,7 @@ class ChaosSoakTest {
         throw new AssertionError("no result for commandIdLo=" + commandIdLo);
     }
 
-    private static void awaitLeader(final ExcClient client) {
+    private static void awaitLeader(final WriteClient client) {
         final long deadline = System.currentTimeMillis() + 30_000L;
         while (System.currentTimeMillis() < deadline) {
             client.poll();

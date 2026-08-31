@@ -9,8 +9,8 @@ import io.justrade.launcher.ClusterNode;
 import io.justrade.protocol.QueryStreams;
 import io.justrade.read.config.ReadReplicaConfig;
 import io.justrade.write.client.BackpressureException;
-import io.justrade.write.client.ExcClient;
 import io.justrade.write.client.ResultHandler;
+import io.justrade.write.client.WriteClient;
 import io.justrade.write.client.config.ClientConfig;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -51,7 +51,7 @@ class ReplicaCrashRecoveryClusterTest {
             final long[] idLo = {-1L};
             final ResultHandler handler =
                     (idHi, lo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) -> idLo[0] = lo;
-            try (ExcClient client = new ExcClient(
+            try (WriteClient client = new WriteClient(
                     ClientConfig.builder(1L, ClusterConfig.ingressEndpoints(1))
                             .keepaliveIntervalNs(0L)
                             .build(),
@@ -64,7 +64,7 @@ class ReplicaCrashRecoveryClusterTest {
                         .checkpointFile(checkpointFile)
                         .checkpointIntervalMs(250L)
                         .build();
-                try (ExcReadReplica replica = new ExcReadReplica(config1, CoreConfig.defaults())) {
+                try (ReadReplica replica = new ReadReplica(config1, CoreConfig.defaults())) {
                     submitBatch1(client, idLo, replica);
                     drain(client, replica, () -> replica.userCount() == 5 && replica.orderCount() == 1);
                     final long position = replica.appliedPosition();
@@ -82,7 +82,7 @@ class ReplicaCrashRecoveryClusterTest {
             final long[] tailIdLo = {-1L};
             final ResultHandler tailHandler =
                     (idHi, lo, code, uid, hasUid, orderId, hasOrderId, filledSize, hasFilledSize) -> tailIdLo[0] = lo;
-            try (ExcClient client = new ExcClient(
+            try (WriteClient client = new WriteClient(
                     ClientConfig.builder(2L, ClusterConfig.ingressEndpoints(1))
                             .keepaliveIntervalNs(0L)
                             .build(),
@@ -95,7 +95,7 @@ class ReplicaCrashRecoveryClusterTest {
                         .checkpointFile(checkpointFile)
                         .checkpointIntervalMs(250L)
                         .build();
-                try (ExcReadReplica replica = new ExcReadReplica(config1, CoreConfig.defaults())) {
+                try (ReadReplica replica = new ReadReplica(config1, CoreConfig.defaults())) {
                     // Warm start from the phase-1 checkpoint, then apply batch 2.
                     assertEquals(5, replica.userCount(), "the phase-1 checkpoint must load");
                     submitBatch2(client, tailIdLo, replica);
@@ -119,7 +119,7 @@ class ReplicaCrashRecoveryClusterTest {
                     .checkpointFile(checkpointFile)
                     .checkpointIntervalMs(250L)
                     .build();
-            try (ExcReadReplica replica = new ExcReadReplica(config2, CoreConfig.defaults())) {
+            try (ReadReplica replica = new ReadReplica(config2, CoreConfig.defaults())) {
                 assertEquals(5, replica.userCount(), "the stale checkpoint must restore batch 1");
                 assertEquals(1, replica.orderCount(), "the stale checkpoint must restore the resting order");
                 assertEquals(stale.logPosition(), replica.appliedPosition(), "resume from the stale position");
@@ -156,7 +156,7 @@ class ReplicaCrashRecoveryClusterTest {
         }
     }
 
-    private static void submitBatch1(final ExcClient client, final long[] lastIdLo, final ExcReadReplica replica) {
+    private static void submitBatch1(final WriteClient client, final long[] lastIdLo, final ReadReplica replica) {
         await(client, replica, submit(client, () -> client.addSymbol(SYM, BASE, QUOTE, 1L, 1L)), lastIdLo);
         for (long uid = 1L; uid <= 5L; uid++) {
             final long u = uid;
@@ -168,7 +168,7 @@ class ReplicaCrashRecoveryClusterTest {
         await(client, replica, submit(client, () -> client.placeGtc(SYM, 2L, false, 105L, 4L, 105L, 2L, 0)), lastIdLo);
     }
 
-    private static void submitBatch2(final ExcClient client, final long[] lastIdLo, final ExcReadReplica replica) {
+    private static void submitBatch2(final WriteClient client, final long[] lastIdLo, final ReadReplica replica) {
         for (long uid = 6L; uid <= 10L; uid++) {
             final long u = uid;
             await(client, replica, submit(client, () -> client.addUser(u)), lastIdLo);
@@ -179,7 +179,7 @@ class ReplicaCrashRecoveryClusterTest {
         await(client, replica, submit(client, () -> client.placeGtc(SYM, 4L, false, 100L, 2L, 100L, 7L, 0)), lastIdLo);
     }
 
-    private static long submit(final ExcClient client, final LongSupplier command) {
+    private static long submit(final WriteClient client, final LongSupplier command) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             try {
@@ -193,7 +193,7 @@ class ReplicaCrashRecoveryClusterTest {
     }
 
     private static void await(
-            final ExcClient client, final ExcReadReplica replica, final long commandIdLo, final long[] lastIdLo) {
+            final WriteClient client, final ReadReplica replica, final long commandIdLo, final long[] lastIdLo) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -206,7 +206,7 @@ class ReplicaCrashRecoveryClusterTest {
         throw new AssertionError("no result for command id " + commandIdLo);
     }
 
-    private static void drain(final ExcReadReplica replica, final BooleanSupplier condition) {
+    private static void drain(final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             replica.poll();
@@ -218,7 +218,7 @@ class ReplicaCrashRecoveryClusterTest {
         throw new AssertionError("replica never reached the expected state");
     }
 
-    private static void drain(final ExcClient client, final ExcReadReplica replica, final BooleanSupplier condition) {
+    private static void drain(final WriteClient client, final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
@@ -232,7 +232,7 @@ class ReplicaCrashRecoveryClusterTest {
     }
 
     private static void pollUntil(
-            final ExcClient client, final ExcReadReplica replica, final BooleanSupplier condition) {
+            final WriteClient client, final ReadReplica replica, final BooleanSupplier condition) {
         final long deadline = System.currentTimeMillis() + TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             client.poll();
