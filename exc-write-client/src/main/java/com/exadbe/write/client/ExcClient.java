@@ -80,6 +80,10 @@ public final class ExcClient implements EgressListener, AutoCloseable {
     private final int[] freeStack;
     private int freeTop;
 
+    // Reusable scratch for retransmitDue: the pool indices of every due
+    // command, sorted by clientSeq before re-offer (submission order).
+    private final int[] dueOrder;
+
     private final Histogram latencyHistogram = new Histogram(3_600_000_000_000L, 3);
 
     private long nextClientSeq;
@@ -121,6 +125,7 @@ public final class ExcClient implements EgressListener, AutoCloseable {
         this.pending = new Long2ObjectHashMap<>(Math.max(16, config.maxInFlight() * 2), LOAD_FACTOR);
         this.pool = new PendingCommand[config.maxInFlight()];
         this.freeStack = new int[config.maxInFlight()];
+        this.dueOrder = new int[config.maxInFlight()];
         for (int i = 0; i < pool.length; i++) {
             pool[i] = new PendingCommand(i);
             freeStack[i] = pool.length - 1 - i;
@@ -550,17 +555,49 @@ public final class ExcClient implements EgressListener, AutoCloseable {
             return 0;
         }
         int work = cluster.pollEgress();
+        work += retransmitDue(now);
+        retransmitAll = false;
 
+        if (config.keepaliveIntervalNs() > 0 && (now - nextKeepaliveNanos) >= 0) {
+            sendKeepalive(now);
+            work++;
+        }
+        return work;
+    }
+
+    // Re-offers every due command in submission (clientSeq) order. Pool-index
+    // order diverges from submission order once slots are reused, and a leader
+    // change or reconnect makes every in-flight command due at once; dependent
+    // commands (a place followed by its cancel) must not be delivered reversed.
+    private int retransmitDue(final long now) {
         // Scan the preallocated pool rather than the map's value iterator so a
         // poll neither allocates nor risks concurrent modification when a result
         // callback recycles an entry mid-scan.
+        int dueCount = 0;
         for (int i = 0; i < pool.length; i++) {
             final PendingCommand pc = pool[i];
-            if (!pc.inUse) {
-                continue;
+            if (pc.inUse && (retransmitAll || (now - pc.deadlineNanos) >= 0)) {
+                dueOrder[dueCount++] = i;
             }
-            final boolean due = retransmitAll || (now - pc.deadlineNanos) >= 0;
-            if (!due) {
+        }
+        // Insertion sort: the due set is normally tiny, and the failover burst
+        // that fills it is rare and already off the fast path.
+        for (int i = 1; i < dueCount; i++) {
+            final int idx = dueOrder[i];
+            final long seq = pool[idx].clientSeq;
+            int j = i - 1;
+            while (j >= 0 && pool[dueOrder[j]].clientSeq > seq) {
+                dueOrder[j + 1] = dueOrder[j];
+                j--;
+            }
+            dueOrder[j + 1] = idx;
+        }
+        int work = 0;
+        for (int d = 0; d < dueCount; d++) {
+            final PendingCommand pc = pool[dueOrder[d]];
+            // An expiry callback earlier in this pass may have recycled and
+            // re-submitted the slot; re-check eligibility before re-offering.
+            if (!pc.inUse || (!retransmitAll && (now - pc.deadlineNanos) < 0)) {
                 continue;
             }
             if (config.maxRetries() > 0 && pc.retries >= config.maxRetries()) {
@@ -586,12 +623,6 @@ public final class ExcClient implements EgressListener, AutoCloseable {
                 firstRetransmitIdLo = pc.commandIdLo;
             }
             retransmits++;
-            work++;
-        }
-        retransmitAll = false;
-
-        if (config.keepaliveIntervalNs() > 0 && (now - nextKeepaliveNanos) >= 0) {
-            sendKeepalive(now);
             work++;
         }
         return work;
