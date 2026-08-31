@@ -120,14 +120,15 @@ public final class ReadClient implements AutoCloseable {
             dir = embedded.aeronDirectoryName();
         }
         this.ownMediaDriver = embedded;
+        Aeron aeronClient = null;
         Subscription sub = null;
         Publication pub = null;
         String channel = null;
         try {
-            this.aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(dir));
-            sub = aeron.addSubscription(config.responseChannel(), config.responseStreamId());
+            aeronClient = Aeron.connect(new Aeron.Context().aeronDirectoryName(dir));
+            sub = aeronClient.addSubscription(config.responseChannel(), config.responseStreamId());
             channel = awaitResolvedEndpoint(sub);
-            pub = aeron.addPublication(config.requestChannel(), config.requestStreamId());
+            pub = aeronClient.addPublication(config.requestChannel(), config.requestStreamId());
         } catch (final RuntimeException e) {
             if (pub != null) {
                 pub.close();
@@ -135,11 +136,15 @@ public final class ReadClient implements AutoCloseable {
             if (sub != null) {
                 sub.close();
             }
+            if (aeronClient != null) {
+                aeronClient.close();
+            }
             if (embedded != null) {
                 embedded.close();
             }
             throw e;
         }
+        this.aeron = aeronClient;
         this.responses = sub;
         this.requests = pub;
         this.fragmentAssembler = new FragmentAssembler(this::onResponse);
@@ -385,7 +390,10 @@ public final class ReadClient implements AutoCloseable {
         int work = 0;
         for (int i = 0; i < pool.length; i++) {
             final PendingQuery pq = pool[i];
-            if (!pq.inUse || (now - pq.deadlineNanos) < 0) {
+            // A delivering slot is mid-listener-callback (which may re-enter
+            // poll via a nested synchronous query); it is released when the
+            // callback returns, so it must not be expired here as well.
+            if (!pq.inUse || pq.delivering || (now - pq.deadlineNanos) < 0) {
                 continue;
             }
             // An overall budget bounds every async query, even when maxRetries is 0
@@ -436,6 +444,11 @@ public final class ReadClient implements AutoCloseable {
         decodeResponse(pq);
         lastAppliedPosition = pq.appliedPosition;
         pending.remove(requestId);
+        // The listener callback may re-enter poll() (a nested synchronous
+        // query); the slot is off the pending map but not yet released, so mark
+        // it delivering to keep a reentrant retransmit from expiring it and
+        // releasing the pool slot twice.
+        pq.delivering = true;
         final SyncFrame frame = syncFrameFor(requestId);
         if (pq.status == QueryStatusCode.UNSUPPORTED) {
             if (listener != QueryListener.NONE) {
@@ -704,6 +717,7 @@ public final class ReadClient implements AutoCloseable {
 
     private void release(final PendingQuery pq) {
         pq.inUse = false;
+        pq.delivering = false;
         pq.value = null;
         pq.status = QueryStatusCode.SUCCESS;
         pq.appliedPosition = 0L;
@@ -740,6 +754,7 @@ public final class ReadClient implements AutoCloseable {
         long deadlineNanos;
         long submittedNanos;
         boolean inUse;
+        boolean delivering;
         Object value;
         QueryStatusCode status;
         long appliedPosition;

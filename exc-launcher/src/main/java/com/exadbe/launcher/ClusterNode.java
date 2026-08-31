@@ -139,15 +139,30 @@ public final class ClusterNode implements AutoCloseable {
                 .archiveContext(archiveClientContext.clone())
                 .deleteDirOnStart(cleanStart);
 
-        final ClusteredService service = serviceFactory.create(coreConfig, metrics);
+        final ClusteredService service;
+        try {
+            service = serviceFactory.create(coreConfig, metrics);
+        } catch (final RuntimeException e) {
+            // The counters buffers are already allocated; free them so a failed
+            // start leaks nothing off-heap.
+            freeCountersBuffers();
+            throw e;
+        }
         final ClusteredServiceContainer.Context serviceContext = new ClusteredServiceContainer.Context()
                 .aeronDirectoryName(config.aeronDirectoryName())
                 .archiveContext(archiveClientContext.clone())
                 .clusterDir(config.clusterDir())
                 .clusteredService(service);
 
-        this.clusteredMediaDriver =
-                ClusteredMediaDriver.launch(mediaDriverContext, archiveContext, consensusModuleContext);
+        try {
+            this.clusteredMediaDriver =
+                    ClusteredMediaDriver.launch(mediaDriverContext, archiveContext, consensusModuleContext);
+        } catch (final RuntimeException e) {
+            // ClusteredMediaDriver cleans up its own partial launch; the
+            // manually allocated counters buffers are this node's to free.
+            freeCountersBuffers();
+            throw e;
+        }
         try {
             this.container = ClusteredServiceContainer.launch(serviceContext);
         } catch (final RuntimeException e) {
