@@ -64,5 +64,5 @@ gradle-app.setting
 
 ### AWS deploy generated artifacts
 deploy/aws/ansible/hosts.ini
-deploy/aws/justrade-runtime.tgz
+deploy/aws/*.tgz
 
