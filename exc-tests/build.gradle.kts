@@ -32,6 +32,14 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
+// Custom Test tasks must set their classpath explicitly: relying on Gradle's
+// Test.classpath convention is deprecated and removed in Gradle 9. They run
+// the same test sources as `test`, just filtered by JUnit tag.
+fun configureTaggedTest(task: Test) {
+    task.testClassesDirs = sourceSets["test"].output.classesDirs
+    task.classpath = sourceSets["test"].runtimeClasspath
+}
+
 // Integration tests (in-process Media Driver) run under the integrationTest task.
 val integrationTest by tasks.registering(Test::class) {
     description = "Runs integration tests with an in-process Aeron Media Driver."
@@ -39,6 +47,7 @@ val integrationTest by tasks.registering(Test::class) {
     useJUnitPlatform {
         includeTags("integration")
     }
+    configureTaggedTest(this)
     shouldRunAfter(tasks.named("test"))
 }
 
@@ -49,6 +58,7 @@ val clusterTest by tasks.registering(Test::class) {
     useJUnitPlatform {
         includeTags("cluster")
     }
+    configureTaggedTest(this)
     shouldRunAfter(integrationTest)
 }
 
@@ -59,6 +69,7 @@ val faultTest by tasks.registering(Test::class) {
     useJUnitPlatform {
         includeTags("fault")
     }
+    configureTaggedTest(this)
     shouldRunAfter(clusterTest)
 }
 
@@ -69,6 +80,7 @@ val soakTest by tasks.registering(Test::class) {
     useJUnitPlatform {
         includeTags("soak")
     }
+    configureTaggedTest(this)
     shouldRunAfter(faultTest)
 }
 
