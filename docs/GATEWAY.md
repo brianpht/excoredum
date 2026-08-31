@@ -200,6 +200,7 @@ Launcher reads a properties file via `--config=<path>` (or `--config <path>`):
 | `gateway.symbols`                           | (empty)                                        | `id\|name\|base\|quote\|baseScaleK\|quoteScaleK[|makerFee|takerFee]`, comma separated |
 | `gateway.currencies`                        | (empty)                                        | `id\|code\|scaleK`, comma separated (balance naming/scaling) |
 | `gateway.marketPump.intervalMs`             | `1000`                                         | Market snapshot interval (0 disables)    |
+| `gateway.ws.maxSubscribers`                 | `1024`                                         | Max concurrent WebSocket subscribers; handshakes beyond it are closed |
 
 ---
 

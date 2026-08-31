@@ -114,8 +114,12 @@ class GatewayEndToEndIntegrationTest {
                                         .build(),
                                 broadcaster)) {
                     final Router router = new Router(read, write, gatewayConfig);
-                    final HttpServer server =
-                            new HttpServer(gatewayConfig.httpHost(), gatewayConfig.httpPort(), router, broadcaster);
+                    final HttpServer server = new HttpServer(
+                            gatewayConfig.httpHost(),
+                            gatewayConfig.httpPort(),
+                            router,
+                            broadcaster,
+                            gatewayConfig.maxWsSubscribers());
                     server.start();
                     try {
                         exercise(server.boundPort());

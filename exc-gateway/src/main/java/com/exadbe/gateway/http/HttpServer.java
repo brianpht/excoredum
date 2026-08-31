@@ -27,19 +27,26 @@ public final class HttpServer {
     private final int port;
     private final Router router;
     private final StreamBroadcaster broadcaster;
+    private final int maxWsSubscribers;
     private final EventLoopGroup boss = new NioEventLoopGroup(1);
     private final EventLoopGroup worker = new NioEventLoopGroup();
     private Channel serverChannel;
 
     public HttpServer(final String host, final int port, final Router router) {
-        this(host, port, router, null);
+        this(host, port, router, null, Integer.MAX_VALUE);
     }
 
-    public HttpServer(final String host, final int port, final Router router, final StreamBroadcaster broadcaster) {
+    public HttpServer(
+            final String host,
+            final int port,
+            final Router router,
+            final StreamBroadcaster broadcaster,
+            final int maxWsSubscribers) {
         this.host = host;
         this.port = port;
         this.router = router;
         this.broadcaster = broadcaster;
+        this.maxWsSubscribers = maxWsSubscribers;
     }
 
     /** Binds the socket (blocking) and returns once listening. */
@@ -55,7 +62,7 @@ public final class HttpServer {
                         ch.pipeline().addLast(new HttpObjectAggregator(1 << 20));
                         if (broadcaster != null) {
                             ch.pipeline().addLast(new WebSocketServerProtocolHandler("/ws"));
-                            ch.pipeline().addLast(new WebSocketHandler(broadcaster));
+                            ch.pipeline().addLast(new WebSocketHandler(broadcaster, maxWsSubscribers));
                         }
                         ch.pipeline().addLast(new HttpHandler(router));
                     }
@@ -68,8 +75,10 @@ public final class HttpServer {
         if (serverChannel != null) {
             serverChannel.close().awaitUninterruptibly();
         }
-        boss.shutdownGracefully();
-        worker.shutdownGracefully();
+        // Await the graceful shutdowns so in-flight responses finish draining
+        // before the caller (the launcher's shutdown hook) exits the JVM.
+        boss.shutdownGracefully().awaitUninterruptibly();
+        worker.shutdownGracefully().awaitUninterruptibly();
     }
 
     /** The bound local port (useful when binding to an ephemeral port 0). */

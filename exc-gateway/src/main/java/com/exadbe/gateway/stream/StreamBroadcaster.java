@@ -2,6 +2,7 @@ package com.exadbe.gateway.stream;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Thread-safe fan-out of JSON events to a set of {@link StreamSink}s. Producers
@@ -12,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class StreamBroadcaster {
 
     private final Set<StreamSink> sinks = ConcurrentHashMap.newKeySet();
+    private final AtomicLong droppedFrames = new AtomicLong();
 
     public void add(final StreamSink sink) {
         sinks.add(sink);
@@ -33,5 +35,20 @@ public final class StreamBroadcaster {
 
     public boolean isEmpty() {
         return sinks.isEmpty();
+    }
+
+    /** Number of currently registered subscriber sinks. */
+    public int subscriberCount() {
+        return sinks.size();
+    }
+
+    /** Counts one frame withheld from a healthy-but-slow subscriber. */
+    public void recordDrop() {
+        droppedFrames.incrementAndGet();
+    }
+
+    /** Frames dropped for slow subscribers since start. */
+    public long droppedFrames() {
+        return droppedFrames.get();
     }
 }

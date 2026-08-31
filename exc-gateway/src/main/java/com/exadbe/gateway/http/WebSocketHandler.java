@@ -18,21 +18,32 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 final class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
 
     private final StreamBroadcaster broadcaster;
+    private final int maxSubscribers;
     private StreamSink sink;
 
-    WebSocketHandler(final StreamBroadcaster broadcaster) {
+    WebSocketHandler(final StreamBroadcaster broadcaster, final int maxSubscribers) {
         this.broadcaster = broadcaster;
+        this.maxSubscribers = maxSubscribers;
     }
 
     @Override
     public void userEventTriggered(final ChannelHandlerContext ctx, final Object evt) throws Exception {
         if (evt instanceof io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler.HandshakeComplete) {
+            if (broadcaster.subscriberCount() >= maxSubscribers) {
+                // The subscriber set is unbounded memory and fan-out cost grows
+                // with it; refuse handshakes beyond the configured cap.
+                ctx.close();
+                return;
+            }
             final Channel channel = ctx.channel();
             this.sink = json -> {
                 // A slow subscriber must not grow the outbound buffer without bound:
-                // drop frames once the channel crosses its write watermark.
+                // drop frames once the channel crosses its write watermark. The
+                // drop is counted so silent data loss stays observable.
                 if (channel.isWritable()) {
                     channel.writeAndFlush(new TextWebSocketFrame(json));
+                } else {
+                    broadcaster.recordDrop();
                 }
             };
             broadcaster.add(sink);

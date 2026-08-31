@@ -10,4 +10,5 @@ public record HealthDto(
         long completed,
         long expired,
         long backpressure,
+        boolean ready,
         List<TotalDto> totals) {}

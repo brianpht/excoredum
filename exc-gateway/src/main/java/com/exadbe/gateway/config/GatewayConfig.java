@@ -7,7 +7,7 @@ import java.util.Properties;
 
 /**
  * Immutable configuration for the HTTP gateway: the HTTP bind address, the
- * read replica's query endpoint (and optional shared Aer on directory), the
+ * read replica's query endpoint (and optional shared Aeron directory), the
  * cluster ingress for the write client, the admin uid allow-list, and the
  * config-driven symbol registry the UI uses to render prices.
  *
@@ -46,6 +46,7 @@ public final class GatewayConfig {
     private final String writeEgressChannel;
     private final String writeAeronDir;
     private final long marketPumpIntervalMs;
+    private final int maxWsSubscribers;
     private final List<Long> adminUids;
     private final String adminApiKey;
     private final List<Symbol> symbols;
@@ -65,6 +66,7 @@ public final class GatewayConfig {
         this.writeEgressChannel = b.writeEgressChannel;
         this.writeAeronDir = b.writeAeronDir;
         this.marketPumpIntervalMs = b.marketPumpIntervalMs;
+        this.maxWsSubscribers = b.maxWsSubscribers;
         this.adminUids = List.copyOf(b.adminUids);
         this.adminApiKey = b.adminApiKey;
         this.symbols = List.copyOf(b.symbols);
@@ -97,6 +99,7 @@ public final class GatewayConfig {
         b.writeAeronDir(p.getProperty("gateway.write.aeronDir"));
         b.marketPumpIntervalMs(
                 parseLong(p.getProperty("gateway.marketPump.intervalMs", "1000"), "gateway.marketPump.intervalMs"));
+        b.maxWsSubscribers(parseInt(p.getProperty("gateway.ws.maxSubscribers", "1024"), "gateway.ws.maxSubscribers"));
         for (final String uid : p.getProperty("gateway.admin.uids", "").split(",")) {
             if (!uid.isBlank()) {
                 b.adminUid(parseLong(uid.trim(), "gateway.admin.uids"));
@@ -119,7 +122,7 @@ public final class GatewayConfig {
         return b.build();
     }
 
-    /** Parses one {@code id,name,base,quote,baseScaleK,quoteScaleK[|makerFee|takerFee]} symbol token. */
+    /** Parses one {@code id|name|base|quote|baseScaleK|quoteScaleK[|makerFee|takerFee]} symbol token. */
     private static Symbol parseSymbol(final String token) {
         final String[] f = token.trim().split("\\|");
         if (f.length != 6 && f.length != 8) {
@@ -193,7 +196,7 @@ public final class GatewayConfig {
         return readResponseStreamId;
     }
 
-    /** Shared Aer on directory for the read client, or null to launch an embedded media driver. */
+    /** Shared Aeron directory for the read client, or null to launch an embedded media driver. */
     public String readAeronDir() {
         return readAeronDir;
     }
@@ -214,7 +217,7 @@ public final class GatewayConfig {
         return writeEgressChannel;
     }
 
-    /** Shared Aer on directory for the write client, or null to launch an embedded media driver. */
+    /** Shared Aeron directory for the write client, or null to launch an embedded media driver. */
     public String writeAeronDir() {
         return writeAeronDir;
     }
@@ -222,6 +225,11 @@ public final class GatewayConfig {
     /** WebSocket market snapshot interval in ms; 0 disables the market pump. */
     public long marketPumpIntervalMs() {
         return marketPumpIntervalMs;
+    }
+
+    /** Maximum concurrent WebSocket subscribers; new handshakes beyond it are closed. */
+    public int maxWsSubscribers() {
+        return maxWsSubscribers;
     }
 
     public List<Long> adminUids() {
@@ -256,6 +264,7 @@ public final class GatewayConfig {
         private String writeEgressChannel = "aeron:udp?endpoint=localhost:0";
         private String writeAeronDir;
         private long marketPumpIntervalMs = 1000L;
+        private int maxWsSubscribers = 1024;
         private final List<Long> adminUids = new ArrayList<>();
         private String adminApiKey;
         private final List<Symbol> symbols = new ArrayList<>();
@@ -326,6 +335,11 @@ public final class GatewayConfig {
             return this;
         }
 
+        public Builder maxWsSubscribers(final int v) {
+            this.maxWsSubscribers = v;
+            return this;
+        }
+
         public Builder adminUid(final long v) {
             this.adminUids.add(v);
             return this;
@@ -361,6 +375,9 @@ public final class GatewayConfig {
             }
             if (marketPumpIntervalMs < 0L) {
                 throw new IllegalArgumentException("marketPumpIntervalMs out of range: " + marketPumpIntervalMs);
+            }
+            if (maxWsSubscribers <= 0) {
+                throw new IllegalArgumentException("maxWsSubscribers must be positive: " + maxWsSubscribers);
             }
             for (final Symbol s : symbols) {
                 validateSymbol(s);

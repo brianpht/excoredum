@@ -46,8 +46,12 @@ public final class GatewayLauncher {
         final ReadPump read = new ReadPump(readConfig);
         final StreamBroadcaster broadcaster = new StreamBroadcaster();
         final WritePump write = new WritePump(writeConfig, broadcaster);
-        final HttpServer server =
-                new HttpServer(config.httpHost(), config.httpPort(), new Router(read, write, config), broadcaster);
+        final HttpServer server = new HttpServer(
+                config.httpHost(),
+                config.httpPort(),
+                new Router(read, write, config),
+                broadcaster,
+                config.maxWsSubscribers());
         final MarketPump marketPump =
                 new MarketPump(read, broadcaster, config.symbols(), config.marketPumpIntervalMs());
         try {

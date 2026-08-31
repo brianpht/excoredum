@@ -109,16 +109,21 @@ public final class Router {
     private CompletableFuture<Object> health(final HandlerRequest req) {
         final CompletableFuture<Object> hash = read.submitStateHash();
         final CompletableFuture<Object> totals = read.submitTotalCurrencyBalance();
-        return hash.thenCombine(
-                totals,
-                (h, t) -> new HealthDto(
-                        read.lastAppliedPosition(),
-                        (Long) h,
-                        read.submitted(),
-                        read.completed(),
-                        read.expired(),
-                        read.backpressure(),
-                        Mapper.totalBalance((TotalBalanceResult) t).totals()));
+        return hash.thenCombine(totals, (h, t) -> {
+            final long applied = read.lastAppliedPosition();
+            return new HealthDto(
+                    applied,
+                    (Long) h,
+                    read.submitted(),
+                    read.completed(),
+                    read.expired(),
+                    read.backpressure(),
+                    // A replica that has applied nothing yet answers with
+                    // empty/zero state; callers can distinguish it from a
+                    // follower that genuinely holds that state.
+                    applied > 0L,
+                    Mapper.totalBalance((TotalBalanceResult) t).totals());
+        });
     }
 
     // ---- read handlers ----

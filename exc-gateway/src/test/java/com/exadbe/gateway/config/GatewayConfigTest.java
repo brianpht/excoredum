@@ -118,6 +118,14 @@ class GatewayConfigTest {
     }
 
     @Test
+    void wsSubscriberCapDefaultsAndValidates() {
+        assertEquals(1024, GatewayConfig.builder().build().maxWsSubscribers());
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GatewayConfig.builder().maxWsSubscribers(0).build());
+    }
+
+    @Test
     void rejectsMalformedSymbolToken() {
         assertThrows(IllegalArgumentException.class, () -> {
             final Properties p = new Properties();
