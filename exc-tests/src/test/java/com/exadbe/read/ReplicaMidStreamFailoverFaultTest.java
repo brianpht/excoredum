@@ -117,6 +117,10 @@ class ReplicaMidStreamFailoverFaultTest {
                     // The buffered tail drains, then the replica fails over and
                     // resumes the replay on a survivor; the tape must end with
                     // exactly BIDS trades and the balances must be conserved.
+                    // The client-side fills/acks are part of the wait because
+                    // egress delivery lags the replica's archive follow and
+                    // settles over several polls after a failover - asserting
+                    // them without draining races the failover.
                     drain(
                             client,
                             replica,
@@ -124,7 +128,9 @@ class ReplicaMidStreamFailoverFaultTest {
                                     && replica.userCount() == 2
                                     && replica.orderCount() == 1
                                     && replica.isHealthy()
-                                    && replica.currentSource() != 0);
+                                    && replica.currentSource() != 0
+                                    && fills.size() == BIDS
+                                    && acks.size() == 7 + BIDS);
                     final long positionAfter = replica.appliedPosition();
                     assertTrue(
                             positionAfter >= positionBeforeKill,
