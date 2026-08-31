@@ -682,7 +682,7 @@ TRUNCATED).
 | `MATCHING_MOVE_FAILED_PRICE_OVER_RISK_LIMIT` | Bid moved above its reserved price |
 | `RISK_NSF` | Insufficient balance for the hold |
 | `RISK_INVALID_RESERVE_PRICE` | Bid reserve price below the order price |
-| `RISK_ASK_PRICE_LOWER_THAN_FEE` | Ask price cannot cover the taker fee |
+| `RISK_ASK_PRICE_LOWER_THAN_FEE` | Ask price cannot cover the taker fee (for an ask FOK-BUDGET: the walked proceeds cannot cover the total taker fee) |
 | `INVALID_SYMBOL` | Unknown symbol |
 | `OVERFLOW` | 64-bit arithmetic overflow |
 | `INVALID_AMOUNT` | Defined in the schema; not produced by the current engine |
@@ -713,7 +713,11 @@ conserved across a self-trade; a unit test pins the behavior.
   remainder in its price bucket.
 - **IOC**: match the marketable portion, reject the remainder.
 - **FOK-BUDGET**: fill fully within a budget or reject the whole order; the budget
-  is checked against the walked depth before any fill.
+  is checked against the walked depth before any fill. For an ask the budget is a
+  MINIMUM-proceeds bound and the walk is price-unlimited, so the walked proceeds
+  are additionally checked against the total taker fee and the 64-bit range
+  before any fill (ADR 0002); a kill there reports `RISK_ASK_PRICE_LOWER_THAN_FEE`
+  or `OVERFLOW` with filled 0.
 - **CANCEL / REDUCE**: remove or shrink a resting order, emitting a reduce event
   that carries the freed hold.
 - **MOVE**: relocate a resting order to a new price; a bid may not move above its

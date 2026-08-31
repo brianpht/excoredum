@@ -77,7 +77,7 @@ class OrderBookConformanceTest {
         placeGtc(1L, true, 100L, 5L, MAKER);
 
         out.reset(0L, 0L);
-        final long filled = book.matchFokBudget(2L, false, 10_000L, 10L, HIGH_RESERVE, TAKER, out);
+        final long filled = book.matchFokBudget(2L, false, 10_000L, 10L, HIGH_RESERVE, TAKER, SPEC, out);
 
         assertEquals(0L, filled);
         assertEquals(1, out.eventCount());
@@ -92,11 +92,72 @@ class OrderBookConformanceTest {
         placeGtc(1L, true, 100L, 10L, MAKER);
 
         out.reset(0L, 0L);
-        final long filled = book.matchFokBudget(2L, false, 600L, 6L, HIGH_RESERVE, TAKER, out);
+        final long filled = book.matchFokBudget(2L, false, 600L, 6L, HIGH_RESERVE, TAKER, SPEC, out);
 
         assertEquals(6L, filled);
         assertEquals(1, out.eventCount());
         assertEquals(EventKind.TRADE, out.event(0).kind());
+    }
+
+    @Test
+    void askFokBudgetFillsAgainstAnyBidPriceWhenProceedsCoverBudget() {
+        placeGtc(1L, false, 100L, 10L, MAKER);
+
+        out.reset(0L, 0L);
+        // Budget 500 is a minimum-proceeds bound; the walk costs 10 * 100.
+        final long filled = book.matchFokBudget(2L, true, 500L, 10L, 0L, TAKER, SPEC, out);
+
+        assertEquals(10L, filled);
+        assertEquals(1, out.eventCount());
+        assertEquals(EventKind.TRADE, out.event(0).kind());
+    }
+
+    @Test
+    void askFokBudgetKilledWhenProceedsCannotCoverTakerFee() {
+        placeGtc(1L, false, 10L, 10L, MAKER);
+
+        // Walked proceeds 10 * 10 = 100 cannot cover takerFee 100 * size 10.
+        final SymbolSpec fees = new SymbolSpec(SYM, 0, 1, 1L, 1L, 100L, 0L);
+        out.reset(0L, 0L);
+        final long filled = book.matchFokBudget(2L, true, 1L, 10L, 0L, TAKER, fees, out);
+
+        assertEquals(OrderBookNaive.FOK_KILLED_FEE_FLOOR, filled);
+        assertEquals(1, out.eventCount());
+        assertEquals(EventKind.REJECT, out.event(0).kind());
+        assertEquals(1, book.orderCount(), "the kill must not mutate the book");
+    }
+
+    @Test
+    void askFokBudgetKilledWhenScaledProceedsOverflow() {
+        placeGtc(1L, false, 930_000_000_000L, 5L, MAKER);
+        placeGtc(2L, false, 930_000_000_000L, 5L, MAKER);
+
+        // Walked proceeds 10 * 9.3e11 fit, but * quoteScaleK 1e6 exceeds long.
+        final SymbolSpec scaled = new SymbolSpec(SYM, 0, 1, 1L, 1_000_000L, 0L, 0L);
+        out.reset(0L, 0L);
+        final long filled = book.matchFokBudget(3L, true, 1L, 10L, 0L, TAKER, scaled, out);
+
+        assertEquals(OrderBookNaive.FOK_KILLED_OVERFLOW, filled);
+        assertEquals(1, out.eventCount());
+        assertEquals(EventKind.REJECT, out.event(0).kind());
+        assertEquals(2, book.orderCount(), "the kill must not mutate the book");
+    }
+
+    @Test
+    void askFokBudgetKilledWhenWalkedCostItselfOverflows() {
+        // Three bids at 4e18: the price-unit cost accumulation overflows before
+        // quote scaling is even applied.
+        placeGtc(1L, false, 4_000_000_000_000_000_000L, 1L, MAKER);
+        placeGtc(2L, false, 4_000_000_000_000_000_000L, 1L, MAKER);
+        placeGtc(3L, false, 4_000_000_000_000_000_000L, 1L, MAKER);
+
+        out.reset(0L, 0L);
+        final long filled = book.matchFokBudget(4L, true, 1L, 3L, 0L, TAKER, SPEC, out);
+
+        assertEquals(OrderBookNaive.FOK_KILLED_OVERFLOW, filled);
+        assertEquals(1, out.eventCount());
+        assertEquals(EventKind.REJECT, out.event(0).kind());
+        assertEquals(3, book.orderCount(), "the kill must not mutate the book");
     }
 
     @Test

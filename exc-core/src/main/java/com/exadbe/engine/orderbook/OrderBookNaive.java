@@ -16,7 +16,26 @@ import org.agrona.collections.Long2ObjectHashMap;
  */
 public final class OrderBookNaive {
 
+    /**
+     * Sentinel returned by {@link #matchFokBudget} instead of a fill count: the
+     * ask order was killed before any book mutation because the walked proceeds
+     * cannot cover the total taker fee, so a full fill would settle to a
+     * negative taker balance.
+     */
+    public static final long FOK_KILLED_FEE_FLOOR = -2L;
+
+    /**
+     * Sentinel returned by {@link #matchFokBudget} instead of a fill count: the
+     * ask order was killed before any book mutation because the walked proceeds
+     * exceed the signed 64-bit range once quote-scaled, so settlement could
+     * never be represented.
+     */
+    public static final long FOK_KILLED_OVERFLOW = -3L;
+
     private static final long BUDGET_UNAVAILABLE = -1L;
+
+    /** Walked cost exceeded the signed 64-bit range before the size was covered. */
+    private static final long BUDGET_OVERFLOW = -4L;
 
     private final int symbolId;
     private final OrderNodePool pool;
@@ -82,7 +101,14 @@ public final class OrderBookNaive {
         return filled;
     }
 
-    /** Places a fill-or-kill budget order: fill fully within budget or reject wholesale. */
+    /**
+     * Places a fill-or-kill budget order: fill fully within budget or reject
+     * wholesale. For an ask the budget is a MINIMUM-proceeds bound and the walk
+     * is price-unlimited, so the walked proceeds - not the budget - are
+     * validated against settlement capacity before any book mutation; a kill
+     * there returns {@link #FOK_KILLED_FEE_FLOOR} or {@link #FOK_KILLED_OVERFLOW}
+     * instead of a fill count.
+     */
     public long matchFokBudget(
             final long orderId,
             final boolean ask,
@@ -90,9 +116,26 @@ public final class OrderBookNaive {
             final long size,
             final long reserveBidPrice,
             final long uid,
+            final SymbolSpec spec,
             final CommandOutcome out) {
         final long cost = budgetToFill(ask, size);
-        if (cost == BUDGET_UNAVAILABLE || !budgetSatisfied(ask, cost, budget)) {
+        if (ask && cost == BUDGET_OVERFLOW) {
+            // An overflowed walked cost means the settlement proceeds are
+            // unrepresentable regardless of the budget.
+            out.addReject(symbolId, orderId, uid, size, budget);
+            return FOK_KILLED_OVERFLOW;
+        }
+        if (ask && cost >= 0L) {
+            if (Amounts.mulOverflows(cost, spec.quoteScaleK()) || Amounts.mulOverflows(spec.takerFee(), size)) {
+                out.addReject(symbolId, orderId, uid, size, budget);
+                return FOK_KILLED_OVERFLOW;
+            }
+            if (cost * spec.quoteScaleK() < spec.takerFee() * size) {
+                out.addReject(symbolId, orderId, uid, size, budget);
+                return FOK_KILLED_FEE_FLOOR;
+            }
+        }
+        if (cost < 0L || !budgetSatisfied(ask, cost, budget)) {
             out.addReject(symbolId, orderId, uid, size, budget);
             return 0L;
         }
@@ -274,18 +317,21 @@ public final class OrderBookNaive {
             final long available = bucket.totalVolume;
             if (remaining > available) {
                 remaining -= available;
-                // Checked accumulation: a book deep enough to overflow the walked
-                // cost cannot satisfy any fitting budget, so report unavailable.
+                // Checked accumulation: for a bid, a book deep enough to overflow
+                // the walked cost cannot satisfy any fitting budget, so plain
+                // unavailability suffices; for an ask the overflowed cost means
+                // settlement itself is unrepresentable, so keep the two causes
+                // distinct.
                 if (Amounts.mulOverflows(available, bucket.price)
                         || Amounts.addOverflows(budget, available * bucket.price)) {
-                    return BUDGET_UNAVAILABLE;
+                    return BUDGET_OVERFLOW;
                 }
                 budget += available * bucket.price;
                 bucket = bucket.worse;
             } else {
                 if (Amounts.mulOverflows(remaining, bucket.price)
                         || Amounts.addOverflows(budget, remaining * bucket.price)) {
-                    return BUDGET_UNAVAILABLE;
+                    return BUDGET_OVERFLOW;
                 }
                 return budget + remaining * bucket.price;
             }

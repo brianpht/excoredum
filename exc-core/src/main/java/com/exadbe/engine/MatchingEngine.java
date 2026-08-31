@@ -240,14 +240,28 @@ public final class MatchingEngine {
             out.resultCode(CommandResultCode.OVERFLOW);
             return;
         }
+        // Each fill credits (takerFee + makerFee) * fillSize to the fee account;
+        // the aggregate is bounded by the full size so collectFee can never
+        // overflow regardless of how the fills partition the size.
+        if (Amounts.addOverflows(spec.takerFee(), spec.makerFee())
+                || Amounts.mulOverflows(spec.takerFee() + spec.makerFee(), size)) {
+            out.resultCode(CommandResultCode.OVERFLOW);
+            return;
+        }
 
         final int holdCurrency;
         final long holdAmount;
         if (ask) {
             // An ask must fill for at least its taker fee, or proceeds could go
             // negative. Overflow-safe: with positive operands an overflowing
-            // product exceeds any fitting fee, so the floor holds.
-            if (!Amounts.mulOverflows(price, spec.quoteScaleK()) && price * spec.quoteScaleK() < spec.takerFee()) {
+            // product exceeds any fitting fee, so the floor holds. A limit ask
+            // only fills at or above its price, so this per-lot check suffices;
+            // an ask FOK-BUDGET has no price limit (price is the minimum total
+            // proceeds), so its exact floor is validated against the walked
+            // proceeds in matchFokBudget instead.
+            if (type != OrderType.FOK_BUDGET
+                    && !Amounts.mulOverflows(price, spec.quoteScaleK())
+                    && price * spec.quoteScaleK() < spec.takerFee()) {
                 out.resultCode(CommandResultCode.RISK_ASK_PRICE_LOWER_THAN_FEE);
                 return;
             }
@@ -294,7 +308,7 @@ public final class MatchingEngine {
         switch (type) {
             case GTC -> filled = book.placeGtc(orderId, ask, price, size, reserveBidPrice, uid, timestamp, out);
             case IOC -> filled = book.matchIoc(orderId, ask, price, size, reserveBidPrice, uid, out);
-            case FOK_BUDGET -> filled = book.matchFokBudget(orderId, ask, price, size, reserveBidPrice, uid, out);
+            case FOK_BUDGET -> filled = book.matchFokBudget(orderId, ask, price, size, reserveBidPrice, uid, spec, out);
             default -> {
                 risk.release(uid, holdCurrency, holdAmount);
                 out.resultCode(CommandResultCode.UNSUPPORTED_COMMAND);
@@ -304,10 +318,21 @@ public final class MatchingEngine {
         }
 
         final boolean fokBudget = type == OrderType.FOK_BUDGET;
-        settleFills(spec, out, fokBudget, price);
+        if (filled == OrderBookNaive.FOK_KILLED_FEE_FLOOR || filled == OrderBookNaive.FOK_KILLED_OVERFLOW) {
+            // The FOK walk killed the order before touching the book; release
+            // the hold via the reject event and surface the kill reason.
+            releaseRejects(spec, out, ask, fokBudget, price, reserveBidPrice);
+            out.filledSize(0L);
+            out.resultCode(
+                    filled == OrderBookNaive.FOK_KILLED_OVERFLOW
+                            ? CommandResultCode.OVERFLOW
+                            : CommandResultCode.RISK_ASK_PRICE_LOWER_THAN_FEE);
+            return;
+        }
+        final CommandResultCode settled = settleFills(spec, out, fokBudget, price);
         releaseRejects(spec, out, ask, fokBudget, price, reserveBidPrice);
         out.filledSize(filled);
-        out.resultCode(CommandResultCode.SUCCESS);
+        out.resultCode(settled);
     }
 
     private void handleCancel(final CommandEnvelopeDecoder cmd, final CommandOutcome out) {
@@ -348,10 +373,9 @@ public final class MatchingEngine {
             return;
         }
         final CommandResultCode code = book.move(orderId, uid, cmd.price(), symbols.get(symbolId), out);
-        if (code == CommandResultCode.SUCCESS) {
-            settleFills(symbols.get(symbolId), out, false, 0L);
-        }
-        out.resultCode(code);
+        // A marketable move settles like a place; propagate a settle failure
+        // instead of overwriting it with the move's own SUCCESS.
+        out.resultCode(code == CommandResultCode.SUCCESS ? settleFills(symbols.get(symbolId), out, false, 0L) : code);
     }
 
     private void handleReduce(final CommandEnvelopeDecoder cmd, final CommandOutcome out) {
@@ -377,17 +401,20 @@ public final class MatchingEngine {
     }
 
     // Settles maker fills at the actual price and the taker in aggregate, releasing
-    // any over-reserved quote. Used by both PLACE and a marketable MOVE.
+    // any over-reserved quote. Used by both PLACE and a marketable MOVE. Returns
+    // OVERFLOW when the pre-pass refuses an amount, so callers surface it instead
+    // of reporting SUCCESS over an unsettled match.
     //
     // Two passes: the first overflow-checks every credit and aggregate before any
     // balance is touched, so an arithmetic failure surfaces as OVERFLOW with all
-    // balances intact. Placement validation bounds each order's own operands, so a
-    // failure here requires a cross-maker aggregate beyond any realistic supply.
-    private void settleFills(
+    // balances intact. Placement validation bounds each order's own operands and
+    // the fee aggregate, and the ask FOK-BUDGET walk bounds the price-unlimited
+    // proceeds, so the pre-pass is defense in depth rather than a live branch.
+    private CommandResultCode settleFills(
             final SymbolSpec spec, final CommandOutcome out, final boolean fokBudget, final long budget) {
         if (!settleAmountsFit(spec, out, fokBudget, budget)) {
             out.resultCode(CommandResultCode.OVERFLOW);
-            return;
+            return CommandResultCode.OVERFLOW;
         }
         long sizeSum = 0L;
         long sizePriceSum = 0L;
@@ -410,7 +437,7 @@ public final class MatchingEngine {
             anyTrade = true;
         }
         if (!anyTrade) {
-            return;
+            return CommandResultCode.SUCCESS;
         }
         if (takerBid) {
             final long heldPriceSum = fokBudget ? budget : takerReserve * sizeSum;
@@ -419,6 +446,7 @@ public final class MatchingEngine {
             risk.settleTakerSell(spec, takerUid, sizePriceSum, sizeSum);
         }
         risk.collectFee(spec, (spec.takerFee() + spec.makerFee()) * sizeSum);
+        return CommandResultCode.SUCCESS;
     }
 
     // Overflow-checks every amount settleFills will credit, without mutating state.

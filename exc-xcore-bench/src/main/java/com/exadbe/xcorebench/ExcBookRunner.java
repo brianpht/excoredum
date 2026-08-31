@@ -15,8 +15,9 @@ public final class ExcBookRunner {
     public static BookStats replay(final Workload workload, final int symbolId) {
         final OrderBookNaive book = new OrderBookNaive(symbolId);
         final CommandOutcome outcome = new CommandOutcome(1024);
-        // MOVE validation only consults the spec's fee floor and overflow bounds;
-        // unit scales and zero fees keep the replay's behavior unchanged.
+        // MOVE validation and the ask FOK-BUDGET settlement walk only consult the
+        // spec's fee floor and overflow bounds; unit scales and zero fees keep the
+        // replay's behavior unchanged.
         final SymbolSpec spec = new SymbolSpec(symbolId, 0, 1, 1L, 1L, 0L, 0L);
 
         long trades = 0;
@@ -60,6 +61,7 @@ public final class ExcBookRunner {
                             workload.size(i),
                             workload.reservePrice(i),
                             workload.uid(i),
+                            spec,
                             outcome);
                 }
             } else if (type == Workload.CANCEL) {

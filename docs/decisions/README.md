@@ -11,6 +11,9 @@ authoritative source).
   allocation budgets, which override the defaults in `.github/copilot-instructions.md`.
 - [0001 - Hot agents are not pinned to isolated cores](0001-threading-affinity.md) -
   the affinity library is declared but unused by design; pinning is a deployment concern.
+- [0002 - Ask FOK-BUDGET orders pre-validate settlement before matching](0002-fok-budget-ask-settlement.md) -
+  walked proceeds are checked against the fee floor and the 64-bit range before
+  the book is mutated; settlement failures are never overwritten with SUCCESS.
 
 ## Conventions
 
