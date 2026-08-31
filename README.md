@@ -1,14 +1,67 @@
-# justrade - Deterministic Spot Matching Engine
+# justrade - Deterministic Spot Exchange Platform
 
-[![CI](https://github.com/brianpht/justrade/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/brianpht/justrade/actions/workflows/ci.yml)
+[![CI](https://github.com/justrade-io/justrade/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/justrade-io/justrade/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![JDK 21](https://img.shields.io/badge/JDK-21-blue.svg)](gradle.properties)
 [![Gradle](https://img.shields.io/badge/Gradle-8.10.2-green.svg)](gradle/wrapper/gradle-wrapper.properties)
 [![Platform: Linux](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)](README.md)
 
-A deterministic, replicated, in-memory spot exchange matching engine in Java,
-built on Aeron Cluster: strong consistency, ultra-low latency, and an
-allocation-free hot path for the order book and its balances.
+justrade is a production-oriented spot exchange in Java: a deterministic,
+in-memory matching engine (price-time order book, maker/taker fees) replicated
+by Aeron Cluster (Raft), with a CQRS read replica, write/read client SDKs, an
+HTTP/WebSocket gateway, and deployment automation for AWS and Docker.
+
+## What is this
+
+justrade ports the **matching semantics** of
+[exchange-core](https://github.com/exchange-core/exchange-core) - price-time
+priority, GTC / IOC / FOK-BUDGET orders, direct-exchange spot risk with
+maker/taker fees - and rebuilds everything around them on the Aeron ecosystem.
+The port is parity-tested: a deterministic replay of exchange-core's own
+workload generator must produce identical trades, rejects, reduces, and a
+byte-identical L2 book on both engines (see
+[Comparison with exchange-core](#comparison-with-exchange-core)).
+
+This is therefore not "just a matching engine" - it is a complete, deployable
+exchange: consensus, engine, read side, client SDKs, gateway, and ops tooling.
+
+| Layer             | exchange-core (0.5.3)                        | justrade                                          |
+|-------------------|----------------------------------------------|---------------------------------------------------|
+| Matching model    | price-time, GTC / IOC / FOK-BUDGET, spot risk, maker/taker fees | ported (parity-tested)         |
+| Engine runtime    | LMAX Disruptor pipeline                      | single-thread `ClusteredService`, allocation-free hot path |
+| Replication       | none (single process)                        | Aeron Cluster (Raft), exactly-once                |
+| Wire format       | Chronicle-Wire                               | SBE flyweights (zero-copy, no reflection)         |
+| Read path         | in-process API                               | CQRS read replica + query protocol                |
+| Journaling        | local disk + LZ4 snapshots                   | HA journal + snapshots on the Aeron Archive       |
+| Client access     | in-process API                               | write/read SDKs + HTTP/WebSocket gateway          |
+| Operations        | -                                            | Docker, AWS (Terraform + Ansible), dev script     |
+
+## System diagram
+
+```mermaid
+flowchart LR
+    subgraph CLIENT["Clients"]
+        WC["write-client\n(commands)"]
+        RC["read-client\n(queries)"]
+        GW["gateway\n(HTTP/JSON + WebSocket)"]
+    end
+
+    subgraph CLUSTER["Aeron Cluster (Raft)"]
+        NODE["ClusteredService\nMatchingService + MatchingEngine"]
+        AR["Archive\n(log + snapshots + journal)"]
+    end
+
+    REP["read replica\n(CQRS)"]
+
+    WC -->|"SBE CommandEnvelope"| CLUSTER
+    CLUSTER -->|"CommandResult + trade/reduce/reject/L2"| WC
+    GW -->|"write + read"| WC
+    GW -->|"write + read"| RC
+    RC -->|"QueryRequest (UDP)"| REP
+    REP -->|"QueryResponse"| RC
+    AR -.->|"consensus log + journal replay"| REP
+    CLUSTER --> AR
+```
 
 ## Why
 
@@ -62,9 +115,15 @@ design, and the steady-state hot path allocates nothing.
   remaining log.
 - SBE wire format: fixed binary layout, no reflection, backward-compatible
   schema evolution via optional fields.
+- Write-side SDK: leader-change handling, idempotent retry, correlation, and
+  full egress event delivery (trade / reduce / reject, L2, per-command fills).
 - Read-side SDK: balances, L2 book, user reports, order history, trade tape,
   and value-conservation totals over request/response streams, with idempotent
   retry and a bounded in-flight window.
+- HTTP/JSON + WebSocket gateway: REST endpoints over the read/write SDKs plus
+  streaming market events (see [docs/GATEWAY.md](docs/GATEWAY.md) and
+  [docs/API-USAGE.md](docs/API-USAGE.md); machine-readable contract in
+  [docs/openapi.yaml](docs/openapi.yaml)).
 - Off-heap telemetry: single-writer counters mirrored to a standalone
   `CountersManager`, readable from any thread without perturbing the hot path.
 
@@ -83,6 +142,25 @@ example configurations set the required `--add-opens` JVM flags automatically.
 # Read replica following a member's archive (answers queries on port 44000)
 ./gradlew :read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
 ```
+
+### Full dev stack (cluster + read replica + gateway)
+
+```bash
+# Start a 3-node cluster, a CQRS read replica, and the HTTP/WebSocket gateway
+./scripts/justrade-dev.sh start
+
+# Seed a sample symbol and two funded users
+./scripts/justrade-dev.sh seed
+
+# Place a resting GTC ask over the REST API (gateway on :8080)
+curl -s -X POST http://localhost:8080/api/v1/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"symbolId":1,"orderId":100,"ask":true,"type":"GTC","price":100,"size":10,"reserveBidPrice":0,"uid":811,"userCookie":1}'
+
+./scripts/justrade-dev.sh stop
+```
+
+See [docs/API-USAGE.md](docs/API-USAGE.md) for the full REST/WebSocket guide.
 
 The engine has no Aeron dependency, so it can be driven directly from a decoded
 command:
@@ -103,6 +181,19 @@ docker compose -f docker/docker-compose.yml up --build
 Multi-symbol (and other workload knobs) via env vars, e.g. `JUSTRADE_SYMBOLS=4`
 (see [Configuration](#configuration)).
 
+## Scope
+
+Current scope is a single-region, non-sharded spot exchange: direct-exchange
+(spot) risk only, one order book per symbol, and a single cluster membership.
+Out of scope for now:
+
+- Margin / derivative risk models.
+- Symbol or user sharding across multiple clusters.
+- Multi-region deployment.
+
+The read replica and journal consumers already scale independently of consensus;
+see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the boundary.
+
 ## Configuration
 
 Engine and ledger capacities are read at launch, not hardcoded, so a deployment
@@ -122,6 +213,30 @@ can be sized without a rebuild:
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#configuration) for the full
 capacity table and [deploy/aws/PERFORMANCE.md](deploy/aws/PERFORMANCE.md) for
 sizing guidance.
+
+## Comparison with exchange-core
+
+The `xcore-bench` module benchmarks justrade against upstream exchange-core
+0.5.3 at three layers: matching-only (`book`), full engine dispatch
+(`engine`), and cluster end-to-end (`e2e`). The `book` mode doubles as a
+parity test: justrade's book is the reference, and exchange-core must produce
+identical trade / reject / reduce counters and a byte-identical L2 on the same
+replayed workload, or the run fails.
+
+Only `book` is strictly apples-to-apples (both run the matching-only path on
+the caller thread). The `engine` and `e2e` layers compare different system
+shapes - the justrade `e2e` number pays for Raft commit and archive recording
+on every command, which exchange-core does not have. Read the fairness notes
+before quoting numbers.
+
+```bash
+./gradlew :xcore-bench:run --args="--mode=book --commands=3000000 --target-orders=1000 --iterations=3"
+./gradlew :xcore-bench:run --args="--mode=engine --warmup=200000 --ops=1000000"
+./gradlew :xcore-bench:run --args="--mode=e2e --warmup=20000 --ops=200000"
+```
+
+Full methodology, fairness caveats, and interpretation in
+[docs/BENCHMARKING-XCORE.md](docs/BENCHMARKING-XCORE.md).
 
 ## Performance
 
@@ -204,5 +319,8 @@ MIT License. See [LICENSE](LICENSE).
 
 Built on [Aeron](https://github.com/aeron-io/aeron),
 [Agrona](https://github.com/aeron-io/agrona), and
-[Simple Binary Encoding](https://github.com/aeron-io/simple-binary-encoding);
-the matching model is a port of [exchange-core](https://github.com/exchange-core/exchange-core).
+[Simple Binary Encoding](https://github.com/aeron-io/simple-binary-encoding).
+The matching model is ported from
+[exchange-core](https://github.com/exchange-core/exchange-core); see
+[What is this](#what-is-this) and
+[Comparison with exchange-core](#comparison-with-exchange-core).
