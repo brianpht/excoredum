@@ -113,15 +113,23 @@ public final class ExcReadReplica implements AutoCloseable {
                         config.checkpointFile(), engine, config.maxOrdersPerUser(), config.maxMarketTrades());
                 this.ledger = data.ledger();
                 this.appliedPosition = data.logPosition();
-                this.currentSource = data.currentSource() % archiveControlChannels.length;
+                this.currentSource = Math.floorMod(data.currentSource(), archiveControlChannels.length);
                 this.lastCheckpointPosition = appliedPosition;
-            } catch (final IOException e) {
+            } catch (final IOException | RuntimeException e) {
                 // A corrupt checkpoint must not make the replica unconstructable:
                 // fall back to a cold start (the consensus log is replayed in
                 // full) and surface the failure through the health counters.
+                // The load feeds records into the engine before the file is
+                // fully read or validated, so a failure can leave partial or
+                // invariant-violating state behind; clear it before the replay
+                // (the same recovery SnapshotSubscriber applies to a corrupt
+                // cluster snapshot). RuntimeException covers corrupt length
+                // fields the ledger decode does not range-check.
+                engine.clearState();
                 health.recordCheckpointFailure();
                 this.ledger = new OrderLedger(config.maxOrdersPerUser(), config.maxMarketTrades());
                 this.appliedPosition = 0L;
+                this.currentSource = 0;
                 this.lastCheckpointPosition = -1L;
             }
         }
