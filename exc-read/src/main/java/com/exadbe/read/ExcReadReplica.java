@@ -46,6 +46,13 @@ public final class ExcReadReplica implements AutoCloseable {
 
     private static final int FRAGMENT_LIMIT = 64;
 
+    // Consecutive error-driven failovers at the same applied position before
+    // the replica rebuilds from the log start instead of cycling sources: every
+    // member replays the same committed prefix, so a fragment that throws on
+    // one source throws on all of them and failover alone can never make
+    // progress past it.
+    private static final int MAX_STALE_FAILOVERS = 8;
+
     private final MediaDriver mediaDriver;
     private final Aeron aeron;
     private final String[] archiveControlChannels;
@@ -64,6 +71,8 @@ public final class ExcReadReplica implements AutoCloseable {
     private AeronArchive archive;
     private int currentSource;
     private long appliedPosition;
+    private long lastFailedPosition = -1L;
+    private int staleFailovers;
     private long nextConnectMs;
     private long lastActivityMs;
     private long lastProbeMs;
@@ -180,9 +189,36 @@ public final class ExcReadReplica implements AutoCloseable {
             writeCheckpointIfDue(now);
             return fragments;
         } catch (final RuntimeException e) {
+            // Counted (not printed) so a poison fragment or internal error is
+            // observable operationally without synchronous console I/O on the
+            // poll thread.
+            health.recordPollError();
+            failoverWithoutProgress(appliedPosition);
             failover();
             return 0;
         }
+    }
+
+    // Escalates error-driven failovers that make no position progress into a
+    // rebuild from the log start, so a fragment that throws on every source
+    // cannot cycle the replica through its sources forever. Returns true when
+    // the escalation fired. Package-private so the escalation is testable
+    // without a cluster.
+    boolean failoverWithoutProgress(final long position) {
+        if (position == lastFailedPosition) {
+            staleFailovers++;
+        } else {
+            lastFailedPosition = position;
+            staleFailovers = 1;
+        }
+        if (staleFailovers >= MAX_STALE_FAILOVERS) {
+            staleFailovers = 0;
+            lastFailedPosition = -1L;
+            resetReplication();
+            health.recordRebuildFailure();
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -595,10 +631,15 @@ public final class ExcReadReplica implements AutoCloseable {
 
     @Override
     public void close() {
-        // Final checkpoint: unconditional (bypasses the cadence) so a warm start
-        // always resumes from the last applied position, not an earlier partial
-        // periodic write.
-        writeCheckpoint();
+        // Final checkpoint (bypasses the cadence) so a warm start resumes from
+        // the last applied position - but only from a steady state. Mid snapshot
+        // load the engine holds partial records; mid ledger rebuild the engine
+        // is ahead of the still-pre-snapshot ledger and the rebuild flag is not
+        // persisted, so a warm start could never repair either skew.
+        final boolean midSnapshotLoad = snapshotSubscriber != null && snapshotSubscriber.isLoadStarted();
+        if (!midSnapshotLoad && !ledgerRebuildNeeded && ledgerRebuilder == null) {
+            writeCheckpoint();
+        }
         if (snapshotSubscriber != null) {
             snapshotSubscriber.close();
             snapshotSubscriber = null;

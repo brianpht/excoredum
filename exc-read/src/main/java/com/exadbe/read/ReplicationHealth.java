@@ -15,6 +15,7 @@ public final class ReplicationHealth {
     private volatile long snapshotsLoaded;
     private volatile long rebuildFailures;
     private volatile long checkpointFailures;
+    private volatile long pollErrors;
 
     /** Records a successful following cycle at the given cluster-global position. */
     public void markHealthy(final String endpoint, final long position) {
@@ -55,6 +56,11 @@ public final class ReplicationHealth {
         checkpointFailures++;
     }
 
+    /** Counts one poll cycle aborted by an unexpected error (failover follows). */
+    public void recordPollError() {
+        pollErrors++;
+    }
+
     public boolean isHealthy() {
         return healthy;
     }
@@ -91,5 +97,10 @@ public final class ReplicationHealth {
     /** Number of checkpoint write or load failures. */
     public long checkpointFailures() {
         return checkpointFailures;
+    }
+
+    /** Number of poll cycles aborted by an unexpected error. */
+    public long pollErrors() {
+        return pollErrors;
     }
 }
