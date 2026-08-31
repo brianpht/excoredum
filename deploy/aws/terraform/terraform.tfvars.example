@@ -4,7 +4,7 @@
 #   cp terraform.tfvars.example terraform.tfvars
 
 # EC2 key pair name (used by Ansible for SSH).
-key_name = "excoredum-bench"
+key_name = "justrade-bench"
 
 # Restrict SSH + gateway HTTP to your operator IP.
 ssh_cidr = "203.0.113.0/24"

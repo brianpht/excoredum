@@ -38,7 +38,7 @@ symbols, and instance sizes for a larger benchmark.
   `tar`, `python3`.
 - Ansible (install with `pip install ansible` or `pipx install ansible`; if it
   lands in `~/.local/bin`, add that directory to `PATH`).
-- An EC2 key pair for SSH (Ansible uses `~/.ssh/excoredum-bench` by default).
+- An EC2 key pair for SSH (Ansible uses `~/.ssh/justrade-bench` by default).
 
 ## 1. Build the runtime tarball
 
@@ -46,7 +46,7 @@ symbols, and instance sizes for a larger benchmark.
 ./deploy/aws/build-artifacts.sh
 ```
 
-This builds `deploy/aws/excoredum-runtime.tgz` (Temurin 21 JRE + the four
+This builds `deploy/aws/justrade-runtime.tgz` (Temurin 21 JRE + the four
 distributions + `bin/` entrypoints). Pin the JRE for reproducibility with
 `JRE_URL` (default is the Adoptium "latest" 21 JRE for linux/x64):
 
@@ -58,9 +58,9 @@ JRE_URL=https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.
 ## 2. Create a key pair
 
 ```bash
-ssh-keygen -t rsa -b 2048 -N "" -f ~/.ssh/excoredum-bench -C "excoredum-bench"
-aws ec2 import-key-pair --key-name excoredum-bench \
-  --public-key-material fileb://~/.ssh/excoredum-bench.pub \
+ssh-keygen -t rsa -b 2048 -N "" -f ~/.ssh/justrade-bench -C "justrade-bench"
+aws ec2 import-key-pair --key-name justrade-bench \
+  --public-key-material fileb://~/.ssh/justrade-bench.pub \
   --region ap-southeast-1
 ```
 
@@ -79,7 +79,7 @@ terraform -chdir=deploy/aws/terraform apply
 
 ```hcl
 # terraform.tfvars (copy deploy/aws/terraform/terraform.tfvars.example)
-key_name = "excoredum-bench"      # EC2 key pair name (Ansible SSH)
+key_name = "justrade-bench"      # EC2 key pair name (Ansible SSH)
 ssh_cidr = "203.0.113.0/24"       # restrict SSH + gateway HTTP to your IP
 
 # Large run (256 symbols / 5000 users / 5M ops); see SCALING.md for the full table
@@ -115,7 +115,7 @@ operator). Tune the benchmark in `deploy/aws/ansible/group_vars/all.yml`:
 - `ledger_max_orders_per_user` / `ledger_max_market_trades` - the read replica's
   read-side ledger caps (defaults 4096 / 65536).
 
-The `EXC_CORE_*` engine capacities (symbol / account / order-pool / journal,
+The `JUSTRADE_CORE_*` engine capacities (symbol / account / order-pool / journal,
 etc.) can also be added to `nodes.yml` / `read.yml` `service_env` when a run
 needs to raise them. See [SCALING.md](SCALING.md) for sizing guidance.
 
@@ -133,11 +133,11 @@ line.
 
 ## 6. Collect metrics
 
-- **Application** (runners, `journalctl -u excoredum` on each instance):
+- **Application** (runners, `journalctl -u justrade` on each instance):
   throughput, latency tails, `success/nonSuccess/expired`, `leaderChanges`,
   `reconnects`, `backpressure`, `retransmits`, `fills observed vs expected`.
 - **Cluster internal counters**: each node logs a `metrics ...` line every
-  `metrics_interval_ms` (default 5000) via the `-Dexc.metricsIntervalMs` flag.
+  `metrics_interval_ms` (default 5000) via the `-Djustrade.metricsIntervalMs` flag.
   The line carries `commands`, `duplicates`, `backpressure`, pool exhaustions,
   `journalBackpressure`, `dedupEvictions`, snapshot write/read ms, and
   `journalPublished`.

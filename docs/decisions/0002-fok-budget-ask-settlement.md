@@ -55,7 +55,7 @@ BEFORE the book is mutated, and settlement failures are never overwritten:
   corrupts balances), and ask FOK-BUDGET orders whose budget is below the
   per-lot fee but whose walked proceeds cover the total fee now fill
   (upstream rejects them at placement). Replay parity with upstream
-  (`exc-xcore-bench`) is unaffected because its workload runs zero fees and
+  (`xcore-bench`) is unaffected because its workload runs zero fees and
   unit scales, where both checks are inert.
 - New observable result paths: `OVERFLOW` or `RISK_ASK_PRICE_LOWER_THAN_FEE`
   with filled 0 and a reject event for a killed ask FOK-BUDGET, and OVERFLOW

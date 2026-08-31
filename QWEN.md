@@ -1,4 +1,4 @@
-# QWEN.md - excoredum
+# QWEN.md - justrade
 
 > **CRITICAL:** At the start of every conversation, before any code changes, read
 > `.github/copilot-instructions.md`. It contains the authoritative, machine-parseable
@@ -8,7 +8,7 @@
 
 ## Project Overview
 
-excoredum is a deterministic, replicated, in-memory **spot exchange matching
+justrade is a deterministic, replicated, in-memory **spot exchange matching
 engine** in Java, built on **Aeron Cluster** (Raft). It ports the matching
 semantics of [exchange-core](https://github.com/exchange-core/exchange-core)
 (price-time priority, GTC / IOC / FOK-BUDGET orders, direct-exchange spot risk
@@ -43,23 +43,23 @@ data flows, determinism rules, and order-book semantics.
   `gradle/libs.versions.toml`).
 - JUnit 5 (tagged suites), jqwik (property tests), JMH (benchmarks),
   HdrHistogram (latency tails).
-- Root package: `com.exadbe`.
+- Root package: `io.justrade`.
 
 ## Module Map
 
 | Module         | Responsibility                                                            |
 |----------------|---------------------------------------------------------------------------|
-| `exc-protocol` | SBE schema (`src/main/resources/messages.xml`) + generated flyweight codecs. Wire contract only; never depends on `exc-core`. |
-| `exc-core`     | Deterministic matching engine, order book, risk/fees, dedup, snapshot, telemetry, journal. This is the hot path. |
-| `exc-launcher` | Aeron bootstrap: Media Driver, Archive, Consensus, Container, journaler agent. `main` class: `com.exadbe.launcher.ClusterLauncher`. |
-| `exc-write-client` | Write-side client SDK (depends only on `exc-protocol`): leader-change handling, idempotent retry, correlation, egress events. |
-| `exc-read`     | CQRS read replica and HA journal consumers (replay + dedup + failover), balance report generation, per-user order history ledger and market trade tape rebuilt from the log. |
-| `exc-read-client` | Read-side SDK: sync wrappers + async `submit`/`poll`/listener over plain Aeron request/response streams (request-id correlation, idempotent retry, bounded in-flight window). Depends only on `exc-protocol`, like `exc-write-client`. |
-| `exc-gateway`  | Netty HTTP/JSON + WebSocket boundary in front of the read/write SDKs (REST endpoints, market streaming). Not part of the deterministic hot path; JSON stays here. See `docs/GATEWAY.md`. |
-| `exc-bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram).  |
-| `exc-xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3: replay parity, engine/pipeline latency, e2e, JMH. Exempt from determinism rules. |
-| `exc-tests`    | Unit, property, integration, cluster, and fault suites + test fixtures.  |
-| `exc-examples` | Runnable examples: in-process cluster driven through the client SDK (`QuickStartExample`). |
+| `protocol` | SBE schema (`src/main/resources/messages.xml`) + generated flyweight codecs. Wire contract only; never depends on `core`. |
+| `core`     | Deterministic matching engine, order book, risk/fees, dedup, snapshot, telemetry, journal. This is the hot path. |
+| `launcher` | Aeron bootstrap: Media Driver, Archive, Consensus, Container, journaler agent. `main` class: `io.justrade.launcher.ClusterLauncher`. |
+| `write-client` | Write-side client SDK (depends only on `protocol`): leader-change handling, idempotent retry, correlation, egress events. |
+| `read`     | CQRS read replica and HA journal consumers (replay + dedup + failover), balance report generation, per-user order history ledger and market trade tape rebuilt from the log. |
+| `read-client` | Read-side SDK: sync wrappers + async `submit`/`poll`/listener over plain Aeron request/response streams (request-id correlation, idempotent retry, bounded in-flight window). Depends only on `protocol`, like `write-client`. |
+| `gateway`  | Netty HTTP/JSON + WebSocket boundary in front of the read/write SDKs (REST endpoints, market streaming). Not part of the deterministic hot path; JSON stays here. See `docs/GATEWAY.md`. |
+| `bench`    | End-to-end latency harness (in-process cluster + client, HdrHistogram).  |
+| `xcore-bench` | Comparative benchmarks vs exchange-core 0.5.3: replay parity, engine/pipeline latency, e2e, JMH. Exempt from determinism rules. |
+| `tests`    | Unit, property, integration, cluster, and fault suites + test fixtures.  |
+| `examples` | Runnable examples: in-process cluster driven through the client SDK (`QuickStartExample`). |
 
 ## Building and Running
 
@@ -76,21 +76,21 @@ configs set them automatically.
 
 ```bash
 # Single-node localhost cluster
-./gradlew exc-launcher:run
+./gradlew launcher:run
 
 # Node N of a multi-node cluster, preserving prior state across restarts
-./gradlew exc-launcher:run -Dexc.nodeId=1 -Dexc.cleanStart=false
+./gradlew launcher:run -Djustrade.nodeId=1 -Djustrade.cleanStart=false
 
-# From a deployment properties file (must define exc.clusterMembers)
-./gradlew exc-launcher:run --args="--config=production.properties"
+# From a deployment properties file (must define justrade.clusterMembers)
+./gradlew launcher:run --args="--config=production.properties"
 
 # CQRS read replica following a member's archive
-./gradlew exc-read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
+./gradlew read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
 ```
 
 ### Testing
 
-Suites are separated by JUnit 5 tags, all defined in `exc-tests`:
+Suites are separated by JUnit 5 tags, all defined in `tests`:
 
 | Task              | Tag           | Notes                                            |
 |-------------------|---------------|--------------------------------------------------|
@@ -113,10 +113,10 @@ Note: `check` (and therefore `build`) depends on `integrationTest`,
 ### Benchmarks
 
 ```bash
-./gradlew exc-core:jmh                    # full JMH run (JSON results)
-./gradlew exc-core:jmh -PquickBench       # fast smoke run (CI gate)
-./gradlew exc-core:jmh -Pjmh.profilers=gc # attach GC/allocation profiler
-./gradlew exc-bench:run --args="--warmup=5000 --ops=20000"  # end-to-end RT latency
+./gradlew core:jmh                    # full JMH run (JSON results)
+./gradlew core:jmh -PquickBench       # fast smoke run (CI gate)
+./gradlew core:jmh -Pjmh.profilers=gc # attach GC/allocation profiler
+./gradlew bench:run --args="--warmup=5000 --ops=20000"  # end-to-end RT latency
 ```
 
 ### Pre-commit gate (must pass in this order)
@@ -128,7 +128,7 @@ Note: `check` (and therefore `build`) depends on `integrationTest`,
 3. `./gradlew compileJava` - `-Werror` is hardcoded in the build (not a CLI
    flag); zero warnings required.
 4. `./gradlew test integrationTest` - all green.
-5. `./gradlew exc-core:jmh -PquickBench` - no regression > 10% vs baseline.
+5. `./gradlew core:jmh -PquickBench` - no regression > 10% vs baseline.
 
 If any step fails, fix and re-run from step 1 before committing.
 
@@ -137,12 +137,12 @@ If any step fails, fix and re-run from step 1 before committing.
 Wire codecs are generated, not hand-written:
 
 ```bash
-./gradlew exc-protocol:generateSbe
+./gradlew protocol:generateSbe
 ```
 
-Schema: `exc-protocol/src/main/resources/messages.xml`. Evolve it via
+Schema: `protocol/src/main/resources/messages.xml`. Evolve it via
 optional fields / sinceVersion for backward compatibility. Generated sources
-land in `exc-protocol/build/generated-src/sbe` and are excluded from lint and
+land in `protocol/build/generated-src/sbe` and are excluded from lint and
 formatting gates.
 
 ## Development Conventions
@@ -164,8 +164,8 @@ branch entropy are rejected. On the hot path:
 - All buffers/pools preallocated at startup; no growth at runtime. Capacities
   live in `CoreConfig` (validated, power-of-two where they index a ring).
 - Determinism: no `System.currentTimeMillis()` / `nanoTime()`, no `Random`,
-  no unordered iteration in engine code. `exc-core` has its own checkstyle
-  config (`exc-core/config/checkstyle/determinism.xml`) that bans clocks,
+  no unordered iteration in engine code. `core` has its own checkstyle
+  config (`core/config/checkstyle/determinism.xml`) that bans clocks,
   randomness, `java.util` hash / linked collections, locks, blocking queues,
   executors, streams, `Optional`, `BigDecimal`, and `String.format` in main
   sources.
@@ -177,7 +177,7 @@ branch entropy are rejected. On the hot path:
 - Formatting: Spotless with Palantir Java Format, unused imports removed,
   trailing whitespace trimmed, files end with a newline. Run `spotlessApply`.
 - Checkstyle baseline: `config/checkstyle/checkstyle.xml` (all modules);
-  determinism overlay for `exc-core`.
+  determinism overlay for `core`.
 - Compile: UTF-8, `-Xlint:all -Werror` for production sources. Test, JMH, and
   generated sources drop `-Werror`.
 - ErrorProne + NullAway are opt-in via `-PwithErrorProne` (report-only until
@@ -194,8 +194,8 @@ branch entropy are rejected. On the hot path:
   machine invariants.
 - Replay/determinism tests: recorded input must produce byte-identical output.
 - Any change touching the hot path needs JMH before/after numbers.
-- JaCoCo coverage is aggregated in `exc-tests` (its suites exercise
-  `exc-core`, `exc-write-client`, `exc-launcher`, `exc-read`).
+- JaCoCo coverage is aggregated in `tests` (its suites exercise
+  `core`, `write-client`, `launcher`, `read`).
 
 ### Performance budget (defaults; p99.99 is the contract, not the mean)
 

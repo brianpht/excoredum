@@ -1,12 +1,12 @@
 ---
-svc_name: "excoredum read replica"
+svc_name: "justrade read replica"
 service_type: simple
 service_enable: true
 service_exec: "{{ install_dir }}/bin/read.sh"
 service_env:
-  EXC_ARCHIVE: "{{ archive_channels }}"
-  EXC_HOST: "{{ host }}"
-  EXC_QUERY: "{{ query_channel }}"
-  EXC_JAVA_OPTS: "{{ read_java_opts }}"
-  EXC_LEDGER_MAX_ORDERS_PER_USER: "{{ ledger_max_orders_per_user }}"
-  EXC_LEDGER_MAX_MARKET_TRADES: "{{ ledger_max_market_trades }}"
+  JUSTRADE_ARCHIVE: "{{ archive_channels }}"
+  JUSTRADE_HOST: "{{ host }}"
+  JUSTRADE_QUERY: "{{ query_channel }}"
+  JUSTRADE_JAVA_OPTS: "{{ read_java_opts }}"
+  JUSTRADE_LEDGER_MAX_ORDERS_PER_USER: "{{ ledger_max_orders_per_user }}"
+  JUSTRADE_LEDGER_MAX_MARKET_TRADES: "{{ ledger_max_market_trades }}"

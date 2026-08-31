@@ -7,7 +7,7 @@ change code.
 
 The deployed benchmark is the `ExternalLoadRunner` / `LoadWorkload` write-side
 load plus the `ReadVerifyRunner` read-side verification, driven through Ansible
-in `deploy/aws`. The in-process `exc-xcore-bench` module is a separate,
+in `deploy/aws`. The in-process `xcore-bench` module is a separate,
 single-JVM engine-vs-exchange-core comparison and is covered at the end.
 
 ## Where the knobs live
@@ -25,16 +25,16 @@ single-JVM engine-vs-exchange-core comparison and is covered at the end.
 | Cluster node count | - | - | `cluster_node_count` (3 or 5) |
 
 `workload_ops`, `workload_users`, `workload_symbols`, and `load_batch` feed
-`EXC_OPS` / `EXC_USERS` / `EXC_SYMBOLS` / `EXC_BATCH` in
+`JUSTRADE_OPS` / `JUSTRADE_USERS` / `JUSTRADE_SYMBOLS` / `JUSTRADE_BATCH` in
 `deploy/aws/ansible/group_vars/load.yml` and `verify.yml` (plus
-`workload_trade_limit` to `EXC_TRADE_LIMIT`), which the bin entrypoints
+`workload_trade_limit` to `JUSTRADE_TRADE_LIMIT`), which the bin entrypoints
 (`deploy/aws/bin/load.sh`, `verify.sh`) pass to the runners.
 
 ## Current state and hard limits
 
 The workload and its read-side verification impose three per-run bounds. They
 come from the read replica's `OrderLedger`
-(`exc-read/.../read/order/OrderLedger.java`) and the runners' query limits, not
+(`read/.../read/order/OrderLedger.java`) and the runners' query limits, not
 from the matching engine.
 
 1. **Per-user order history**: `OrderLedger.DEFAULT_MAX_ORDERS_PER_USER = 4096`
@@ -56,7 +56,7 @@ from the matching engine.
    65536 total trades, early trades are evicted and the read-side `fills`
    count assertions fail for the affected users.
 
-`LoadWorkload` (`exc-bench/.../bench/LoadWorkload.java`) supports one or many
+`LoadWorkload` (`bench/.../bench/LoadWorkload.java`) supports one or many
 symbols (`--symbols`, default `1`), a single price level per symbol
 (`price(s) = 100 + (s - 1)`, so the single-symbol default is `PRICE = 100`),
 size-1 orders, and cycles users round-robin (`uid = 1 + (i % users)`), sharding
@@ -66,9 +66,9 @@ place for the acting user, so `places(uid) <= ops / users`. Each fill involves
 two users (taker and maker), so `fills(uid) <= 2 * places(uid)`.
 
 The engine-side capacities come from `CoreConfig` (defaults below)
-(`exc-core/.../config/CoreConfig.java`), overridable at launch via `exc.core.*`
+(`core/.../config/CoreConfig.java`), overridable at launch via `justrade.core.*`
 properties (`ClusterLauncher --config`, `ReadServiceLauncher --core-config`)
-or `-Dexc.core.*` system properties:
+or `-Djustrade.core.*` system properties:
 
 | Capacity | Default | Meaning |
 |----------|---------|---------|
@@ -154,7 +154,7 @@ a multiple of 8 no longer collapses to a single command type.
 - **Engine ceiling**: the symbol/book maps grow on demand, so symbol count is
   not a fixed cap; the resting-order ceiling is `orderPoolCapacity` (nodes
   allocate a fresh node on the cold path beyond it). Needing more resting
-  orders requires a `CoreConfig` override (exposed via `exc.core.*` in
+  orders requires a `CoreConfig` override (exposed via `justrade.core.*` in
   `ClusterLauncher` / `ReadServiceLauncher`).
 - **Workload**: already parameterized (`--symbols`); `ExternalLoadRunner.setup`
   registers every symbol, and `ReadVerifyRunner` verifies each symbol's L2 plus
@@ -180,9 +180,9 @@ a multiple of 8 no longer collapses to a single command type.
   benefits from a higher-clock instance rather than more cores.
 - **JVM heap**: the bin entrypoints (`node.sh`, `read.sh`, `gateway.sh`,
   `load.sh`, `verify.sh`) pin `-Xms` / `-Xmx` with ZGC by default and accept an
-  `EXC_JAVA_OPTS` override, so larger runs tune the heap via the Ansible
+  `JUSTRADE_JAVA_OPTS` override, so larger runs tune the heap via the Ansible
   `*_java_opts` vars instead of editing scripts.
-- **Aeron term length**: `ClusterConfig` reads `exc.aeron.termLength` (default
+- **Aeron term length**: `ClusterConfig` reads `justrade.aeron.termLength` (default
   `64k`). A larger term (1 MB / 8 MB) reduces flow-control stalls at high rate.
 - **Journal ring**: `journalSlotCount = 65536` slots of 128 bytes. If the
   domain-event journal backs up at high throughput (the `journalBackpressure`
@@ -207,7 +207,7 @@ Two important caveats when comparing:
   comparable to exchange-core's matching-only latency.
 - The deployed `LoadWorkload` has a much simpler shape (single price level,
   size 1, place/cancel/reduce mix) than exchange-core's benchmark. For an
-  apples-to-apples engine comparison, use `exc-xcore-bench`, whose
+  apples-to-apples engine comparison, use `xcore-bench`, whose
   `WorkloadGenerator` is a faithful port of exchange-core's
   `TestOrdersGenerator` and already produces the same distribution (target
   orders, users, sliding price, avalanche IOC, seed).

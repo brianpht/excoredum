@@ -2,7 +2,7 @@
 # Deploy the runtime tarball to every instance, write the systemd unit and
 # config, and start the services (load/verify are installed but not started;
 # run them with run-load.yml / run-verify.yml).
-- name: Distribute excoredum runtime
+- name: Distribute justrade runtime
   hosts: all
   become: true
   tags:
@@ -15,12 +15,12 @@
 
     - name: Upload runtime tarball
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../../excoredum-runtime.tgz"
-        dest: /tmp/excoredum-runtime.tgz
+        src: "{{ playbook_dir }}/../../justrade-runtime.tgz"
+        dest: /tmp/justrade-runtime.tgz
 
     - name: Extract runtime tarball
       ansible.builtin.unarchive:
-        src: /tmp/excoredum-runtime.tgz
+        src: /tmp/justrade-runtime.tgz
         dest: "{{ install_dir }}"
         remote_src: true
 
@@ -32,7 +32,7 @@
   tasks:
     - name: Create gateway config directory
       ansible.builtin.file:
-        path: /etc/excoredum
+        path: /etc/justrade
         state: directory
       when: inventory_hostname in groups['gateway']
 
@@ -44,8 +44,8 @@
 
     - name: Install systemd unit
       ansible.builtin.template:
-        src: excoredum.service.j2
-        dest: /etc/systemd/system/excoredum.service
+        src: justrade.service.j2
+        dest: /etc/systemd/system/justrade.service
 
     - name: Reload systemd
       ansible.builtin.systemd:
@@ -53,7 +53,7 @@
 
     - name: Enable and start service
       ansible.builtin.systemd:
-        name: excoredum
+        name: justrade
         enabled: "{{ service_enable | default(false) }}"
         state: started
       when: service_enable | default(false)

@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-RESULTS = REPO / "exc-core" / "build" / "results" / "jmh" / "results.json"
+RESULTS = REPO / "core" / "build" / "results" / "jmh" / "results.json"
 BASELINE = REPO / "config" / "jmh-baseline.json"
 REGRESSION_LIMIT_PCT = 10.0
 
@@ -43,7 +43,7 @@ def main():
     parser.add_argument("--record-baseline", action="store_true")
     args = parser.parse_args()
 
-    subprocess.run(["./gradlew", ":exc-core:jmh", "-PquickBench"], cwd=REPO, check=True)
+    subprocess.run(["./gradlew", ":core:jmh", "-PquickBench"], cwd=REPO, check=True)
     results = load(RESULTS)
 
     if args.record_baseline:

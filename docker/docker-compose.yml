@@ -1,4 +1,4 @@
-# End-to-end excoredum system test in containers: a 3-node Aeron Cluster
+# End-to-end justrade system test in containers: a 3-node Aeron Cluster
 # (Raft), a CQRS read replica following node-0's archive, a write-side load
 # runner submitting the deterministic 100k-command workload through the client
 # SDK, and a read-side verifier asserting the replica rebuilt exactly the
@@ -10,10 +10,10 @@
 #   docker compose -f docker/docker-compose.yml down -v
 #
 # Exit code: 0 when load (write checks) and verify (read checks) both pass.
-name: excoredum-e2e
+name: justrade-e2e
 
 networks:
-  exc-net:
+  justrade-net:
     driver: bridge
     ipam:
       config:
@@ -24,32 +24,32 @@ networks:
 # archive are UDP, log/catchup are TCP. Hosts are the compose service names,
 # resolved by the embedded DNS on the bridge network.
 x-members: &members
-  EXC_CLUSTER_MEMBERS: >-
+  JUSTRADE_CLUSTER_MEMBERS: >-
     0,node-0:20100,node-0:20101,node-0:20102,node-0:20103,node-0:20104
     |1,node-1:20200,node-1:20201,node-1:20202,node-1:20203,node-1:20204
     |2,node-2:20300,node-2:20301,node-2:20302,node-2:20303,node-2:20304
 
 x-image: &image
-  image: excoredum:test
+  image: justrade:test
   build:
     context: ..
     dockerfile: docker/Dockerfile
-  networks: [exc-net]
+  networks: [justrade-net]
 
 services:
   node-0:
     <<: *image
-    container_name: excoredum-node-0
+    container_name: justrade-node-0
     shm_size: 1g
     environment:
       <<: *members
-      EXC_NODE_ID: "0"
-      EXC_CLEAN_START: "true"
+      JUSTRADE_NODE_ID: "0"
+      JUSTRADE_CLEAN_START: "true"
     volumes:
       - node0-data:/data
     command: ["/usr/local/bin/entrypoint-node.sh"]
     healthcheck:
-      test: ["CMD-SHELL", "kill -0 $$(cat /data/excoredum-node.pid) 2>/dev/null"]
+      test: ["CMD-SHELL", "kill -0 $$(cat /data/justrade-node.pid) 2>/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 60
@@ -57,17 +57,17 @@ services:
 
   node-1:
     <<: *image
-    container_name: excoredum-node-1
+    container_name: justrade-node-1
     shm_size: 1g
     environment:
       <<: *members
-      EXC_NODE_ID: "1"
-      EXC_CLEAN_START: "true"
+      JUSTRADE_NODE_ID: "1"
+      JUSTRADE_CLEAN_START: "true"
     volumes:
       - node1-data:/data
     command: ["/usr/local/bin/entrypoint-node.sh"]
     healthcheck:
-      test: ["CMD-SHELL", "kill -0 $$(cat /data/excoredum-node.pid) 2>/dev/null"]
+      test: ["CMD-SHELL", "kill -0 $$(cat /data/justrade-node.pid) 2>/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 60
@@ -75,17 +75,17 @@ services:
 
   node-2:
     <<: *image
-    container_name: excoredum-node-2
+    container_name: justrade-node-2
     shm_size: 1g
     environment:
       <<: *members
-      EXC_NODE_ID: "2"
-      EXC_CLEAN_START: "true"
+      JUSTRADE_NODE_ID: "2"
+      JUSTRADE_CLEAN_START: "true"
     volumes:
       - node2-data:/data
     command: ["/usr/local/bin/entrypoint-node.sh"]
     healthcheck:
-      test: ["CMD-SHELL", "kill -0 $$(cat /data/excoredum-node.pid) 2>/dev/null"]
+      test: ["CMD-SHELL", "kill -0 $$(cat /data/justrade-node.pid) 2>/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 60
@@ -93,20 +93,20 @@ services:
 
   read:
     <<: *image
-    container_name: excoredum-read
+    container_name: justrade-read
     shm_size: 256m
     environment:
       # Primary source is node-0; if node-0 dies the replica fails over to
       # node-1 / node-2's archive and resumes from the applied position (every
       # member records the same committed log, so no rebuild is needed).
-      EXC_ARCHIVE: "aeron:udp?endpoint=node-0:20104,aeron:udp?endpoint=node-1:20204,aeron:udp?endpoint=node-2:20304"
-      EXC_QUERY: "aeron:udp?endpoint=0.0.0.0:44000"
+      JUSTRADE_ARCHIVE: "aeron:udp?endpoint=node-0:20104,aeron:udp?endpoint=node-1:20204,aeron:udp?endpoint=node-2:20304"
+      JUSTRADE_QUERY: "aeron:udp?endpoint=0.0.0.0:44000"
     command: ["/usr/local/bin/entrypoint-read.sh"]
     depends_on:
       node-0:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "kill -0 $$(cat /data/excoredum-read.pid) 2>/dev/null"]
+      test: ["CMD-SHELL", "kill -0 $$(cat /data/justrade-read.pid) 2>/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 60
@@ -114,14 +114,14 @@ services:
 
   load:
     <<: *image
-    container_name: excoredum-load
+    container_name: justrade-load
     shm_size: 256m
     environment:
-      EXC_INGRESS: "0=node-0:20100,1=node-1:20200,2=node-2:20300"
-      EXC_SYMBOLS: "${EXC_SYMBOLS:-1}"
-      EXC_BATCH: "${EXC_BATCH:-16}"
-      # EXC_OPS: "100000"
-      # EXC_USERS: "100"
+      JUSTRADE_INGRESS: "0=node-0:20100,1=node-1:20200,2=node-2:20300"
+      JUSTRADE_SYMBOLS: "${JUSTRADE_SYMBOLS:-1}"
+      JUSTRADE_BATCH: "${JUSTRADE_BATCH:-16}"
+      # JUSTRADE_OPS: "100000"
+      # JUSTRADE_USERS: "100"
     command: ["/usr/local/bin/entrypoint-load.sh"]
     depends_on:
       node-0:
@@ -133,12 +133,12 @@ services:
 
   verify:
     <<: *image
-    container_name: excoredum-verify
+    container_name: justrade-verify
     shm_size: 256m
     environment:
-      EXC_QUERY: "aeron:udp?endpoint=read:44000"
-      EXC_SYMBOLS: "${EXC_SYMBOLS:-1}"
-      EXC_TRADE_LIMIT: "${EXC_TRADE_LIMIT:-4096}"
+      JUSTRADE_QUERY: "aeron:udp?endpoint=read:44000"
+      JUSTRADE_SYMBOLS: "${JUSTRADE_SYMBOLS:-1}"
+      JUSTRADE_TRADE_LIMIT: "${JUSTRADE_TRADE_LIMIT:-4096}"
     command: ["/usr/local/bin/entrypoint-verify.sh"]
     depends_on:
       load:

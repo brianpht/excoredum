@@ -1,6 +1,6 @@
-# exc-gateway HTTP/JSON API - Usage Guide
+# gateway HTTP/JSON API - Usage Guide
 
-> Task-oriented how-to for the `exc-gateway` boundary. Pairs with
+> Task-oriented how-to for the `gateway` boundary. Pairs with
 > [docs/GATEWAY.md](GATEWAY.md) (full wire reference) and
 > [docs/ARCHITECTURE.md](ARCHITECTURE.md) (engine + read-side model). The same
 > API is also described as a machine-readable contract in
@@ -14,12 +14,12 @@
 
 ```bash
 ./gradlew build                      # build everything
-./scripts/excoredum-dev.sh start     # 3 cluster nodes + read replica + gateway
-./scripts/excoredum-dev.sh seed      # symbol 1 BTC/USDT + users 811/812 + a resting ask and a fill
+./scripts/justrade-dev.sh start     # 3 cluster nodes + read replica + gateway
+./scripts/justrade-dev.sh seed      # symbol 1 BTC/USDT + users 811/812 + a resting ask and a fill
 ```
 
 Base URL: `http://localhost:8080`. The dev script writes logs and PID files
-under `/tmp/excoredum`; `stop` tears the stack down.
+under `/tmp/justrade`; `stop` tears the stack down.
 
 ## Identity and admin
 

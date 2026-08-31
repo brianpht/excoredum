@@ -11,16 +11,16 @@
 - [Workspace Layout](#workspace-layout)
 - [System Diagram](#system-diagram)
 - [Module Structure](#module-structure)
-    - [exc-protocol - Wire and Snapshot Codecs](#exc-protocol---wire-and-snapshot-codecs)
-    - [exc-core - Deterministic State Machine](#exc-core---deterministic-state-machine)
-    - [exc-launcher - Cluster Bootstrap](#exc-launcher---cluster-bootstrap)
-    - [exc-write-client - Write-side Client SDK](#exc-write-client---write-side-client-sdk)
-    - [exc-read - Read Replica (CQRS)](#exc-read---read-replica-cqrs)
-    - [exc-read-client - Read-Side SDK](#exc-read-client---read-side-sdk)
-    - [exc-bench - Latency Harness](#exc-bench---latency-harness)
-    - [exc-xcore-bench - exchange-core Comparison](#exc-xcore-bench---exchange-core-comparison)
-    - [exc-examples - Runnable Examples](#exc-examples---runnable-examples)
-    - [exc-tests - Verification and Fixtures](#exc-tests---verification-and-fixtures)
+    - [protocol - Wire and Snapshot Codecs](#protocol---wire-and-snapshot-codecs)
+    - [core - Deterministic State Machine](#core---deterministic-state-machine)
+    - [launcher - Cluster Bootstrap](#launcher---cluster-bootstrap)
+    - [write-client - Write-side Client SDK](#write-client---write-side-client-sdk)
+    - [read - Read Replica (CQRS)](#read---read-replica-cqrs)
+    - [read-client - Read-Side SDK](#read-client---read-side-sdk)
+    - [bench - Latency Harness](#bench---latency-harness)
+    - [xcore-bench - exchange-core Comparison](#xcore-bench---exchange-core-comparison)
+    - [examples - Runnable Examples](#examples---runnable-examples)
+    - [tests - Verification and Fixtures](#tests---verification-and-fixtures)
 - [Wire Format](#wire-format)
 - [Order Book Semantics](#order-book-semantics)
 - [Direct-Exchange Risk](#direct-exchange-risk)
@@ -44,7 +44,7 @@
 
 ## Overview
 
-excoredum is the single source of truth for a spot order book and the account
+justrade is the single source of truth for a spot order book and the account
 balances that back it. It runs as one Aeron `ClusteredService` replicated by
 Raft, and does exactly one thing: execute deterministic state transitions over
 the order book and account state.
@@ -75,20 +75,20 @@ and symbol / user sharding are out of scope for now.
 ## Workspace Layout
 
 ```
-excoredum/
+justrade/
 |-- settings.gradle.kts             Gradle multi-module (11 modules)
 |-- build.gradle.kts                Shared conventions: JDK 21, spotless, checkstyle, -Werror
 |-- gradle/libs.versions.toml       Version catalog (Aeron, Agrona, SBE, JMH, HdrHistogram, ...)
 |-- config/checkstyle/checkstyle.xml        Baseline style rules for all modules
 |
-|-- exc-protocol/                   SBE schema + generated flyweight codecs
+|-- protocol/                   SBE schema + generated flyweight codecs
 |   |-- src/main/resources/messages.xml     CommandEnvelope, CommandResult, egress events, JournalEvent, query + snapshot records
-|   +-- src/main/java/com/exadbe/protocol/QueryStreams.java  Default query channels / stream ids (request 300, response 301)
+|   +-- src/main/java/io/justrade/protocol/QueryStreams.java  Default query channels / stream ids (request 300, response 301)
 |
-|-- exc-core/                       Deterministic state machine (this is the hot path)
+|-- core/                       Deterministic state machine (this is the hot path)
 |   |-- config/checkstyle/determinism.xml   Bans clocks, randomness, unordered maps, streams, floats
-|   |-- src/jmh/java/com/exadbe/bench/       CodecBenchmark, OrderBookBenchmark, MatchingEngineBenchmark, JournalBenchmark
-|   +-- src/main/java/com/exadbe/
+|   |-- src/jmh/java/io/justrade/bench/       CodecBenchmark, OrderBookBenchmark, MatchingEngineBenchmark, JournalBenchmark
+|   +-- src/main/java/io/justrade/
 |       |-- config/CoreConfig.java           Preallocated capacities and tuning knobs
 |       |-- util/Amounts.java                Overflow-checked 64-bit arithmetic
 |       |-- collections/
@@ -114,15 +114,15 @@ excoredum/
 |           |-- CounterSink.java             Allocation-free counter sink interface (NOOP default)
 |           +-- AtomicCounterSink.java       Off-heap AtomicCounter-backed sink for cross-thread reads
 |
-|-- exc-launcher/                   Aeron component bootstrap
-|   +-- src/main/java/com/exadbe/launcher/
+|-- launcher/                   Aeron component bootstrap
+|   +-- src/main/java/io/justrade/launcher/
 |       |-- ClusterConfig.java              Endpoints and directories per node
 |       |-- ClusterNode.java                Media Driver + Archive + Consensus + Container + counters + journaler
 |       |-- EventJournalRecorder.java       Agent: drains the journal ring to a recorded Aeron stream
 |       +-- ClusterLauncher.java            main(): start one node, block until terminated
 |
-|-- exc-write-client/                 Write-side client SDK (depends only on exc-protocol)
-|   +-- src/main/java/com/exadbe/write/client/
+|-- write-client/                 Write-side client SDK (depends only on protocol)
+|   +-- src/main/java/io/justrade/write/client/
 |       |-- ExcClient.java                  Async submit / poll, leader-change resend, correlation, event decode
 |       |-- config/ClientConfig.java        Immutable client configuration (builder)
 |       |-- ResultHandler.java              Result callback correlated by command id
@@ -136,8 +136,8 @@ excoredum/
 |       |-- PendingCommand.java             Pooled in-flight command bytes for verbatim resend
 |       +-- BackpressureException.java      Signals a full in-flight window
 |
-|-- exc-read/                       Read replica (CQRS query side)
-|   +-- src/main/java/com/exadbe/read/
+|-- read/                       Read replica (CQRS query side)
+|   +-- src/main/java/io/justrade/read/
 |       |-- ExcReadReplica.java             Poll-driven follower: own driver + archive client + engine
 |       |-- LiveLogSubscriber.java          Replays the consensus log, applies commands to the engine and the ledger
 |       |-- order/
@@ -157,8 +157,8 @@ excoredum/
 |       |-- config/ReadReplicaConfig.java   Archive control channel, stream id, local host
 |       +-- ReadServiceLauncher.java        Entry point: follow a member archive
 |
-|-- exc-read-client/               Read-side SDK (depends only on exc-protocol)
-|   +-- src/main/java/com/exadbe/read/client/
+|-- read-client/               Read-side SDK (depends only on protocol)
+|   +-- src/main/java/io/justrade/read/client/
 |       |-- ReadClient.java                Sync wrappers + async submit / poll / listener core
 |       |-- QueryListener.java             Async result callbacks (one per query type)
 |       |-- config/ReadClientConfig.java   Request / response channels, timing, in-flight window
@@ -167,8 +167,8 @@ excoredum/
 |       |-- OrderState.java                Order lifecycle state names
 |       +-- BackpressureException.java / QueryTimeoutException.java / QueryException.java
 |
-|-- exc-gateway/                    HTTP/JSON + WebSocket boundary (Netty)
-|   +-- src/main/java/com/exadbe/gateway/
+|-- gateway/                    HTTP/JSON + WebSocket boundary (Netty)
+|   +-- src/main/java/io/justrade/gateway/
 |       |-- GatewayLauncher.java            Entry point: pumps + HTTP server + market pump
 |       |-- config/GatewayConfig.java       Properties-driven config (validated at build)
 |       |-- http/                           Router, HttpServer, HttpHandler, admin guard
@@ -176,8 +176,8 @@ excoredum/
 |       |-- write/WritePump.java            ExcClient pump thread + result bridge
 |       +-- stream/                         StreamBroadcaster, egress + market pumps
 |
-|-- exc-bench/                      End-to-end latency harness
-|   +-- src/main/java/com/exadbe/bench/
+|-- bench/                      End-to-end latency harness
+|   +-- src/main/java/io/justrade/bench/
 |       |-- ExcBenchHarness.java            Boots a cluster + client, closed-loop HdrHistogram latency
 |       |-- LoadWorkload.java               Deterministic workload + exact book simulation
 |       |-- ExternalLoadRunner.java         Drives a deployed cluster over the network
@@ -185,8 +185,8 @@ excoredum/
 |       |-- GatewayBenchRunner.java         Same workload through the HTTP/WS gateway
 |       +-- LatencyResult.java              Throughput + percentile record
 |
-|-- exc-xcore-bench/                Comparative benchmarks vs exchange-core 0.5.3
-|   |-- src/main/java/com/exadbe/xcorebench/
+|-- xcore-bench/                Comparative benchmarks vs exchange-core 0.5.3
+|   |-- src/main/java/io/justrade/xcorebench/
 |   |   |-- WorkloadGenerator.java          Deterministic port of exchange-core's TestOrdersGenerator
 |   |   |-- Workload.java                   Replayable command sequence as primitive arrays
 |   |   |-- ExcBookRunner.java              Replay through OrderBookNaive (reference)
@@ -196,18 +196,18 @@ excoredum/
 |   |   |-- XcorePipelineRunner.java        Closed-loop ExchangeCore disruptor pipeline latency
 |   |   |-- BookComparison.java             book mode: replay throughput + parity check
 |   |   |-- EngineComparison.java           engine mode: dispatch vs pipeline tables
-|   |   |-- E2eComparison.java              e2e mode: cluster vs pipeline tables (reuses exc-bench)
+|   |   |-- E2eComparison.java              e2e mode: cluster vs pipeline tables (reuses bench)
 |   |   +-- XcoreBenchMain.java             CLI (--mode=book|engine|e2e|all)
-|   +-- src/jmh/java/com/exadbe/xcorebench/
+|   +-- src/jmh/java/io/justrade/xcorebench/
 |       +-- OrderBookComparisonBenchmark.java  JMH: 3 impls x place/cancel, IOC match, replay chunk
 |
-|-- exc-examples/                   Runnable examples (in-process cluster + client SDK)
-|   +-- src/main/java/com/exadbe/examples/
+|-- examples/                   Runnable examples (in-process cluster + client SDK)
+|   +-- src/main/java/io/justrade/examples/
 |       +-- QuickStartExample.java      Boots a node, funds users, crosses orders, shows all egress events
 |
-+-- exc-tests/                      Unit, property, integration, cluster, fault, soak tests
-    |-- src/testFixtures/java/com/exadbe/testkit/InMemorySnapshot.java   Snapshot to/from an in-memory buffer
-    +-- src/test/java/com/exadbe/            Test suites (see Test Coverage)
++-- tests/                      Unit, property, integration, cluster, fault, soak tests
+    |-- src/testFixtures/java/io/justrade/testkit/InMemorySnapshot.java   Snapshot to/from an in-memory buffer
+    +-- src/test/java/io/justrade/            Test suites (see Test Coverage)
 ```
 
 ---
@@ -216,11 +216,11 @@ excoredum/
 
 ```mermaid
 flowchart TB
-    subgraph CLIENTSIDE["Client (exc-write-client)"]
+    subgraph CLIENTSIDE["Client (write-client)"]
         CLIENT["ExcClient\nidempotent retry, correlation"]
     end
 
-    subgraph NODE["Cluster Node (exc-launcher)"]
+    subgraph NODE["Cluster Node (launcher)"]
         direction TB
         MD["Media Driver\n(transport)"]
         CM["Consensus Module\n(Raft leader / follower)"]
@@ -246,11 +246,11 @@ flowchart TB
         JR -->|" record journal (stream 200) "| AR
     end
 
-    subgraph JCON["Journal Consumer (exc-read)"]
+    subgraph JCON["Journal Consumer (read)"]
         HJC["HaJournalConsumer\nreplay + dedup + failover"]
     end
 
-    subgraph READ["Read Replica (exc-read)"]
+    subgraph READ["Read Replica (read)"]
         direction TB
         RR["ExcReadReplica"]
         LLS["LiveLogSubscriber\n(stream 100)"]
@@ -263,7 +263,7 @@ flowchart TB
         RR --> QR
     end
 
-    subgraph READCLIENT["Query SDK (exc-read-client)"]
+    subgraph READCLIENT["Query SDK (read-client)"]
         RC["ReadClient\nblocking, request-id correlation"]
     end
 
@@ -287,9 +287,9 @@ replicated state without joining the replica's process.
 
 ## Module Structure
 
-### exc-protocol - Wire and Snapshot Codecs
+### protocol - Wire and Snapshot Codecs
 
-A dependency-only module (no dependency on `exc-core`) holding the SBE schema and
+A dependency-only module (no dependency on `core`) holding the SBE schema and
 the generated flyweight codecs. SBE produces type-safe encoders and decoders that
 operate directly on buffers, with no reflection and no intermediate objects.
 Little-endian, fixed field order.
@@ -327,7 +327,7 @@ and `QueryStatusCode` enums, plus `QueryResponse.history.placedTimestamp`.
 Enums: `OrderCommandType`, `OrderAction`, `OrderType`, `MatcherEventType`,
 `CommandResultCode`, `QueryType`, `QueryStatusCode`.
 
-### exc-core - Deterministic State Machine
+### core - Deterministic State Machine
 
 The allocation-conscious heart of the engine. `MatchingEngine` is deliberately
 free of Aeron so it runs in tests; `MatchingService` adapts it to the cluster.
@@ -354,7 +354,7 @@ free of Aeron so it runs in tests; `MatchingService` adapts it to the cluster.
 | `SnapshotManager`   | Streaming SBE snapshot writer / loader with deterministic key ordering   |
 | `CoreMetrics` / `CounterSink` / `AtomicCounterSink` | Single-writer counters, off-heap mirror      |
 
-### exc-launcher - Cluster Bootstrap
+### launcher - Cluster Bootstrap
 
 Launches and owns the Aeron components for one node and hosts a single
 `MatchingService`. Internal components reach the Archive over an IPC local-control
@@ -366,12 +366,12 @@ read replica.
 | `ClusterConfig`  | Endpoints and directories; `singleNodeLocalhost`, `multiNodeLocalhost`, `fromMembers`, `fromProperties` |
 | `ClusterNode`    | Launches Media Driver + Archive + Consensus Module + Container; allocates the off-heap `CountersManager`; starts recording the domain journal and runs the journaler agent |
 | `EventJournalRecorder` | Agent draining the service's journal ring to a recorded Aeron stream, off the consensus thread |
-| `ClusterLauncher`| Entry point: start a node (single-node or `--config` / `-Dexc.config` properties) and block until terminated |
+| `ClusterLauncher`| Entry point: start a node (single-node or `--config` / `-Djustrade.config` properties) and block until terminated |
 
-### exc-write-client - Write-side Client SDK
+### write-client - Write-side Client SDK
 
-The write-side client SDK. It depends only on the `exc-protocol` wire contract, never on
-`exc-core`. It adds leader-change handling, idempotent retry (reusing the original
+The write-side client SDK. It depends only on the `protocol` wire contract, never on
+`core`. It adds leader-change handling, idempotent retry (reusing the original
 `commandId`), asynchronous request / response correlation, explicit backpressure
 signalling, and full egress event delivery (trade / reduce / reject frames, L2
 snapshots, and per-command trade grouping) on top of an Aeron cluster client.
@@ -412,7 +412,7 @@ ORIGINAL command's id, so a re-sent command correlates under its first
 submission's id. The all-ones `clientSeq` (`0xFFFFFFFFFFFFFFFF`) is reserved
 by the dedup ring's empty-slot sentinel and is rejected with `INVALID_AMOUNT`.
 
-### exc-read - Read Replica (CQRS)
+### read - Read Replica (CQRS)
 
 The read (query) side. Unlike the deterministic core it may use the system clock
 and heap allocation. `ExcReadReplica` runs a non-voting node with its own embedded
@@ -534,10 +534,10 @@ journal is recorded on stream 200 (`aeron:ipc`) and replayed by
 | `ReadReplicaConfig` | Archive control channels, query request channel, local host, failover / liveness / timeout / checkpoint knobs |
 | `ReadServiceLauncher`| Entry point: follow member archives (failover), serve queries, optional `--checkpoint`  |
 
-### exc-read-client - Read-Side SDK
+### read-client - Read-Side SDK
 
-The read-side SDK, deliberately decoupled like `exc-write-client`: it depends only on
-`exc-protocol` (never `exc-core` or `exc-read`). `ReadClient` opens a plain Aeron
+The read-side SDK, deliberately decoupled like `write-client`: it depends only on
+`protocol` (never `core` or `read`). `ReadClient` opens a plain Aeron
 publication to a read replica's query request stream and an ephemeral response
 subscription, and encodes `QueryRequest` frames with a per-call `requestId`.
 Two API modes share one core, mirroring `ExcClient`:
@@ -571,7 +571,7 @@ The query surface mirrors the replica's in-process API: `userExists(uid)`,
 | Result holders      | `BalanceResult`, `L2Snapshot`, `UserReport`, `OrderRecordResult`, `MarketTradeResult`, `TotalBalanceResult`, `OrderState` |
 | `BackpressureException` / `QueryTimeoutException` / `QueryException` | Query failure signalling |
 
-### exc-gateway - HTTP / JSON Boundary
+### gateway - HTTP / JSON Boundary
 
 A Netty HTTP/1.1 + WebSocket service in front of the two SDKs: REST
 endpoints translate to read-side queries (`ReadPump` over `ReadClient`) and
@@ -595,7 +595,7 @@ full wire reference, streaming shapes, and configuration live in
 | `ReadPump` / `WritePump` | Single-threaded SDK drivers; 429 on a full in-flight window, 504 on timeout / expiry |
 | `StreamBroadcaster` | Thread-safe fan-out; slow-subscriber drops counted, subscriber cap enforced at handshake |
 
-### exc-bench - Latency Harness
+### bench - Latency Harness
 
 End-to-end load drivers (exempt from the core determinism rules):
 
@@ -623,29 +623,29 @@ End-to-end load drivers (exempt from the core determinism rules):
   free balances and resting orders, order-history and trade-tape counts, the
   L2 book, and the value-conservation totals).
 
-JMH micro-benchmarks for the hot path live in `exc-core`'s jmh source set.
+JMH micro-benchmarks for the hot path live in `core`'s jmh source set.
 
-### exc-xcore-bench - exchange-core Comparison
+### xcore-bench - exchange-core Comparison
 
 Comparative benchmarks against upstream exchange-core 0.5.3 (exempt from the
 core determinism rules). A faithful port of exchange-core's
 `TestOrdersGenerator` produces a deterministic command mix that is replayed
-through excoredum's `OrderBookNaive` (reference) and both exchange-core books,
+through justrade's `OrderBookNaive` (reference) and both exchange-core books,
 with built-in cross-validation of event counters and full-depth L2. Engine-path
 and end-to-end modes measure closed-loop latency through `MatchingEngine.process`
 vs the exchange-core disruptor pipeline, and through the full cluster vs the
 pipeline. See [BENCHMARKING-XCORE.md](BENCHMARKING-XCORE.md) for methodology and
 fairness notes.
 
-### exc-examples - Runnable Examples
+### examples - Runnable Examples
 
 `QuickStartExample` boots an in-process single-node cluster (`ClusterNode` +
 `ClusterConfig.singleNodeLocalhost` + `CoreConfig.defaults()`) and walks a small
 trading scenario through the `ExcClient` SDK, printing every egress surface as
 it happens: per-fill trades, per-command trade groups, a reduce, a reject, and
-an L2 snapshot. Run with `./gradlew :exc-examples:run`.
+an L2 snapshot. Run with `./gradlew :examples:run`.
 
-### exc-tests - Verification and Fixtures
+### tests - Verification and Fixtures
 
 Unit, property, integration, cluster, fault, and soak tests plus a `testFixtures`
 toolkit (`InMemorySnapshot`). `Commands` (a plain `src/test` helper) encodes a
@@ -662,7 +662,7 @@ lifecycle, balance credit / debit, and non-zero maker / taker fees through the
 client against a single-node cluster, asserting that every command completes
 without rejection, that tail latency stays within budget, and that GC stays
 bounded during the measured window. Its scale is tunable with
-`-Dexc.soak.warmupRounds` / `-Dexc.soak.steadyRounds` (one round is one step of
+`-Djustrade.soak.warmupRounds` / `-Djustrade.soak.steadyRounds` (one round is one step of
 an 8-step workload pattern; 8 rounds = 13 commands).
 
 Suites are grouped by JUnit tag and Gradle task: `test` (unit / property, no tag),
@@ -952,7 +952,7 @@ catch-up window.
 
 ```mermaid
 sequenceDiagram
-    participant RC as ReadClient (exc-read-client)
+    participant RC as ReadClient (read-client)
     participant QR as QueryResponder (replica poll thread)
     participant R as Read replica state (engine and ledger)
 
@@ -1051,8 +1051,8 @@ flowchart TD
 ## Determinism Rules
 
 The state machine must produce byte-identical results on every node. The following
-are forbidden in `exc-core` and enforced by a Checkstyle rule set
-([exc-core/config/checkstyle/determinism.xml](../exc-core/config/checkstyle/determinism.xml)):
+are forbidden in `core` and enforced by a Checkstyle rule set
+([core/config/checkstyle/determinism.xml](../core/config/checkstyle/determinism.xml)):
 
 - No `System.currentTimeMillis()` / `System.nanoTime()`. The only time source is
   the leader-assigned `timestamp` parameter.
@@ -1111,18 +1111,18 @@ single node; tests use smaller values.
 | `l2MaxLevels`         | 32      | Max L2 depth returned per side              |
 
 Overrides are read at launch rather than hardcoded. `CoreConfig.fromProperties`
-maps `exc.core.*` properties (the same keys as the table, e.g.
-`exc.core.accountCapacity`) and `CoreConfig.fromSystemProperties()` reads
-`-Dexc.core.*`; missing or blank keys fall back to the defaults above.
+maps `justrade.core.*` properties (the same keys as the table, e.g.
+`justrade.core.accountCapacity`) and `CoreConfig.fromSystemProperties()` reads
+`-Djustrade.core.*`; missing or blank keys fall back to the defaults above.
 `ClusterLauncher` loads both the cluster and core config from its `--config`
 properties file, while `ReadServiceLauncher` accepts `--core-config=<file>`
-(falling back to `-Dexc.core.*`). The read replica's read-side ledger caps are
+(falling back to `-Djustrade.core.*`). The read replica's read-side ledger caps are
 likewise configurable via `ReadReplicaConfig.maxOrdersPerUser` /
 `maxMarketTrades` (`--ledger-max-orders-per-user` /
 `--ledger-max-market-trades`), defaulting to 4096 and 65536.
 
 `ClusterConfig` provides node id, cluster members, directories, and channels,
-including an ingress term length (`exc.aeron.termLength`, default `64k`) that a
+including an ingress term length (`justrade.aeron.termLength`, default `64k`) that a
 high-rate deployment can raise to reduce flow-control stalls. The
 JVM must run with `--add-opens java.base/jdk.internal.misc=ALL-UNNAMED` and
 `--add-opens java.base/sun.nio.ch=ALL-UNNAMED` for Aeron / Agrona.
@@ -1204,7 +1204,7 @@ snapshot write / read time. The hot path only increments a counter.
 | `JournalLiveFailoverTest`            | Fault       | Live consumer fails over to a survivor without loss     |
 | `ChaosSoakTest`                      | Soak        | Long-running mixed workload (full / partial GTC-IOC matching, cancel / reduce, balance credit / debit, non-zero fees); asserts every command completes with no rejection, p99.9 latency budget, bounded GC |
 
-Only `test` and `integrationTest` are the minimal gate; excoredum additionally
+Only `test` and `integrationTest` are the minimal gate; justrade additionally
 wires `clusterTest` and `faultTest` into the default `check`.
 
 ---
@@ -1218,7 +1218,7 @@ cluster, a read replica, a write-side load runner, and a read-side verifier.
 
 ```mermaid
 flowchart LR
-    subgraph BRIDGE["exc-net (docker bridge)"]
+    subgraph BRIDGE["justrade-net (docker bridge)"]
         N0["node-0 - ClusterLauncher"]
         N1["node-1 - ClusterLauncher"]
         N2["node-2 - ClusterLauncher"]
@@ -1248,7 +1248,7 @@ flowchart LR
 | `load`      | `ExternalLoadRunner`          | Submits the workload through `ExcClient`; verifies the write side     |
 | `verify`    | `ReadVerifyRunner`            | Replays the simulation; asserts the read side matches it exactly      |
 
-All services share one image (`excoredum:test`, built by `docker/Dockerfile`:
+All services share one image (`justrade:test`, built by `docker/Dockerfile`:
 multi-stage, JDK 21, `installDist` distributions for launcher / read / bench).
 Every container runs its own Aeron media driver; `/dev/shm` is sized per
 container (`shm_size`) to fit the driver buffers. Service names resolve on the
@@ -1297,7 +1297,7 @@ docker compose -f docker/docker-compose.yml logs load verify
 docker compose -f docker/docker-compose.yml down -v      # teardown
 ```
 
-Scale with `EXC_OPS` / `EXC_USERS` / `EXC_SYMBOLS` on the `load` and `verify`
+Scale with `JUSTRADE_OPS` / `JUSTRADE_USERS` / `JUSTRADE_SYMBOLS` on the `load` and `verify`
 services, keeping places and fills per user below the read replica's per-user
 ledger and trade-tape caps (`--trade-limit`, default 4096, and
 `--ledger-max-orders-per-user` / `--ledger-max-market-trades`, defaults 4096 /
@@ -1318,25 +1318,25 @@ ledger and trade-tape caps (`--trade-limit`, default 4096, and
 ./gradlew clusterTest faultTest
 
 # Opt-in long-running soak (mixed workload, tail latency + GC budgets)
-./gradlew :exc-tests:soakTest
+./gradlew :tests:soakTest
 
 # Micro-benchmarks (add -PquickBench for a fast smoke run)
-./gradlew :exc-core:jmh -PquickBench
+./gradlew :core:jmh -PquickBench
 
 # Run a single-node cluster
-./gradlew :exc-launcher:run
+./gradlew :launcher:run
 
 # Run a read replica following a member archive
-./gradlew :exc-read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
+./gradlew :read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
 
 # End-to-end latency harness
-./gradlew :exc-bench:run --args="--warmup=5000 --ops=20000"
+./gradlew :bench:run --args="--warmup=5000 --ops=20000"
 
 # Comparison vs exchange-core (book / engine / e2e / all)
-./gradlew :exc-xcore-bench:run --args="--mode=book --commands=100000"
-./gradlew :exc-xcore-bench:jmh -PquickBench
+./gradlew :xcore-bench:run --args="--mode=book --commands=100000"
+./gradlew :xcore-bench:jmh -PquickBench
 ```
 
 Toolchain: JDK 21 LTS. Aeron 1.48, Agrona 2.2, SBE 1.35. The dependency chain for
-changes: a schema change in `exc-protocol` regenerates codecs used by `exc-core`,
-`exc-launcher`, `exc-write-client`, and `exc-read`, so all layers rebuild together.
+changes: a schema change in `protocol` regenerates codecs used by `core`,
+`launcher`, `write-client`, and `read`, so all layers rebuild together.

@@ -183,7 +183,7 @@ Requirements: allocation-free, O(1) where possible, cache-local, branch predicta
     2. `./gradlew checkstyleMain checkstyleTest` - zero violations required
     3. `./gradlew compileJava` - zero compiler warnings (`-Werror` is hardcoded in the build, not a CLI flag)
     4. `./gradlew test integrationTest` - all tests must pass
-    5. `./gradlew :exc-core:jmh -PquickBench` - smoke-run benchmarks, no regression > 10% vs baseline
+    5. `./gradlew :core:jmh -PquickBench` - smoke-run benchmarks, no regression > 10% vs baseline
     - Toolchain: JDK 21 LTS (matches `gradle.properties` `targetJavaVersion=21` and CI). NEVER use a different JDK.
     - If any step fails, fix the issue and re-run from step 1 before committing.
 - Git operations: Agent MAY create local commits and local tags. MUST NOT push commits, tags, or any refs to any remote

@@ -26,7 +26,7 @@ resource "aws_vpc" "bench" {
   enable_dns_hostnames = true
   enable_dns_support   = true
 
-  tags = { Name = "excoredum-bench" }
+  tags = { Name = "justrade-bench" }
 }
 
 resource "aws_subnet" "bench" {
@@ -35,7 +35,7 @@ resource "aws_subnet" "bench" {
   availability_zone       = var.az
   map_public_ip_on_launch = true
 
-  tags = { Name = "excoredum-bench" }
+  tags = { Name = "justrade-bench" }
 }
 
 resource "aws_internet_gateway" "bench" {
@@ -62,7 +62,7 @@ resource "aws_route_table_association" "bench" {
 # ---------------------------------------------------------------------------
 
 resource "aws_placement_group" "bench" {
-  name     = "excoredum-bench"
+  name     = "justrade-bench"
   strategy = "cluster"
 }
 
@@ -76,8 +76,8 @@ locals {
 }
 
 resource "aws_security_group" "bench" {
-  name        = "excoredum-bench"
-  description = "excoredum benchmark environment"
+  name        = "justrade-bench"
+  description = "justrade benchmark environment"
   vpc_id      = aws_vpc.bench.id
 }
 
@@ -191,7 +191,7 @@ resource "aws_instance" "node" {
   associate_public_ip_address = true
   placement_group             = aws_placement_group.bench.name
 
-  tags = { Name = "excoredum-node-${count.index}" }
+  tags = { Name = "justrade-node-${count.index}" }
 }
 
 resource "aws_instance" "read" {
@@ -203,7 +203,7 @@ resource "aws_instance" "read" {
   vpc_security_group_ids      = [aws_security_group.bench.id]
   associate_public_ip_address = true
 
-  tags = { Name = "excoredum-read" }
+  tags = { Name = "justrade-read" }
 }
 
 resource "aws_instance" "gateway" {
@@ -215,7 +215,7 @@ resource "aws_instance" "gateway" {
   vpc_security_group_ids      = [aws_security_group.bench.id]
   associate_public_ip_address = true
 
-  tags = { Name = "excoredum-gateway" }
+  tags = { Name = "justrade-gateway" }
 }
 
 resource "aws_instance" "load" {
@@ -227,7 +227,7 @@ resource "aws_instance" "load" {
   vpc_security_group_ids      = [aws_security_group.bench.id]
   associate_public_ip_address = true
 
-  tags = { Name = "excoredum-load" }
+  tags = { Name = "justrade-load" }
 }
 
 resource "aws_instance" "verify" {
@@ -239,5 +239,5 @@ resource "aws_instance" "verify" {
   vpc_security_group_ids      = [aws_security_group.bench.id]
   associate_public_ip_address = true
 
-  tags = { Name = "excoredum-verify" }
+  tags = { Name = "justrade-verify" }
 }

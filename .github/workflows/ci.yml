@@ -58,4 +58,4 @@ jobs:
           done
 
       - name: JMH quick benchmark (regression smoke)
-        run: ./gradlew :exc-core:jmh -PquickBench
+        run: ./gradlew :core:jmh -PquickBench

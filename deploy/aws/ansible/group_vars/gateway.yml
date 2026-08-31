@@ -1,9 +1,9 @@
 ---
-svc_name: "excoredum gateway"
+svc_name: "justrade gateway"
 service_type: simple
 service_enable: true
 service_exec: "{{ install_dir }}/bin/gateway.sh"
-gateway_config_path: /etc/excoredum/gateway.properties
+gateway_config_path: /etc/justrade/gateway.properties
 service_env:
-  EXC_CONFIG: "{{ gateway_config_path }}"
-  EXC_JAVA_OPTS: "{{ gateway_java_opts }}"
+  JUSTRADE_CONFIG: "{{ gateway_config_path }}"
+  JUSTRADE_JAVA_OPTS: "{{ gateway_java_opts }}"

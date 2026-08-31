@@ -15,7 +15,7 @@
           - "java.base/sun.nio.ch=ALL-UNNAMED"
           - "-cp"
           - "{{ install_dir }}/bench/lib/*"
-          - "com.exadbe.bench.GatewayBenchRunner"
+          - "io.justrade.bench.GatewayBenchRunner"
           - "--base-url=http://localhost:8080"
           - "--ops={{ gateway_bench_ops }}"
           - "--users={{ gateway_bench_users }}"

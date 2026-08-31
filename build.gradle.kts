@@ -88,7 +88,7 @@ subprojects {
         } else {
             options.errorprone {
                 disableWarningsInGeneratedCode.set(true)
-                option("NullAway:AnnotatedPackages", "com.exadbe")
+                option("NullAway:AnnotatedPackages", "io.justrade")
             }
         }
     }

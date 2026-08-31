@@ -1,12 +1,12 @@
 ---
-svc_name: "excoredum read-side verification"
+svc_name: "justrade read-side verification"
 service_type: oneshot
 service_enable: false
 service_exec: "{{ install_dir }}/bin/verify.sh"
 service_env:
-  EXC_QUERY: "{{ query_channel }}"
-  EXC_OPS: "{{ workload_ops }}"
-  EXC_USERS: "{{ workload_users }}"
-  EXC_SYMBOLS: "{{ workload_symbols }}"
-  EXC_TRADE_LIMIT: "{{ workload_trade_limit }}"
-  EXC_JAVA_OPTS: "{{ verify_java_opts }}"
+  JUSTRADE_QUERY: "{{ query_channel }}"
+  JUSTRADE_OPS: "{{ workload_ops }}"
+  JUSTRADE_USERS: "{{ workload_users }}"
+  JUSTRADE_SYMBOLS: "{{ workload_symbols }}"
+  JUSTRADE_TRADE_LIMIT: "{{ workload_trade_limit }}"
+  JUSTRADE_JAVA_OPTS: "{{ verify_java_opts }}"

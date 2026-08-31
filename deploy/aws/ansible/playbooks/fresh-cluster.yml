@@ -10,13 +10,13 @@
 #   cd deploy/aws/ansible && ./inventory.sh
 #   ansible-playbook playbooks/fresh-cluster.yml
 
-- name: Stop all excoredum services
+- name: Stop all justrade services
   hosts: all
   become: true
   tasks:
-    - name: Stop excoredum
+    - name: Stop justrade
       ansible.builtin.systemd:
-        name: excoredum
+        name: justrade
         state: stopped
       # Load/verify are oneshot units that are usually not running, so a
       # failed stop on them must not abort the reset.
@@ -39,8 +39,8 @@
   tasks:
     - name: Install systemd unit (clean start)
       ansible.builtin.template:
-        src: excoredum.service.j2
-        dest: /etc/systemd/system/excoredum.service
+        src: justrade.service.j2
+        dest: /etc/systemd/system/justrade.service
 
     - name: Reload systemd
       ansible.builtin.systemd:
@@ -48,7 +48,7 @@
 
     - name: Enable and start node
       ansible.builtin.systemd:
-        name: excoredum
+        name: justrade
         enabled: true
         state: started
 
@@ -58,6 +58,6 @@
   tasks:
     - name: Enable and start service
       ansible.builtin.systemd:
-        name: excoredum
+        name: justrade
         enabled: true
         state: started

@@ -1,17 +1,17 @@
-# exc-gateway - HTTP/JSON + WebSocket boundary
+# gateway - HTTP/JSON + WebSocket boundary
 
 > The read/write boundary in front of the deterministic CQRS matching engine. A
 > client talks plain HTTP/JSON (and subscribes over WebSocket); the gateway translates
 > that into `ReadClient` queries and `ExcClient` commands. It never touches
-> `exc-core`, and JSON stays at this boundary (as the engine rules require).
+> `core`, and JSON stays at this boundary (as the engine rules require).
 
 ---
 
 ## Overview
 
-`excoredum` is an in-memory spot matching engine replicated by Raft. It exposes no
+`justrade` is an in-memory spot matching engine replicated by Raft. It exposes no
 network protocol on its own - reads live in a CQRS read replica
-(`exc-read`) and writes go through the cluster ingress. `exc-gateway` sits in
+(`read`) and writes go through the cluster ingress. `gateway` sits in
 front of them: a Netty HTTP/JSON server plus a WebSocket `/ws` stream.
 
 The gateway is deliberately thin and asynchronous:
@@ -32,7 +32,7 @@ is under the core determinism rules.
 
 ```mermaid
 flowchart TB
-    CLI[HTTP/WS client] --HTTP/JSON--> GW[exc-gateway Netty]
+    CLI[HTTP/WS client] --HTTP/JSON--> GW[gateway Netty]
     CLI --WS /ws--> GW
     subgraph GW
         HTTP[HttpServer + Router]
@@ -58,13 +58,13 @@ Two pumps own the two SDK clients; the Netty event loops never block.
 
 ## Module and build
 
-- Added to `settings.gradle.kts`: `include("exc-gateway")`.
+- Added to `settings.gradle.kts`: `include("gateway")`.
 - Version catalog: Netty (`netty-codec-http`, already present) and Jackson
   (`jackson-databind`).
-- `exc-gateway/build.gradle.kts`: `application` plugin, `mainClass =
-  com.exadbe.gateway.GatewayLauncher`, the two Aeron/Netty `--add-opens` in
-  `applicationDefaultJvmArgs`, and deps on `:exc-read-client`, `:exc-write-client`,
-  `:exc-protocol`, Netty, Jackson.
+- `gateway/build.gradle.kts`: `application` plugin, `mainClass =
+  io.justrade.gateway.GatewayLauncher`, the two Aeron/Netty `--add-opens` in
+  `applicationDefaultJvmArgs`, and deps on `:read-client`, `:write-client`,
+  `:protocol`, Netty, Jackson.
 - The root build already applies JDK 21, Spotless (Palantir), Checkstyle (ASCII,
   no em-dash), `-Werror`, and the test `--add-opens`.
 
@@ -231,7 +231,7 @@ Launcher reads a properties file via `--config=<path>` (or `--config <path>`):
 
 ```bash
 # Start the read replica and cluster first, then:
-./gradlew :exc-gateway:run --args="--config=gateway.properties"
+./gradlew :gateway:run --args="--config=gateway.properties"
 ```
 
 Example `gateway.properties`:
@@ -252,9 +252,9 @@ gateway.marketPump.intervalMs=1000
 
 ## Verification
 
-- **Unit** (`exc-gateway/src/test`): `MapperTest`, `GatewayConfigTest`,
+- **Unit** (`gateway/src/test`): `MapperTest`, `GatewayConfigTest`,
   `HandlerRequestTest`, `JsonTest`, `StreamBroadcasterTest`, `AdminGuardTest`.
-- **End to end** (`exc-tests`, tag `integration`):
+- **End to end** (`tests`, tag `integration`):
   `GatewayEndToEndIntegrationTest` boots an in-process cluster + read replica +
   gateway, then via `HttpClient` checks the order book, symbols, balance report,
   conservation totals, health, a write, the admin guard, and opens a WebSocket to
@@ -262,7 +262,7 @@ gateway.marketPump.intervalMs=1000
 
 Gate (must pass in order, per the engine rules): `spotlessApply` ->
 `checkstyleMain checkstyleTest` -> `compileJava` -> `test integrationTest` ->
-`:exc-core:jmh -PquickBench`.
+`:core:jmh -PquickBench`.
 
 ---
 

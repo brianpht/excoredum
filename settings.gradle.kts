@@ -1,4 +1,4 @@
-rootProject.name = "excoredum"
+rootProject.name = "justrade"
 
 dependencyResolutionManagement {
     repositories {
@@ -6,14 +6,14 @@ dependencyResolutionManagement {
     }
 }
 
-include("exc-protocol")
-include("exc-core")
-include("exc-launcher")
-include("exc-write-client")
-include("exc-read")
-include("exc-read-client")
-include("exc-gateway")
-include("exc-tests")
-include("exc-examples")
-include("exc-bench")
-include("exc-xcore-bench")
+include("protocol")
+include("core")
+include("launcher")
+include("write-client")
+include("read")
+include("read-client")
+include("gateway")
+include("tests")
+include("examples")
+include("bench")
+include("xcore-bench")

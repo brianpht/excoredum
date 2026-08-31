@@ -1,13 +1,13 @@
 ---
-svc_name: "excoredum write-side load"
+svc_name: "justrade write-side load"
 service_type: oneshot
 service_enable: false
 service_exec: "{{ install_dir }}/bin/load.sh"
 service_env:
-  EXC_ENDPOINTS: "{{ ingress_endpoints }}"
-  EXC_OPS: "{{ workload_ops }}"
-  EXC_USERS: "{{ workload_users }}"
-  EXC_SYMBOLS: "{{ workload_symbols }}"
-  EXC_BATCH: "{{ load_batch }}"
-  EXC_CLIENT_ID: "{{ load_client_id }}"
-  EXC_JAVA_OPTS: "{{ load_java_opts }}"
+  JUSTRADE_ENDPOINTS: "{{ ingress_endpoints }}"
+  JUSTRADE_OPS: "{{ workload_ops }}"
+  JUSTRADE_USERS: "{{ workload_users }}"
+  JUSTRADE_SYMBOLS: "{{ workload_symbols }}"
+  JUSTRADE_BATCH: "{{ load_batch }}"
+  JUSTRADE_CLIENT_ID: "{{ load_client_id }}"
+  JUSTRADE_JAVA_OPTS: "{{ load_java_opts }}"

@@ -1,26 +1,26 @@
 #!/bin/sh
 # Runs the write-side load against a deployed cluster over the write client SDK
-# and verifies every result. EXC_EGRESS must advertise this instance's private
-# IP so the cluster can reach it; EXC_CLIENT_ID must be unique per concurrently
+# and verifies every result. JUSTRADE_EGRESS must advertise this instance's private
+# IP so the cluster can reach it; JUSTRADE_CLIENT_ID must be unique per concurrently
 # running load generator.
 set -eu
 
-ENDPOINTS="${EXC_ENDPOINTS:?EXC_ENDPOINTS is required}"
+ENDPOINTS="${JUSTRADE_ENDPOINTS:?JUSTRADE_ENDPOINTS is required}"
 _ip="$(hostname -i)"
 EGRESS="aeron:udp?endpoint=${_ip%% *}:0"
-OPS="${EXC_OPS:-100000}"
-USERS="${EXC_USERS:-100}"
-SYMBOLS="${EXC_SYMBOLS:-1}"
-BATCH="${EXC_BATCH:-16}"
-CLIENT_ID="${EXC_CLIENT_ID:-1}"
-JAVA_OPTS="${EXC_JAVA_OPTS:--Xms512m -Xmx1g -XX:+UseZGC}"
+OPS="${JUSTRADE_OPS:-100000}"
+USERS="${JUSTRADE_USERS:-100}"
+SYMBOLS="${JUSTRADE_SYMBOLS:-1}"
+BATCH="${JUSTRADE_BATCH:-16}"
+CLIENT_ID="${JUSTRADE_CLIENT_ID:-1}"
+JAVA_OPTS="${JUSTRADE_JAVA_OPTS:--Xms512m -Xmx1g -XX:+UseZGC}"
 
-echo "excoredum load: ${OPS} ops / ${USERS} users / ${SYMBOLS} symbols / batch ${BATCH} against ${ENDPOINTS} (clientId=${CLIENT_ID}, egress ${EGRESS})"
-exec /opt/excoredum/jre/bin/java \
+echo "justrade load: ${OPS} ops / ${USERS} users / ${SYMBOLS} symbols / batch ${BATCH} against ${ENDPOINTS} (clientId=${CLIENT_ID}, egress ${EGRESS})"
+exec /opt/justrade/jre/bin/java \
     $JAVA_OPTS \
     --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
     --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
-    -cp "/opt/excoredum/bench/lib/*" \
-    com.exadbe.bench.ExternalLoadRunner \
+    -cp "/opt/justrade/bench/lib/*" \
+    io.justrade.bench.ExternalLoadRunner \
     --endpoints="${ENDPOINTS}" --egress="${EGRESS}" \
     --ops="${OPS}" --users="${USERS}" --symbols="${SYMBOLS}" --batch="${BATCH}" --client-id="${CLIENT_ID}"

@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This directory is the architectural source of truth for excoredum. Per
+This directory is the architectural source of truth for justrade. Per
 `.github/copilot-instructions.md`, implementation rules and the performance
 budget live here (never in `/docs/sessions`, and nothing else is treated as the
 authoritative source).

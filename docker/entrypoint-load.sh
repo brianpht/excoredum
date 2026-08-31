@@ -5,20 +5,20 @@
 # reach it.
 set -eu
 
-ENDPOINTS="${EXC_INGRESS:?EXC_INGRESS is required}"
+ENDPOINTS="${JUSTRADE_INGRESS:?JUSTRADE_INGRESS is required}"
 _ip="$(hostname -i)"
 EGRESS="aeron:udp?endpoint=${_ip%% *}:0"
-OPS="${EXC_OPS:-100000}"
-USERS="${EXC_USERS:-100}"
-SYMBOLS="${EXC_SYMBOLS:-1}"
-BATCH="${EXC_BATCH:-16}"
-JAVA_OPTS="${EXC_JAVA_OPTS:--Xms512m -Xmx1g -XX:+UseZGC}"
+OPS="${JUSTRADE_OPS:-100000}"
+USERS="${JUSTRADE_USERS:-100}"
+SYMBOLS="${JUSTRADE_SYMBOLS:-1}"
+BATCH="${JUSTRADE_BATCH:-16}"
+JAVA_OPTS="${JUSTRADE_JAVA_OPTS:--Xms512m -Xmx1g -XX:+UseZGC}"
 
-echo "excoredum load: ${OPS} ops / ${USERS} users / ${SYMBOLS} symbols / batch ${BATCH} against ${ENDPOINTS} (egress ${EGRESS})"
+echo "justrade load: ${OPS} ops / ${USERS} users / ${SYMBOLS} symbols / batch ${BATCH} against ${ENDPOINTS} (egress ${EGRESS})"
 exec java \
     $JAVA_OPTS \
     --add-opens java.base/jdk.internal.misc=ALL-UNNAMED \
     --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
-    -cp "/opt/excoredum/bench/lib/*" \
-    com.exadbe.bench.ExternalLoadRunner \
+    -cp "/opt/justrade/bench/lib/*" \
+    io.justrade.bench.ExternalLoadRunner \
     --endpoints="${ENDPOINTS}" --egress="${EGRESS}" --ops="${OPS}" --users="${USERS}" --symbols="${SYMBOLS}" --batch="${BATCH}"

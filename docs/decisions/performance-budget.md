@@ -1,6 +1,6 @@
 # Performance budget
 
-This is the budget source of truth for excoredum. It overrides the defaults in
+This is the budget source of truth for justrade. It overrides the defaults in
 `.github/copilot-instructions.md`. A regression greater than 10% on any
 percentile must be rolled back or justified with a new ADR.
 
@@ -19,8 +19,8 @@ Priority: Correctness > Determinism > Tail Latency > Mean Latency > Throughput.
 | Hot-path allocation             | 0 bytes / event   |
 | GC pause during the operational window | 0 ms      |
 
-The allocation-free contract is enforced by the `exc-core` determinism
-checkstyle overlay and by the `exc-core:jmh -PquickBench` smoke run plus a
+The allocation-free contract is enforced by the `core` determinism
+checkstyle overlay and by the `core:jmh -PquickBench` smoke run plus a
 manual `-Pjmh.profilers=gc` allocation profile on hot-path changes.
 
 ## Read replica

@@ -1,14 +1,14 @@
 ---
-svc_name: "excoredum cluster node {{ node_id }}"
+svc_name: "justrade cluster node {{ node_id }}"
 service_type: simple
 service_enable: true
 service_exec: "{{ install_dir }}/bin/node.sh"
 service_env:
-  EXC_NODE_ID: "{{ node_id }}"
-  EXC_MEMBERS: "{{ cluster_members }}"
-  EXC_HOST: "{{ host }}"
-  EXC_CLEAN_START: "{{ clean_start }}"
-  EXC_BASE_DIR: "{{ base_dir }}"
-  EXC_METRICS_INTERVAL_MS: "{{ metrics_interval_ms }}"
-  EXC_JAVA_OPTS: "{{ node_java_opts }}"
-  EXC_AERON_TERM_LENGTH: "{{ aeron_term_length }}"
+  JUSTRADE_NODE_ID: "{{ node_id }}"
+  JUSTRADE_MEMBERS: "{{ cluster_members }}"
+  JUSTRADE_HOST: "{{ host }}"
+  JUSTRADE_CLEAN_START: "{{ clean_start }}"
+  JUSTRADE_BASE_DIR: "{{ base_dir }}"
+  JUSTRADE_METRICS_INTERVAL_MS: "{{ metrics_interval_ms }}"
+  JUSTRADE_JAVA_OPTS: "{{ node_java_opts }}"
+  JUSTRADE_AERON_TERM_LENGTH: "{{ aeron_term_length }}"

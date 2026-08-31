@@ -5,13 +5,13 @@
   become: true
   tasks:
     - name: Run verifier (blocks until done)
-      ansible.builtin.command: systemctl start excoredum
+      ansible.builtin.command: systemctl start justrade
       register: verify_start
       ignore_errors: true
       changed_when: false
 
     - name: Show verify output
-      ansible.builtin.command: journalctl -u excoredum --no-pager -n 300
+      ansible.builtin.command: journalctl -u justrade --no-pager -n 300
       register: journal
       changed_when: false
 

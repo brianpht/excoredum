@@ -5,7 +5,7 @@ Date: 2026-08-22
 
 ## Context
 
-`libs.affinity` is declared in `exc-launcher` but unused. The copilot
+`libs.affinity` is declared in `launcher` but unused. The copilot
 instructions require hot agents to be pinned via thread affinity to isolated
 cores, and list `libs.affinity` in the version catalog for that purpose.
 

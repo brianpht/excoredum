@@ -1,0 +1,68 @@
+package io.justrade.read.report;
+
+import io.justrade.engine.MatchingEngine;
+import io.justrade.engine.risk.DirectExchangeRisk;
+import io.justrade.engine.risk.SymbolSpec;
+
+/**
+ * Assembles read-side reports over a replica's {@link MatchingEngine}. Runs on
+ * the replica's single poll thread, the same thread that advances replication,
+ * so every report sees a consistent state and the engine's stores are never
+ * touched concurrently.
+ */
+public final class ReportGenerator {
+
+    private final MatchingEngine engine;
+
+    public ReportGenerator(final MatchingEngine engine) {
+        this.engine = engine;
+    }
+
+    /** Balances and resting orders for {@code uid}. */
+    public SingleUserReport singleUser(final long uid) {
+        final boolean exists = engine.userExists(uid);
+        final SingleUserReport report = new SingleUserReport(uid, exists, exists && engine.isSuspended(uid));
+        engine.forEachBalance((u, currency, balance) -> {
+            if (u == uid) {
+                report.putBalance(currency, balance);
+            }
+        });
+        engine.forEachOrder((symbolId, orderId, ask, price, size, filled, reserveBidPrice, u, timestamp) -> {
+            if (u == uid) {
+                report.addOrder(
+                        new SingleUserReport.OrderLine(symbolId, orderId, ask, price, size, filled, reserveBidPrice));
+            }
+        });
+        return report;
+    }
+
+    /** Per-currency total of all balances plus funds reserved by resting orders. */
+    public TotalCurrencyBalance totalCurrencyBalance() {
+        final TotalCurrencyBalance total = new TotalCurrencyBalance();
+        engine.forEachBalance((uid, currency, balance) -> {
+            if (uid == DirectExchangeRisk.FEE_ACCOUNT_UID) {
+                total.addFee(currency, balance);
+            } else {
+                total.addAccountBalance(currency, balance);
+            }
+        });
+        engine.forEachOrder((symbolId, orderId, ask, price, size, filled, reserveBidPrice, uid, timestamp) -> {
+            final SymbolSpec spec = engine.symbolSpec(symbolId);
+            if (spec == null) {
+                return;
+            }
+            final long remaining = size - filled;
+            if (ask) {
+                total.addOrderHold(spec.baseCurrency(), DirectExchangeRisk.askHold(spec, remaining));
+            } else {
+                total.addOrderHold(spec.quoteCurrency(), DirectExchangeRisk.bidHold(spec, remaining, reserveBidPrice));
+            }
+        });
+        return total;
+    }
+
+    /** Deterministic fingerprint of the full replicated state. */
+    public long stateHash() {
+        return engine.stateHash();
+    }
+}

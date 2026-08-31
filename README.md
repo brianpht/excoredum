@@ -1,6 +1,6 @@
-# excoredum - Deterministic Spot Matching Engine
+# justrade - Deterministic Spot Matching Engine
 
-[![CI](https://github.com/brianpht/excoredum/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/brianpht/excoredum/actions/workflows/ci.yml)
+[![CI](https://github.com/brianpht/justrade/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/brianpht/justrade/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![JDK 21](https://img.shields.io/badge/JDK-21-blue.svg)](gradle.properties)
 [![Gradle](https://img.shields.io/badge/Gradle-8.10.2-green.svg)](gradle/wrapper/gradle-wrapper.properties)
@@ -18,7 +18,7 @@ exactly once even across retries and leader failover, and results must be
 reproducible for audit and reconciliation. The hot path must stay fast and
 predictable under load.
 
-excoredum solves this as a single deterministic state machine replicated by
+justrade solves this as a single deterministic state machine replicated by
 Aeron Cluster (Raft). The engine has no clock, no randomness, no floating
 point, and no unordered iteration: identical input logs produce byte-identical
 state and snapshots on every node and every rerun. Commands are idempotent by
@@ -75,13 +75,13 @@ example configurations set the required `--add-opens` JVM flags automatically.
 
 ```bash
 # Runnable example: in-process single-node cluster, prints every egress event
-./gradlew :exc-examples:run
+./gradlew :examples:run
 
 # Single-node localhost cluster
-./gradlew :exc-launcher:run
+./gradlew :launcher:run
 
 # Read replica following a member's archive (answers queries on port 44000)
-./gradlew :exc-read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
+./gradlew :read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
 ```
 
 The engine has no Aeron dependency, so it can be driven directly from a decoded
@@ -100,7 +100,7 @@ write load + read verify; exit 0 = all checks passed):
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-Multi-symbol (and other workload knobs) via env vars, e.g. `EXC_SYMBOLS=4`
+Multi-symbol (and other workload knobs) via env vars, e.g. `JUSTRADE_SYMBOLS=4`
 (see [Configuration](#configuration)).
 
 ## Configuration
@@ -108,15 +108,15 @@ Multi-symbol (and other workload knobs) via env vars, e.g. `EXC_SYMBOLS=4`
 Engine and ledger capacities are read at launch, not hardcoded, so a deployment
 can be sized without a rebuild:
 
-- `CoreConfig` capacities via `exc.core.*` properties (`ClusterLauncher`
+- `CoreConfig` capacities via `justrade.core.*` properties (`ClusterLauncher`
   `--config=<file>`, `ReadServiceLauncher` `--core-config=<file>`) or
-  `-Dexc.core.*` system properties.
-- Aeron ingress term length via `exc.aeron.termLength` (default `64k`).
+  `-Djustrade.core.*` system properties.
+- Aeron ingress term length via `justrade.aeron.termLength` (default `64k`).
 - Read-side ledger caps via `--ledger-max-orders-per-user` /
   `--ledger-max-market-trades` (defaults 4096 / 65536) and the verifiers'
   `--trade-limit` (default 4096).
 - Workload shape via `--ops` / `--users` / `--symbols` on the bench runners, or
-  `EXC_OPS` / `EXC_USERS` / `EXC_SYMBOLS` in the containerized / Ansible
+  `JUSTRADE_OPS` / `JUSTRADE_USERS` / `JUSTRADE_SYMBOLS` in the containerized / Ansible
   deployments.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#configuration) for the full
@@ -135,7 +135,7 @@ Indicative JMH numbers on x86_64 Linux, JDK 21 (steady state, zero allocation):
 | Journal emit (4 events)        | ~41.6 ns |
 
 Targets: decode < 100 ns, primitive-map lookup < 50 ns, end-to-end IPC p99.99
-< 50 us, hot-path allocation 0 bytes. The `exc-xcore-bench` module benchmarks
+< 50 us, hot-path allocation 0 bytes. The `xcore-bench` module benchmarks
 against upstream exchange-core 0.5.3 (replay parity, engine and e2e latency,
 JMH) - see [docs/BENCHMARKING-XCORE.md](docs/BENCHMARKING-XCORE.md).
 
@@ -173,17 +173,17 @@ term length `1m`, read ledger `maxMarketTrades = 2^21`. Workload: 5,000,000 ops
 
 | Module              | Responsibility                                                   |
 |---------------------|------------------------------------------------------------------|
-| `exc-protocol`      | SBE schema and generated flyweight codecs (wire contract only)   |
-| `exc-core`          | Deterministic engine: order book, risk, dedup, snapshot, journal, telemetry |
-| `exc-launcher`      | Aeron bootstrap: media driver, archive, consensus, container     |
-| `exc-write-client`  | Write-side SDK: leader-change handling, idempotent retry, egress events |
-| `exc-read`          | CQRS read replica and HA journal consumers (order ledger, trade tape) |
-| `exc-read-client`   | Read-side SDK over plain Aeron request/response streams          |
-| `exc-gateway`       | HTTP/JSON + WebSocket boundary over the read/write SDKs (REST, streaming; see [docs/GATEWAY.md](docs/GATEWAY.md)) |
-| `exc-bench`         | End-to-end latency harness (HdrHistogram tails)                  |
-| `exc-xcore-bench`   | Comparative benchmarks vs exchange-core 0.5.3                    |
-| `exc-examples`      | Runnable examples (in-process cluster + client SDK)              |
-| `exc-tests`         | Unit, property, integration, cluster, and fault suites           |
+| `protocol`      | SBE schema and generated flyweight codecs (wire contract only)   |
+| `core`          | Deterministic engine: order book, risk, dedup, snapshot, journal, telemetry |
+| `launcher`      | Aeron bootstrap: media driver, archive, consensus, container     |
+| `write-client`  | Write-side SDK: leader-change handling, idempotent retry, egress events |
+| `read`          | CQRS read replica and HA journal consumers (order ledger, trade tape) |
+| `read-client`   | Read-side SDK over plain Aeron request/response streams          |
+| `gateway`       | HTTP/JSON + WebSocket boundary over the read/write SDKs (REST, streaming; see [docs/GATEWAY.md](docs/GATEWAY.md)) |
+| `bench`         | End-to-end latency harness (HdrHistogram tails)                  |
+| `xcore-bench`   | Comparative benchmarks vs exchange-core 0.5.3                    |
+| `examples`      | Runnable examples (in-process cluster + client SDK)              |
+| `tests`         | Unit, property, integration, cluster, and fault suites           |
 
 Details - wire and snapshot formats, data flows, determinism rules, and
 order-book semantics - live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

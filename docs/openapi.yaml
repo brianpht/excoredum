@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: exc-gateway HTTP/JSON API
+  title: gateway HTTP/JSON API
   version: 1.0.0
   description: |
     The HTTP/JSON + WebSocket boundary in front of the deterministic CQRS spot

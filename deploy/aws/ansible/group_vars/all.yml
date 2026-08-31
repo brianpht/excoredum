@@ -4,7 +4,7 @@
 # inventory.sh into hosts.ini [all:vars], not here.
 
 base_dir: /data
-install_dir: /opt/excoredum
+install_dir: /opt/justrade
 clean_start: "true"
 metrics_interval_ms: "5000"
 
@@ -19,9 +19,9 @@ load_batch: "64"
 
 # Tuning knobs for the JVM and the engine / ledger capacities. An empty value
 # means "use the compiled-in default" (the bin scripts fall back when the env
-# var is empty or unset). The EXC_CORE_* engine capacities follow the same
-# convention (e.g. EXC_CORE_SYMBOL_CAPACITY, EXC_CORE_ORDER_POOL_CAPACITY,
-# EXC_CORE_JOURNAL_SLOT_COUNT); add them to nodes.yml / read.yml service_env
+# var is empty or unset). The JUSTRADE_CORE_* engine capacities follow the same
+# convention (e.g. JUSTRADE_CORE_SYMBOL_CAPACITY, JUSTRADE_CORE_ORDER_POOL_CAPACITY,
+# JUSTRADE_CORE_JOURNAL_SLOT_COUNT); add them to nodes.yml / read.yml service_env
 # when a run needs to raise them.
 node_java_opts: "-Xms4g -Xmx4g -XX:+UseZGC"
 read_java_opts: "-Xms4g -Xmx4g -XX:+UseZGC"
