@@ -159,7 +159,7 @@ public final class ReadPump implements AutoCloseable {
                 }
             });
         } catch (final BackpressureException e) {
-            submit.result().completeExceptionally(ApiException.conflict("read in-flight window full"));
+            submit.result().completeExceptionally(new ApiException(429, "read in-flight window full"));
         } catch (final Throwable t) {
             submit.result().completeExceptionally(ApiException.server("query submit failed: " + t.getMessage()));
         }

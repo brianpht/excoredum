@@ -997,6 +997,11 @@ components:
           format: int64
     WsL2:
       type: object
+      description: >-
+        An L2 book frame carries exactly one source marker: commandIdLo for an
+        egress snapshot answering an ORDER_BOOK_REQUEST placed through this
+        gateway, appliedPosition for a MarketPump snapshot read from the read
+        replica. Subscribers parse type/symbolId/asks/bids uniformly.
       properties:
         type:
           type: string
@@ -1004,9 +1009,14 @@ components:
         symbolId:
           type: integer
           format: int32
+        commandIdLo:
+          type: integer
+          format: int64
+          description: Present only on egress-snapshot frames.
         appliedPosition:
           type: integer
           format: int64
+          description: Present only on MarketPump frames.
         asks:
           type: array
           items:

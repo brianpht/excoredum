@@ -27,10 +27,6 @@ public final class ApiException extends RuntimeException {
         return new ApiException(404, message);
     }
 
-    public static ApiException conflict(final String message) {
-        return new ApiException(409, message);
-    }
-
     public static ApiException timeout(final String message) {
         return new ApiException(504, message);
     }

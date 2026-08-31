@@ -157,8 +157,19 @@ by symbol; the gateway broadcasts to all subscribers. Event types:
 | `TRADE`      | `commandIdLo`, `eventIndex`, `symbolId`, `makerOrderId`, `makerUid`, `takerUid`, `price`, `size`, `makerCompleted` | `ExcClient` egress (write pump) |
 | `REDUCE`     | `commandIdLo`, `eventIndex`, `symbolId`, `orderId`, `uid`, `reducedBy`, `price`, `completed` | `ExcClient` egress |
 | `REJECT`     | `commandIdLo`, `eventIndex`, `symbolId`, `orderId`, `uid`, `rejectedSize`, `price` | `ExcClient` egress |
-| `L2`         | `symbolId`, `appliedPosition`, `asks[]`, `bids[]` (`{price, size, orders}`)      | egress snapshot or `MarketPump` |
+| `L2`         | `symbolId`, `asks[]`, `bids[]` (`{price, size, orders}`), plus one source marker (below) | egress snapshot or `MarketPump` |
 | `MARKET_TAPE`| `symbolId`, `trades[]` (`{timestamp, price, size, makerOrderId, makerUid, takerUid}`) | `MarketPump` |
+
+`L2` frames carry exactly one source marker, depending on origin:
+
+- egress snapshot (answer to an `ORDER_BOOK_REQUEST` placed through this
+  gateway): `commandIdLo` - correlates the book to the requesting command;
+  the write side has no replica position, so no `appliedPosition`.
+- `MarketPump`: `appliedPosition` - the read replica position the book was
+  read at; there is no command to correlate.
+
+Subscribers should parse `type` + `symbolId` + `asks` / `bids` uniformly and
+treat `commandIdLo` / `appliedPosition` as optional markers.
 
 `MarketPump` polls `orderBook` + `marketTrades` for each config symbol on an
 interval and publishes `L2` / `MARKET_TAPE` snapshots, so market-wide updates
