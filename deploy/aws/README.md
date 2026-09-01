@@ -6,6 +6,10 @@ benchmark modes against a real multi-node cluster:
 - **Distributed cluster load test** - `ExternalLoadRunner` drives the
   deterministic `LoadWorkload` through the write client SDK and reports
   throughput, latency tails, and session stats.
+- **exchange-core workload benchmark** - `XcoreWorkloadRunner` replays the
+  upstream exchange-core `TestOrdersGenerator` mix (single symbol, 9% GTC / 3%
+  IOC / 6% cancel / 82% move) through the write client SDK, with throughput,
+  latency, and hiccups modes.
 - **Gateway HTTP/WS end-to-end** - `GatewayBenchRunner` drives the same
   workload through the REST/WebSocket gateway and cross-checks the replicated
   state on every read endpoint.
@@ -131,6 +135,34 @@ ansible-playbook playbooks/run-gateway-bench.yml
 Each runner prints throughput, latency `p50/p99/p99.9/max`, and a `PASS`/`FAIL`
 line.
 
+## 5b. Run the exchange-core workload benchmark
+
+`XcoreWorkloadRunner` replays the upstream exchange-core `TestOrdersGenerator`
+mix (single symbol, 9% GTC / 3% IOC / 6% cancel / 82% move) through the write
+client SDK, so the measured shape matches exchange-core's published benchmark
+rather than the synthetic `LoadWorkload`. Tune the run with the `xcore_*`
+knobs in `group_vars/all.yml`.
+
+Three modes:
+
+| `xcore_mode` | Shape | Output |
+|--------------|-------|--------|
+| `throughput` | closed-loop | ops/s + `p50/p90/p95/p99/p99.9/p99.99/worst` |
+| `latency`    | open-loop at `xcore_rate` ops/s | one latency-table row |
+| `hiccups`    | closed-loop + pause detector | ops/s + max observed pause |
+
+```bash
+ansible-playbook playbooks/run-xcore-bench.yml
+```
+
+The workload is stateful, so every invocation needs a clean cluster
+(`ansible-playbook playbooks/fresh-cluster.yml` first). A latency sweep is one
+invocation per target rate on a fresh cluster; collect the per-rate rows into a
+table. The default run is 3M commands / 1000 users / 1000 target orders on a
+single symbol. The measurement is end-to-end (network + consensus + replication
++ archive on the path), so it is not comparable to exchange-core's
+matching-only latency table; read the gap as the price of strong consistency.
+
 ## 6. Collect metrics
 
 - **Application** (runners, `journalctl -u justrade` on each instance):
@@ -161,10 +193,10 @@ terraform -chdir=deploy/aws/terraform destroy
   (concurrency 1). Use `k6`/`wrk` against the gateway for raw HTTP throughput.
 - **Determinism**: keep `clean_start = true` for a fresh cluster; a warm
   restart (`clean_start = false`) reuses state and changes the measured window.
-- **Fresh cluster per benchmark**: the load and gateway runners each run their
-  own setup (add symbol + users + balances) and are not idempotent - re-running
-  one after the other against the same cluster fails with `DUPLICATE`. Reset
-  the cluster between runs with
+- **Fresh cluster per benchmark**: the load, xcore, and gateway runners each run
+  their own setup (add symbol + users + balances) and are not idempotent -
+  re-running one after the other against the same cluster fails with
+  `DUPLICATE`. Reset the cluster between runs with
   `ansible-playbook playbooks/fresh-cluster.yml` (stops every service, wipes
   the node data directory, and restarts the nodes with `clean_start = true`
   before bringing the read replica and gateway back up) or run each benchmark

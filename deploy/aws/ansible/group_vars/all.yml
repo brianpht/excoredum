@@ -19,6 +19,24 @@ load_client_id: "1"
 load_profile: "throughput"
 load_batch: "128"
 
+# Exchange-core workload benchmark (XcoreWorkloadRunner via xcore-load.sh).
+# Replays the upstream TestOrdersGenerator mix (single symbol, 9% GTC / 3% IOC /
+# 6% cancel / 82% move). xcore_mode: throughput (closed-loop) | latency
+# (open-loop at xcore_rate ops/s) | hiccups (closed-loop + pause detector). The
+# latency mode measures one rate per invocation; sweep several rates on fresh
+# clusters (fresh-cluster.yml between runs). The workload is stateful, so each
+# run needs a clean cluster.
+xcore_mode: "throughput"
+xcore_ops: "3000000"
+xcore_target_orders: "1000"
+xcore_users: "1000"
+xcore_seed: "1"
+xcore_batch: "128"
+xcore_rate: "25000"
+xcore_client_id: "2"
+xcore_retry_backoff_ms: "2000"
+xcore_java_opts: ""
+
 # Tuning knobs for the JVM and the engine / ledger capacities. An empty value
 # means "use the compiled-in default" (the bin scripts fall back when the env
 # var is empty or unset). The JUSTRADE_CORE_* engine capacities follow the same

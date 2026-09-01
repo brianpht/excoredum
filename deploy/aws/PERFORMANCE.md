@@ -131,3 +131,76 @@ Rules of thumb for the 5M-op / 256-symbol / 5000-user workload:
 - `orderPoolExhaustions` / `priceBucketPoolExhaustions` in the node metrics
   show the resting book outgrowing the default pools at this scale; the engine
   grows on the cold path, and a `justrade.core.*` override removes that.
+
+## Exchange-core workload benchmark
+
+`XcoreWorkloadRunner` replays the upstream exchange-core `TestOrdersGenerator`
+mix (single symbol, 9% GTC / 3% IOC / 6% cancel / 82% move, 1000 users, ~1000
+resting orders in ~750 price slots) through the write client SDK against a real
+3-node cluster. The workload is generated in-memory from a seed (the same
+parity-tested generator the `xcore-bench` `book` mode cross-validates), and the
+runner verifies every command succeeds and the egress fills match the
+matching-only reference replay. This is the justrade counterpart of
+exchange-core's published single-symbol benchmark, measured end-to-end rather
+than matching-only.
+
+Because the runner measures full end-to-end (network + consensus + replication
++ archive), the achievable rates are far below exchange-core's 5M ops/s
+matching-only ceiling; the justrade cluster tops out around 141k ops/s
+(see the throughput row above). A latency sweep therefore targets rates in the
+1k-125k range, and each rate is a separate invocation on a fresh cluster.
+
+### Run settings
+
+| Knob | Where | Default | Notes |
+|------|-------|---------|-------|
+| `xcore_mode` | `group_vars/all.yml` | `throughput` | `throughput` / `latency` / `hiccups` |
+| `xcore_ops` | `group_vars/all.yml` | `3000000` | benchmark-phase command count |
+| `xcore_target_orders` | `group_vars/all.yml` | `1000` | fill-phase order count |
+| `xcore_users` | `group_vars/all.yml` | `1000` | user count |
+| `xcore_batch` | `group_vars/all.yml` | `128` | closed-loop drain depth |
+| `xcore_rate` | `group_vars/all.yml` | `25000` | latency-mode target ops/s |
+| `xcore_client_id` | `group_vars/all.yml` | `2` | distinct from `load_client_id` |
+| `xcore_retry_backoff_ms` | `group_vars/all.yml` | `2000` | keep above the observed tail |
+
+The engine capacities come from `CoreConfig` as in the `LoadWorkload` section;
+the single-symbol exchange-core workload stays well inside the defaults
+(1000 users, ~1000 resting orders), so no `justrade.core.*` override is needed
+for the default run.
+
+### Results
+
+Recorded 2026-09-01 on a 3-node `c6i.xlarge` cluster (cluster placement group,
+`ap-southeast-1a`) with a `c6i.xlarge` load generator. Workload: 3M benchmark
+commands + 1000 fill orders, 1000 users, single symbol; benchmark-phase mix
+placeLimit=370,816 / placeMarket=56,798 / cancel=213,363 / move=2,127,465 /
+reduce=213,613. Every run: 3,004,001 commands, 0 rejects, fills=121,590 and
+volume=1,065,552 - an exact match to the matching-only reference replay, which
+confirms the full-risk engine reproduces the parity-tested outcome.
+
+| mode | target ops/s | achieved ops/s | p50 | p90 | p95 | p99 | p99.9 | p99.99 | worst | backpressure |
+|------|-------------:|---------------:|-----|-----|-----|-----|-------|--------|-------|-------------:|
+| throughput | - (saturated) | 183,353 | 498us | 630us | 698us | 1135us | 5112us | 21742us | 155845us | 40 |
+| latency | 25,000 | 25,000 | 361us | 441us | 481us | 561us | 6967us | 33210us | 84541us | 3,056 |
+| latency | 50,000 | 50,000 | 281us | 361us | 581us | 4477us | 12665us | 17891us | 84083us | 7,120 |
+| latency | 100,000 | 100,000 | 551us | 6054us | 7471us | 11280us | 69992us | 120193us | 122094us | 414,576 |
+| hiccups | - | 166,215 | 505us | 649us | 731us | 2187us | 7225us | 18842us | 113377us | 40 |
+
+Notes:
+
+- The single-symbol exchange-core workload reaches ~183k ops/s at saturation,
+  above the 256-symbol `LoadWorkload` ceiling (~141k ops/s), because one symbol
+  has far less book contention.
+- Latency is best at the shallow 25k-50k rates (p50 ~280-360us) and degrades
+  sharply past 100k ops/s as the cluster approaches its saturation ceiling
+  (p99.9 ~70ms at 100k). The `backpressure` column is the runner's in-flight
+  window filling; it grows with the target rate but causes no failures
+  (`retransmits=0`, all commands `SUCCESS`).
+- The hiccups mode measured a 0.267ms worst client-side pause (GC / scheduling)
+  over 604M clock samples during the 18s run; this is the load generator's
+  pause, not the cluster node's. Node-side pauses come from the node's own
+  snapshot/GC metrics (`snapshotWriteMs` and `-Xlog:gc*`), not this detector.
+- These numbers are end-to-end (network + consensus + replication + archive),
+  so they are not comparable to exchange-core's matching-only latency table
+  (p50 ~0.6us at 125K ops/s on tuned bare metal). The gap is the price of
+  strong consistency, reported deliberately.

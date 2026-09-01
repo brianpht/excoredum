@@ -163,8 +163,20 @@ Indicative JMH numbers on x86_64 Linux, JDK 21 (steady state, zero allocation):
 | Full dispatch (place + cancel) | ~84 ns       |
 
 Targets: decode < 100 ns, primitive-map lookup < 50 ns, end-to-end IPC p99.99
-< 50 us, hot-path allocation 0 bytes. A deployed 3-node AWS cluster sustained
-141k ops/s at p99 3.9 ms end-to-end.
+< 50 us, hot-path allocation 0 bytes.
+
+Deployed 3-node AWS cluster (`c6i.xlarge`, end-to-end including consensus +
+replication + archive):
+
+| Workload                                    | Throughput | p50    | p99    | p99.99  |
+|---------------------------------------------|-----------:|-------:|-------:|--------:|
+| `LoadWorkload` (256 symbols, 5000 users)    | 141k ops/s | 565 us | 3.9 ms | -       |
+| exchange-core workload (1 symbol, 1000 users) | 183k ops/s | 498 us | 1.1 ms | 21.7 ms |
+
+The exchange-core workload (single symbol, 3M commands, 9% GTC / 3% IOC / 6%
+cancel / 82% move) also reports a latency table: p50 281-551 us from 25k to
+100k ops/s. These are end-to-end figures; the matching-only hot path is orders
+of magnitude faster (see the JMH rows above).
 
 - Budget: [docs/decisions/performance-budget.md](docs/decisions/performance-budget.md).
 - exchange-core parity and methodology: [docs/BENCHMARKING-XCORE.md](docs/BENCHMARKING-XCORE.md).

@@ -1,0 +1,31 @@
+---
+# Run the exchange-core TestOrdersGenerator workload against the deployed
+# cluster and print the result. One invocation measures one mode (and, for
+# latency mode, one target rate); sweep several latency rates by running this
+# playbook once per rate on a fresh cluster (fresh-cluster.yml between runs).
+# The workload is stateful, so every invocation needs a clean cluster.
+- name: Run exchange-core workload benchmark
+  hosts: load
+  become: true
+  environment:
+    JUSTRADE_ENDPOINTS: "{{ ingress_endpoints }}"
+    JUSTRADE_MODE: "{{ xcore_mode }}"
+    JUSTRADE_OPS: "{{ xcore_ops }}"
+    JUSTRADE_TARGET_ORDERS: "{{ xcore_target_orders }}"
+    JUSTRADE_USERS: "{{ xcore_users }}"
+    JUSTRADE_SEED: "{{ xcore_seed }}"
+    JUSTRADE_BATCH: "{{ xcore_batch }}"
+    JUSTRADE_CLIENT_ID: "{{ xcore_client_id }}"
+    JUSTRADE_RATE: "{{ xcore_rate }}"
+    JUSTRADE_RETRY_BACKOFF_MS: "{{ xcore_retry_backoff_ms }}"
+    JUSTRADE_JAVA_OPTS: "{{ xcore_java_opts }}"
+  tasks:
+    - name: Run XcoreWorkloadRunner (blocks until done)
+      ansible.builtin.command:
+        cmd: "{{ install_dir }}/bin/xcore-load.sh"
+      register: bench
+      changed_when: false
+
+    - name: Xcore benchmark output
+      ansible.builtin.debug:
+        msg: "{{ bench.stdout }}"
