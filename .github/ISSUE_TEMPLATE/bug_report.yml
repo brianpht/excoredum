@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a defect in the engine, consensus, journaling, SDKs, or gateway
+title: "[bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. For anything security-related,
+        do not use this form; follow the policy in SECURITY.md instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps, commands, or a minimal test / recorded command sequence.
+      placeholder: |
+        1. Run '...'
+        2. Submit command '...'
+        3. Observe '...'
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      multiple: true
+      options:
+        - core (engine / order book / risk / settlement)
+        - launcher (cluster / consensus / archive)
+        - read (CQRS replica / journal consumer)
+        - protocol (SBE wire format)
+        - write-client
+        - read-client
+        - gateway (HTTP / WebSocket)
+        - bench / xcore-bench
+        - build / CI / docs
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Correctness or determinism impact
+      options:
+        - None observed
+        - Incorrect settlement or value conservation
+        - Determinism break (nodes or replays diverge)
+        - Exactly-once violation (command applied twice or lost)
+        - Latency or allocation regression
+        - Crash / availability
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: JDK version, OS, commit hash or release tag, deployment shape.
+      placeholder: |
+        JDK: 21.x
+        OS: Linux ...
+        Commit / tag:
+        Topology: single-node / 3-node cluster / docker-compose / AWS
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: Relevant logs, stack traces, or benchmark output. Will be formatted as code.
+      render: shell

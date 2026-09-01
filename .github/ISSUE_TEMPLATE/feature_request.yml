@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest an enhancement or new capability
+title: "[feat]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check that your request fits the current scope: a single-region,
+        non-sharded spot exchange (direct-exchange spot risk, one order book per
+        symbol, single cluster membership). Margin, sharding, and multi-region
+        are out of scope for now.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and why is it hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or API you would like.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      multiple: true
+      options:
+        - core (engine / order book / risk / settlement)
+        - launcher (cluster / consensus / archive)
+        - read (CQRS replica / journal consumer)
+        - protocol (SBE wire format)
+        - write-client
+        - read-client
+        - gateway (HTTP / WebSocket)
+        - bench / xcore-bench
+        - build / CI / docs
+    validations:
+      required: true
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints acknowledgement
+      options:
+        - label: This does not require nondeterminism, locks, or per-event allocation on the hot path.
+          required: false
+        - label: I am willing to help implement or test this.
+          required: false
