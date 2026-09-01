@@ -32,8 +32,25 @@ Business logic lives in `MatchingEngine` (no Aeron dependency, unit/replay
 testable in isolation). `MatchingService` is the Aeron boundary: decode,
 dedup, dispatch, ACK, egress events, journal emission, snapshots.
 
-See `docs/ARCHITECTURE.md` for the component map, wire and snapshot formats,
-data flows, determinism rules, and order-book semantics.
+See [docs/README.md](docs/README.md) for the full documentation hub. The
+architectural source of truth is [docs/decisions](docs/decisions/README.md)
+(ADRs); [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) holds the component map,
+wire and snapshot formats, data flows, determinism rules, and order-book
+semantics.
+
+## Documentation
+
+- [Documentation hub](docs/README.md) - index by role (trader, developer,
+  systems engineer, operator, contributor).
+- [Architecture](docs/ARCHITECTURE.md) - authoritative design reference.
+- [Architecture Decision Records](docs/decisions/README.md) - architectural
+  source of truth; the performance budget and per-service targets live here.
+- [Concepts](docs/concepts/README.md) - exchange 101, order types, risk/fees,
+  order-book matching, determinism/consensus, CQRS read path.
+- [Getting started](docs/getting-started.md), [API usage](docs/API-USAGE.md),
+  [OpenAPI contract](docs/openapi.yaml), [Gateway](docs/GATEWAY.md).
+- [Benchmarking vs exchange-core](docs/BENCHMARKING-XCORE.md),
+  [Glossary](docs/GLOSSARY.md).
 
 ## Tech Stack
 
@@ -75,6 +92,9 @@ configs set them automatically.
 ### Running services
 
 ```bash
+# In-process single-node cluster, prints every egress event
+./gradlew :examples:run
+
 # Single-node localhost cluster
 ./gradlew launcher:run
 
@@ -86,7 +106,24 @@ configs set them automatically.
 
 # CQRS read replica following a member's archive
 ./gradlew read:run --args="--archive=aeron:udp?endpoint=localhost:20104"
+
+# Full local stack: N-node cluster + read replica + gateway (:8080)
+./scripts/justrade-dev.sh start   # then seed / bench / stop / status
 ```
+
+### Deployment and ops
+
+- **Local dev stack** - `./scripts/justrade-dev.sh {start|stop|restart|status|seed|bench}`
+  starts an N-node Raft cluster + CQRS read replica + HTTP/WebSocket gateway,
+  tunable via `JUSTRADE_*` env vars (nodes, ports, symbols, currencies).
+- **Docker** - `docker compose -f docker/docker-compose.yml up --build` runs the
+  containerized end-to-end system test (3-node cluster + read replica + load
+  + verify); exit code 0 means every check passed.
+- **AWS** - `deploy/aws/` provisions a throwaway benchmark environment with
+  Terraform + Ansible (`build-artifacts.sh`, then `terraform apply`, then
+  `ansible-playbook playbooks/deploy.yml`). No S3 / IAM role required. See
+  `deploy/aws/README.md` and `deploy/aws/PERFORMANCE.md` for sizing and
+  recorded numbers.
 
 ### Testing
 
@@ -117,6 +154,7 @@ Note: `check` (and therefore `build`) depends on `integrationTest`,
 ./gradlew core:jmh -PquickBench       # fast smoke run (CI gate)
 ./gradlew core:jmh -Pjmh.profilers=gc # attach GC/allocation profiler
 ./gradlew bench:run --args="--warmup=5000 --ops=20000"  # end-to-end RT latency
+python3 scripts/jmh-regression.py     # quickBench + fail on >10% regression vs baseline
 ```
 
 ### Pre-commit gate (must pass in this order)
@@ -182,6 +220,8 @@ branch entropy are rejected. On the hot path:
   generated sources drop `-Werror`.
 - ErrorProne + NullAway are opt-in via `-PwithErrorProne` (report-only until
   triaged clean).
+- Supply-chain scan: OWASP dependency-check (`dependencyCheck` task) runs on
+  demand and nightly, not the fast PR gate; fails on CVSS >= 7.0.
 - ASCII only: no em-dashes or emojis in code comments, Javadoc, or markdown
   (use ` - `). Diagrams must be Mermaid, not ASCII art.
 
