@@ -66,9 +66,10 @@ This delivery covers the direct-exchange (spot) risk mode with maker / taker fee
 order types GTC / IOC / FOK-BUDGET, order operations PLACE / CANCEL / MOVE /
 REDUCE, account operations ADD_USER / BALANCE_ADJUSTMENT / ADD_SYMBOL /
 SUSPEND_USER / RESUME_USER, the RESET / NOP admin commands, a network query
-protocol for read replicas (`QueryRequest` / `QueryResponse`, schema version 4),
-and a highly-available domain event journal on the Aeron Archive. Margin trading
-and symbol / user sharding are out of scope for now.
+protocol for read replicas (`QueryRequest` / `QueryResponse`, added at schema
+version 4; the wire schema is now at version 5), and a highly-available domain
+event journal on the Aeron Archive. Margin trading and symbol / user sharding
+are out of scope for now.
 
 ---
 
@@ -323,7 +324,11 @@ not counted), `ReduceEvent.price` / `ReduceEvent.orderCompleted` (resting price;
 whether the order was fully removed), and `RejectEvent.price` (the active order
 price, or the budget for FOK-BUDGET). Schema version 4 added the read-side query
 protocol: `QueryRequest` (id 60) and `QueryResponse` (id 61) with the `QueryType`
-and `QueryStatusCode` enums, plus `QueryResponse.history.placedTimestamp`.
+and `QueryStatusCode` enums, plus `QueryResponse.history.placedTimestamp`. Schema
+version 5 (the current version) added the optional 32-bit extension fields
+`CommandResult.eventCountExt` and `eventIndexExt` on `TradeEvent` / `ReduceEvent`
+/ `RejectEvent`, carrying the full count / intra-command index when it exceeds
+the original `uint16` ceiling.
 Enums: `OrderCommandType`, `OrderAction`, `OrderType`, `MatcherEventType`,
 `CommandResultCode`, `QueryType`, `QueryStatusCode`.
 
@@ -379,7 +384,7 @@ snapshots, and per-command trade grouping) on top of an Aeron cluster client.
 | Component               | Responsibility                                                    |
 |-------------------------|-------------------------------------------------------------------|
 | `WriteClient`             | Async submit / poll: resend on leader change, correlate results by command id, decode every egress frame, group fills per command, idle keepalives, session recovery |
-| `ClientConfig`          | Immutable client configuration (endpoints, timeouts, retry, in-flight window); defaults: 30 s message timeout, 250 ms retry backoff, `maxRetries` 0 (retry indefinitely), 1024 in flight, 2 s keepalive |
+| `ClientConfig`          | Immutable client configuration (endpoints, timeouts, retry, in-flight window); defaults: 30 s message timeout, 2 s retry backoff, `maxRetries` 0 (retry indefinitely), 1024 in flight, 2 s keepalive |
 | `ResultHandler`         | Callback invoked when a `CommandResult` correlates to a request; `onExpired` fires when the retry budget is exhausted so no command is silently dropped |
 | `TradeEventListener`    | Callback invoked per fill when a `TradeEvent` is delivered on egress |
 | `ReduceEventListener`   | Callback invoked when a `ReduceEvent` is delivered on egress       |

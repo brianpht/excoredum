@@ -39,7 +39,7 @@ concept guides; if you know exchanges already, jump to architecture or the API.
 
 ### I want to deploy it (operator)
 
-- [Docker Compose](../docker/docker-compose.yml) and
+- [Docker end-to-end test](../docker/README.md) and
   [AWS (Terraform + Ansible)](../deploy/aws/README.md) - deployment targets.
 - [Getting started](getting-started.md#configuration) - launch options and
   capacities.

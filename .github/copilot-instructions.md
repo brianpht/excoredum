@@ -10,18 +10,41 @@ If a change increases latency variance, allocation count in hot path, GC pressur
 
 ## Workspace
 
-- `src/main/java/.../config/` - system configuration (preallocated capacities, tuning knobs, idle strategies)
-- `src/main/java/.../transport/` - network and IPC transport (Aeron publication/subscription, channels)
-- `src/main/java/.../codec/` - wire format encoders/decoders (SBE flyweights, zero-copy buffers)
-- `src/main/java/.../core/` - domain logic, single-writer event loops, deterministic state machines
-- `src/main/java/.../collections/` - primitive collection wrappers and pools (Agrona-based)
-- `src/main/java/.../pipeline/` - Disruptor / ring buffer pipelines (claim, publish, consume stages)
-- `src/main/java/.../persistence/` - event recording, replay, snapshotting (Aeron Archive when applicable)
-- `src/main/java/.../cluster/` - replicated services, consensus, failover (Aeron Cluster when applicable)
-- `src/main/java/.../telemetry/` - off-heap counters, HdrHistogram, distinct error log
-- `src/main/java/.../util/` - clock abstraction, id generation, idle strategies, thread affinity
-- `src/test/java/...` - unit, integration, deterministic replay tests
-- `src/jmh/java/...` - JMH micro-benchmarks (codec, ring buffer, map ops, end-to-end)
+Gradle multi-module build (11 modules), base package `io.justrade`. Modules:
+`protocol`, `core`, `launcher`, `write-client`, `read`, `read-client`,
+`gateway`, `tests`, `examples`, `bench`, `xcore-bench`.
+
+- `protocol/` - SBE wire and snapshot contract (`messages.xml`, generated
+  flyweight codecs, `QueryStreams`); the only hand-written class is `QueryStreams`
+- `core/` - the deterministic engine and its host, no network I/O in the engine:
+    - `io.justrade.config` - `CoreConfig` (preallocated capacities, tuning knobs)
+    - `io.justrade.engine` - `MatchingEngine` state machine; `.orderbook`
+      (`OrderBookNaive`, `OrderNodePool`, `PriceBucketPool`, `L2View`),
+      `.handlers` (account ops), `.risk` (`DirectExchangeRisk`, `SymbolSpecStore`)
+    - `io.justrade.core` - `MatchingService` (Aeron `ClusteredService` host)
+    - `io.justrade.collections` - primitive stores / pools (`AccountStore`,
+      `DedupRing`, `DedupTable`), Agrona-based
+    - `io.justrade.journal` + `io.justrade.snapshot` - domain event journal
+      (hand-rolled `EventJournalRing`) and snapshot recording / replay
+    - `io.justrade.telemetry` - off-heap counters (`CoreMetrics`, `AtomicCounterSink`)
+    - `io.justrade.util` - shared helpers (`Amounts`)
+    - `core/src/jmh/...` - JMH micro-benchmarks (codec, book, engine)
+- `launcher/` - cluster-node bootstrap and consensus (`ClusterLauncher` main,
+  `ClusterNode`, `ClusterConfig`, `EventJournalRecorder`), Aeron Cluster (Raft)
+- `write-client/` - edge write SDK over `AeronCluster` (`WriteClient`, `ClientConfig`)
+- `read/` - CQRS read replica (`ReadServiceLauncher` main, `ReadReplica`,
+  `QueryResponder`, ledger / report projections); consumes the committed log / archive
+- `read-client/` - read query SDK (`ReadClient`) over plain Aeron request/response
+- `gateway/` - HTTP/WebSocket REST boundary (Netty; `GatewayLauncher`, port 8080)
+- `bench/` - end-to-end load / latency harness (`BenchHarness`, HdrHistogram)
+- `xcore-bench/` - parity + latency comparison vs `exchange-core` 0.5.3
+- `examples/` - runnable direct-drive example (`QuickStartExample`)
+- `tests/` - cross-module integration / replay tests, JaCoCo coverage aggregation
+
+Note: there is no Disruptor dependency; inter-stage buffering uses Agrona ring
+buffers and the bespoke `EventJournalRing`. Wire codecs live in `protocol`
+(SBE), persistence in `core`'s `journal` / `snapshot` plus Aeron Archive, and
+clustering in `launcher` plus `MatchingService implements ClusteredService`.
 
 ## Hot Path Operations
 
@@ -64,7 +87,7 @@ Requirements: allocation-free, O(1) where possible, cache-local, branch predicta
 ## Rules: Concurrency
 
 - Single-writer principle: each mutable resource owned by exactly one thread
-- USE Disruptor `RingBuffer` or Agrona `OneToOneRingBuffer` / `ManyToOneRingBuffer` for inter-thread messaging
+- USE Agrona `OneToOneRingBuffer` / `ManyToOneRingBuffer` or the bespoke `EventJournalRing` for inter-thread messaging (no Disruptor dependency in this repo)
 - USE Agrona `Agent` + `AgentRunner` pattern - one event loop per pinned core
 - NEVER cross threads with mutable POJO references - copy via flyweight into ring buffer slot
 - NEVER use `BlockingQueue`, `LinkedBlockingQueue`, `ArrayBlockingQueue` in hot path
@@ -90,7 +113,7 @@ Requirements: allocation-free, O(1) where possible, cache-local, branch predicta
 ## Rules: Cache, Layout, and Branches
 
 - Hot objects: prefer `<= 64 bytes` payload, place hot fields first
-- Pad volatile/atomic fields to 64-byte cache line to prevent false sharing (Disruptor `Sequence` pattern)
+- Pad volatile/atomic fields to 64-byte cache line to prevent false sharing (cache-line padding pattern)
 - Hot path: fast/common branch first, error/cold branch in separate `private` method
 - Mark cold methods small so JIT keeps them out of inlined hot path
 - NO pointer chasing on hot path - flatten data structures, use indices into preallocated arrays
@@ -110,11 +133,11 @@ Requirements: allocation-free, O(1) where possible, cache-local, branch predicta
 ## Rules: Sequence Arithmetic and Ring Buffer
 
 - ALWAYS treat sequence numbers as wrapping unsigned semantics
-- USE Disruptor `Sequence` / Agrona helpers for sequence comparisons
+- USE Agrona sequence helpers / `VarHandle` accessors for sequence comparisons
 - Ring buffer capacity: power-of-two ONLY
 - Index: `sequence & (capacity - 1)` - NEVER `sequence % capacity`
-- Producer claim: `RingBuffer.next()` then `publish(seq)` in `try/finally` - publish MUST happen
-- Consumer: batch via `EventPoller` or `BatchEventProcessor` - process in batches when available
+- Producer: Agrona `tryClaim(...)` then `commit(index)` (or `write(...)`) - the commit MUST happen
+- Consumer: drain in batches via Agrona `RingBuffer.read(handler, limit)` or the `EventJournalRing` poller
 - NEVER block inside event handler - if downstream slow, apply backpressure via gating sequence
 
 ## Rules: Domain State

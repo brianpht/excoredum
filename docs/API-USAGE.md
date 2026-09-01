@@ -26,8 +26,9 @@ under `/tmp/justrade`; `stop` tears the stack down.
 - Read and trading endpoints need **no** auth header.
 - Admin endpoints (`/symbols`, `/users`, `/users/{uid}/balance`,
   `/users/{uid}/suspend`, `/users/{uid}/resume`) require the `X-User-Id` header
-  to carry a uid listed in `gateway.admin.uids` (default `1,2,811`). A missing
-  header is `400`; a uid not in the allow-list is `403`.
+  to carry a uid listed in `gateway.admin.uids` (empty by default; the dev script
+  and AWS deployment set it to `1,2,811`). A missing header is `400`; a uid not
+  in the allow-list is `403`.
 - When `gateway.admin.apiKey` is configured, admin endpoints also require a
   matching `X-Api-Key` header (missing/invalid is `401`). The examples below
   assume `gateway.admin.apiKey=change-me`.

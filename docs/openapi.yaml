@@ -424,7 +424,7 @@ components:
       type: apiKey
       in: header
       name: X-User-Id
-      description: A uid listed in `gateway.admin.uids` (default 1,2,811).
+      description: A uid listed in `gateway.admin.uids` (empty by default; the dev script and AWS deployment set it to 1,2,811).
   parameters:
     uidPath:
       name: uid

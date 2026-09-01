@@ -15,8 +15,9 @@ plain Aeron request/response protocol, all without touching consensus.
 
 ## Key classes
 
-- [ReadReplica.java](src/main/java/io/justrade/read/ReadReplica.java) - entry
-  point; runs the follower and query responder.
+- [ReadServiceLauncher.java](src/main/java/io/justrade/read/ReadServiceLauncher.java) -
+  entry point (`:read:run` main class); wires and runs the replica.
+- `ReadReplica` - the follower core; drives log consumption and query responses.
 - `LiveLogSubscriber` - consumes the committed log / journal.
 - `QueryResponder` - serves queries over Aeron.
 - `order/OrderLedger` - per-user order history projection.
