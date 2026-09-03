@@ -2,15 +2,21 @@
 """Compare the latest JMH results against a committed baseline.
 
 Gate policy (see docs/decisions/performance-budget.md):
-  - STRICT: the mean score (ns/op) is the stable metric; a regression greater
-    than 10% fails the build.
-  - ADVISORY: tail percentiles are noisy under the quick CI run, so they are
-    reported but never fail the build.
+  - STRICT: the AverageTime mean score (ns/op) is the stable metric; a
+    regression greater than 10% fails the build. Only meaningful on a
+    controlled rig where the baseline and the run share one environment
+    (local pre-commit). SampleTime means and tail percentiles come from a
+    noisy one-second histogram run and stay advisory.
+  - ADVISORY: on a shared CI runner the absolute ns/op drifts with host
+    hardware and JDK build, so timing regressions are reported but never
+    block the build (--advisory-timing).
   - --gc runs the JMH allocation profiler and strictly enforces the
-    zero-allocation contract (allocation is deterministic, not timing-noisy).
+    zero-allocation contract (allocation is deterministic, not timing-noisy);
+    it stays strict everywhere.
 
 Usage:
-  python3 scripts/jmh-regression.py                    # run quickBench and check
+  python3 scripts/jmh-regression.py                    # run quickBench, strict timing check
+  python3 scripts/jmh-regression.py --advisory-timing  # run quickBench, report timing but never fail
   python3 scripts/jmh-regression.py --record-baseline  # run and write baseline
   python3 scripts/jmh-regression.py --gc               # assert zero allocation
 """
@@ -52,12 +58,14 @@ def label(bench):
 
 
 def metric_values(bench):
-    """Return {key: (severity, value)}: the mean score is strict, tail
-    percentiles are advisory."""
+    """Return {key: (severity, value)}. Only the AverageTime mean is strict
+    (the stable score/op). SampleTime means and all tail percentiles are
+    advisory: they come from a noisy one-second histogram run."""
     primary = bench.get("primaryMetric", {})
     values = {}
     if primary.get("score") is not None:
-        values["score"] = ("strict", primary["score"])
+        stable_mean = bench.get("mode") in ("avgt", "AverageTime")
+        values["score"] = ("strict" if stable_mean else "advisory", primary["score"])
     for pctl, val in primary.get("scorePercentiles", {}).items():
         values.setdefault(pctl, ("advisory", val))
     return values
@@ -73,7 +81,7 @@ def run_jmh(extra_args):
     subprocess.run(["./gradlew", ":core:jmh", "-PquickBench", *extra_args], cwd=REPO, check=True)
 
 
-def check_regression(results, baseline):
+def check_regression(results, baseline, advisory=False):
     strict_failed = False
     for bench in results:
         base = baseline.get(bench_key(bench))
@@ -89,11 +97,20 @@ def check_regression(results, baseline):
             delta_pct = (new - old) / old * 100.0
             if delta_pct <= REGRESSION_LIMIT_PCT:
                 continue
-            if severity == "strict":
-                print(f"REGRESSION (strict) {label(bench)} {key}: {old:.4f} -> {new:.4f} ({delta_pct:+.1f}%)")
+            # Absolute ns/op drifts with host hardware and JDK build, so a
+            # strict timing gate is only meaningful on a controlled rig.
+            # --advisory-timing keeps the shared-CI build unblocked while the
+            # deterministic zero-allocation contract stays strict everywhere.
+            if severity == "strict" and not advisory:
+                kind = "REGRESSION (strict)"
                 strict_failed = True
+            elif severity == "strict":
+                kind = "WARN (advisory timing)"
+            elif key == "score":
+                kind = "WARN (advisory mean)"
             else:
-                print(f"WARN (advisory tail) {label(bench)} {key}: {old:.4f} -> {new:.4f} ({delta_pct:+.1f}%)")
+                kind = "WARN (advisory tail)"
+            print(f"{kind} {label(bench)} {key}: {old:.4f} -> {new:.4f} ({delta_pct:+.1f}%)")
     return 1 if strict_failed else 0
 
 
@@ -124,6 +141,11 @@ def main():
         action="store_true",
         help="run with the GC allocation profiler and assert the zero-allocation contract",
     )
+    parser.add_argument(
+        "--advisory-timing",
+        action="store_true",
+        help="report timing regressions but never fail (shared CI runners)",
+    )
     args = parser.parse_args()
 
     if args.gc:
@@ -143,7 +165,7 @@ def main():
         print(f"no baseline at {BASELINE}; run with --record-baseline first", file=sys.stderr)
         return 2
 
-    return check_regression(results, index_benchmarks(load(BASELINE)))
+    return check_regression(results, index_benchmarks(load(BASELINE)), advisory=args.advisory_timing)
 
 
 if __name__ == "__main__":

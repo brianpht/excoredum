@@ -2,7 +2,10 @@
 
 This is the budget source of truth for justrade. It overrides the defaults in
 `.github/copilot-instructions.md`. A regression greater than 10% on any
-percentile must be rolled back or justified with a new ADR.
+percentile must be rolled back or justified with a new ADR. Absolute ns/op is
+only comparable within a single, controlled environment (same host hardware
+and JDK build): a run on a shared CI runner is not a valid baseline target, so
+cross-environment timing comparisons are advisory and never block the build.
 
 Priority: Correctness > Determinism > Tail Latency > Mean Latency > Throughput.
 
@@ -21,9 +24,16 @@ Priority: Correctness > Determinism > Tail Latency > Mean Latency > Throughput.
 
 The allocation-free contract is enforced by the `core` determinism
 checkstyle overlay and by `scripts/jmh-regression.py`, which gates a > 10%
-regression on the mean (tail percentiles are advisory) against
+regression on the AverageTime mean (SampleTime means and tail percentiles are
+advisory: they come from a noisy one-second histogram run) against
 `config/jmh-baseline.json` and, with `--gc`, asserts a zero
-`gc.alloc.rate.norm` per op on the hot-path benchmarks.
+`gc.alloc.rate.norm` per op on the hot-path benchmarks. The timing gate is
+strict only on a controlled rig (local pre-commit) where the baseline and the
+run share one environment; on a shared CI runner the absolute ns/op drifts
+with host hardware and JDK build, so CI runs `--advisory-timing` and the
+timing figures there are reported but never block the build. The `--gc`
+zero-allocation contract is deterministic and machine-independent, so it stays
+strict everywhere.
 
 ## Read replica
 

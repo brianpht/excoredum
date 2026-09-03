@@ -154,7 +154,8 @@ Note: `check` (and therefore `build`) depends on `integrationTest`,
 ./gradlew core:jmh -PquickBench       # fast smoke run (CI gate)
 ./gradlew core:jmh -Pjmh.profilers=gc # attach GC/allocation profiler
 ./gradlew bench:run --args="--warmup=5000 --ops=20000"  # end-to-end RT latency
-python3 scripts/jmh-regression.py     # quickBench + strict >10% mean regression gate, advisory tail
+python3 scripts/jmh-regression.py                 # quickBench + strict >10% mean regression (local/controlled rig)
+python3 scripts/jmh-regression.py --advisory-timing  # report timing only, never fail (shared CI runners)
 ```
 
 ### Pre-commit gate (must pass in this order)
@@ -166,7 +167,9 @@ python3 scripts/jmh-regression.py     # quickBench + strict >10% mean regression
 3. `./gradlew compileJava` - `-Werror` is hardcoded in the build (not a CLI
    flag); zero warnings required.
 4. `./gradlew test integrationTest` - all green.
-5. `python3 scripts/jmh-regression.py` - strict >10% mean regression vs baseline (tail advisory); `--gc` asserts zero allocation.
+5. `python3 scripts/jmh-regression.py` - strict >10% mean regression vs baseline (tail advisory) on a
+   controlled rig; `--gc` asserts zero allocation. Use `--advisory-timing` on shared CI, where
+   absolute ns/op drifts with host hardware + JDK build and must not block the build.
 
 If any step fails, fix and re-run from step 1 before committing.
 

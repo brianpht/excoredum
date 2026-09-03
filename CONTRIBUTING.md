@@ -75,7 +75,8 @@ step 1.
 ./gradlew checkstyleMain checkstyleTest     # 2. zero lint violations
 ./gradlew compileJava                       # 3. zero compiler warnings (-Werror is hardcoded)
 ./gradlew test integrationTest              # 4. unit, property, and integration tests
-python3 scripts/jmh-regression.py           # 5. benchmark gate: strict >10% mean regression, advisory tail
+python3 scripts/jmh-regression.py           # 5. benchmark gate: strict >10% mean regression, advisory tail (controlled rig)
+python3 scripts/jmh-regression.py --advisory-timing  # 5a. same check, timing advisory only (shared CI runners)
 python3 scripts/jmh-regression.py --gc      # 5b. zero-allocation contract (hot-path changes)
 ```
 

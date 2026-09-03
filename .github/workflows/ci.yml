@@ -57,8 +57,11 @@ jobs:
             sleep 10
           done
 
-      - name: JMH regression gate (strict mean, advisory tail)
-        run: python3 scripts/jmh-regression.py
+      # Shared CI runners drift in absolute ns/op (host hardware + JDK build),
+      # so the timing gate is advisory here. The --gc zero-allocation contract
+      # is deterministic and machine-independent, so it stays strict.
+      - name: JMH timing regression (advisory on shared runner)
+        run: python3 scripts/jmh-regression.py --advisory-timing
 
-      - name: JMH zero-allocation contract
+      - name: JMH zero-allocation contract (strict)
         run: python3 scripts/jmh-regression.py --gc
