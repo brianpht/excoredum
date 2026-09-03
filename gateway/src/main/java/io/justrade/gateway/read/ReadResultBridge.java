@@ -19,6 +19,9 @@ import java.util.concurrent.CompletableFuture;
  * {@link QueryListener} that completes a per-request {@link CompletableFuture}
  * by {@code requestId}. Runs on the read pump thread (the same thread that
  * calls {@link ReadClient#poll()}), so it must not block.
+ *
+ * <p>Gateway boundary code, off the engine hot path: a heap map and futures are
+ * used deliberately.
  */
 public final class ReadResultBridge implements QueryListener {
 

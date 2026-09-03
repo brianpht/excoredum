@@ -1,4 +1,4 @@
-# justrade - Deterministic Spot Exchange Platform
+# JUSTRADE - Deterministic Spot Exchange Platform
 
 [![CI](https://github.com/justrade-io/justrade/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/justrade-io/justrade/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

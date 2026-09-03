@@ -22,7 +22,7 @@ import org.openjdk.jmh.annotations.Warmup;
  * liquidity. Run with {@code -prof gc} to assert zero steady-state allocation.
  */
 @State(Scope.Thread)
-@BenchmarkMode(Mode.AverageTime)
+@BenchmarkMode({Mode.AverageTime, Mode.SampleTime})
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 @Warmup(iterations = 3, time = 1)
 @Measurement(iterations = 5, time = 1)

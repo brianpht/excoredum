@@ -40,7 +40,8 @@ Ran locally, all passing with zero errors and zero warnings:
 - [ ] `./gradlew checkstyleMain checkstyleTest`
 - [ ] `./gradlew compileJava`
 - [ ] `./gradlew test integrationTest`
-- [ ] `./gradlew :core:jmh -PquickBench` (no regression > 10% vs baseline)
+- [ ] `python3 scripts/jmh-regression.py` (strict > 10% mean regression vs baseline, advisory tail)
+- [ ] `python3 scripts/jmh-regression.py --gc` (zero-allocation contract, hot-path changes)
 
 ## Tests
 

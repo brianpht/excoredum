@@ -75,7 +75,8 @@ step 1.
 ./gradlew checkstyleMain checkstyleTest     # 2. zero lint violations
 ./gradlew compileJava                       # 3. zero compiler warnings (-Werror is hardcoded)
 ./gradlew test integrationTest              # 4. unit, property, and integration tests
-./gradlew :core:jmh -PquickBench            # 5. benchmark smoke run, no regression > 10% vs baseline
+python3 scripts/jmh-regression.py           # 5. benchmark gate: strict >10% mean regression, advisory tail
+python3 scripts/jmh-regression.py --gc      # 5b. zero-allocation contract (hot-path changes)
 ```
 
 CI verifies formatting with `spotlessCheck`; locally you apply with

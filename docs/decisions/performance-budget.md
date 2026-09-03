@@ -20,8 +20,10 @@ Priority: Correctness > Determinism > Tail Latency > Mean Latency > Throughput.
 | GC pause during the operational window | 0 ms      |
 
 The allocation-free contract is enforced by the `core` determinism
-checkstyle overlay and by the `core:jmh -PquickBench` smoke run plus a
-manual `-Pjmh.profilers=gc` allocation profile on hot-path changes.
+checkstyle overlay and by `scripts/jmh-regression.py`, which gates a > 10%
+regression on the mean (tail percentiles are advisory) against
+`config/jmh-baseline.json` and, with `--gc`, asserts a zero
+`gc.alloc.rate.norm` per op on the hot-path benchmarks.
 
 ## Read replica
 

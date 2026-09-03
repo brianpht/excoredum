@@ -19,6 +19,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * gateway (the egress stream only reflects the gateway's own writes). A fresh
  * snapshot is requested on the read pump thread; the completion callback
  * publishes on that same thread.
+ *
+ * <p>Gateway boundary code, off the engine hot path: a dedicated JVM thread and
+ * heap collections are used deliberately.
  */
 public final class MarketPump implements AutoCloseable {
 

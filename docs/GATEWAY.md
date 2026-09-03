@@ -262,7 +262,7 @@ gateway.marketPump.intervalMs=1000
 
 Gate (must pass in order, per the engine rules): `spotlessApply` ->
 `checkstyleMain checkstyleTest` -> `compileJava` -> `test integrationTest` ->
-`:core:jmh -PquickBench`.
+`python3 scripts/jmh-regression.py`.
 
 ---
 

@@ -21,6 +21,9 @@ import org.agrona.concurrent.IdleStrategy;
  * and poll always happen on the one thread that owns the client (the client is
  * not thread-safe). A result is only ever delivered inside {@code poll()},
  * which runs after submits are registered, so a fast reply cannot be missed.
+ *
+ * <p>Gateway boundary code, off the engine hot path: a dedicated JVM thread and
+ * heap queue are used deliberately.
  */
 public final class WritePump implements AutoCloseable {
 

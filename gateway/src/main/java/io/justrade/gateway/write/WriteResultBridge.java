@@ -12,6 +12,9 @@ import java.util.concurrent.CompletableFuture;
  * {@link ResultHandler} completes a per-command {@link CompletableFuture} by
  * command id low word. Runs on the write pump thread (the same thread that
  * calls {@code WriteClient.poll()}), so it must not block.
+ *
+ * <p>Gateway boundary code, off the engine hot path: a heap map and futures are
+ * used deliberately.
  */
 public final class WriteResultBridge implements ResultHandler {
 

@@ -57,5 +57,8 @@ jobs:
             sleep 10
           done
 
-      - name: JMH quick benchmark (regression smoke)
-        run: ./gradlew :core:jmh -PquickBench
+      - name: JMH regression gate (strict mean, advisory tail)
+        run: python3 scripts/jmh-regression.py
+
+      - name: JMH zero-allocation contract
+        run: python3 scripts/jmh-regression.py --gc

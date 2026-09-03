@@ -24,6 +24,8 @@ import java.util.concurrent.ExecutionException;
  * response. The produced future completes on the read/write pump thread, so the
  * response is written via {@code ctx.executor().execute(...)} back on this
  * channel's event loop, never blocking it.
+ *
+ * <p>Gateway boundary code, off the engine hot path.
  */
 final class HttpHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
 
